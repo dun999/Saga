@@ -1,0 +1,1113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Saga</title>
+<style>
+:root {
+  --charcoal: #312F2C; --mint: #ABD1C6;
+  --bg: #F6F4EF; --side: #ECE9E2; --surface: #FFFFFF; --surface-2: #E4E0D7; --hover: rgba(49,47,44,.06);
+  --ink: #312F2C; --muted: #7A756C; --faint: #A39E94;
+  --accent: var(--mint); --accent-text: #3F7F6D;
+  --send: var(--charcoal); --send-ink: var(--mint);
+  --ok: #3F7F6D; --bad: #B4513B; --warn: #9A6A12;
+  --shadow: 0 10px 30px rgba(49,47,44,.10), 0 2px 6px rgba(49,47,44,.06);
+  --code: #EFECE5;
+  --a-claude: #C8612F; --a-codex: #23875F; --a-grok: #6E58E0; --a-xai: #2F6FC4; --a-qwen: #A87A12; --a-other: #8A5BB5;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #312F2C; --side: #2A2826; --surface: #3A3835; --surface-2: #45423E; --hover: rgba(255,255,255,.05);
+    --ink: #F2EFE9; --muted: #ABA69D; --faint: #7E7A72;
+    --accent-text: var(--mint); --send: var(--mint); --send-ink: var(--charcoal);
+    --ok: #ABD1C6; --bad: #F08F79; --warn: #E3B563;
+    --shadow: 0 12px 34px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.25);
+    --code: #2A2826;
+    --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #B3A4FF; --a-xai: #86B7FF; --a-qwen: #E9C46A; --a-other: #D2A8F0;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #312F2C; --side: #2A2826; --surface: #3A3835; --surface-2: #45423E; --hover: rgba(255,255,255,.05);
+  --ink: #F2EFE9; --muted: #ABA69D; --faint: #7E7A72;
+  --accent-text: var(--mint); --send: var(--mint); --send-ink: var(--charcoal);
+  --ok: #ABD1C6; --bad: #F08F79; --warn: #E3B563;
+  --shadow: 0 12px 34px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.25);
+  --code: #2A2826;
+  --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #B3A4FF; --a-xai: #86B7FF; --a-qwen: #E9C46A; --a-other: #D2A8F0;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; }
+button { font: inherit; color: inherit; }
+code, pre, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+a { color: var(--accent-text); }
+
+/* agent names: colored text, no frames */
+.ag { font-weight: 600; color: var(--a-other); }
+.ag-claude { color: var(--a-claude); } .ag-codex { color: var(--a-codex); } .ag-grok { color: var(--a-grok); }
+.ag-xai { color: var(--a-xai); } .ag-qwen { color: var(--a-qwen); }
+
+/* ---------- layout ---------- */
+.app { display: flex; height: 100vh; height: 100dvh; }
+aside { width: 300px; flex: none; background: var(--side); display: flex; flex-direction: column; transition: margin-left .25s ease, transform .25s ease; min-height: 0; }
+.app.collapsed aside { margin-left: -300px; }
+main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+
+.side-top { display: flex; align-items: center; gap: 6px; padding: 14px 12px 6px 16px; }
+.brand { font-weight: 700; font-size: 18px; letter-spacing: -.02em; flex: 1; }
+.brand small { font-weight: 500; font-size: 12px; color: var(--muted); margin-left: 6px; letter-spacing: 0; }
+.icon-btn { width: 34px; height: 34px; border-radius: 10px; border: 0; background: transparent; cursor: pointer; display: grid; place-items: center; color: var(--muted); }
+.icon-btn:hover { background: var(--hover); color: var(--ink); }
+.new-chat { margin: 6px 12px 8px; padding: 9px 12px; border: 0; border-radius: 12px; background: var(--surface); cursor: pointer; text-align: left; display: flex; gap: 8px; align-items: center; font-weight: 500; }
+.new-chat:hover { background: var(--surface-2); }
+
+.side-scroll { flex: 1; overflow-y: auto; padding: 4px 8px 12px; scrollbar-width: thin; }
+.count { font-weight: 500; color: var(--faint); text-transform: none; letter-spacing: 0; }
+.item { padding: 7px 8px; border-radius: 8px; font-size: 13px; line-height: 1.4; }
+.item.click { cursor: pointer; }
+.item.click:hover, .item.active { background: var(--hover); }
+.item .m { font-size: 11px; color: var(--faint); margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.empty { color: var(--faint); font-size: 12.5px; padding: 4px 8px; }
+.blob { color: var(--accent-text); text-decoration: none; font-family: ui-monospace, monospace; font-size: 11px; }
+.blob:hover { text-decoration: underline; }
+.sub-h { font-size: 11px; color: var(--faint); padding: 8px 8px 2px; }
+.stat { flex: 1; background: var(--surface); border-radius: 10px; padding: 8px 10px; }
+.stat b { display: block; font-size: 20px; letter-spacing: -.02em; }
+.stat span { font-size: 11px; color: var(--muted); }
+.mini-btn { border: 0; background: var(--surface); border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+.mini-btn:hover { background: var(--surface-2); }
+.off { color: var(--bad); }
+details.prompt summary { cursor: pointer; font-size: 11px; color: var(--faint); list-style: none; }
+details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+/* profile card */
+.profile { position: relative; padding: 8px; }
+.profile-card { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px; border: 0; border-radius: 12px; background: transparent; cursor: pointer; text-align: left; }
+.profile-card:hover { background: var(--hover); }
+.avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--mint); color: var(--charcoal); display: grid; place-items: center; font-weight: 700; flex: none; }
+.profile-card .who { flex: 1; min-width: 0; }
+.profile-card .who b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-card .who span { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); display: inline-block; }
+.dot.on { background: #6FBF9F; box-shadow: 0 0 0 3px rgba(171,209,198,.25); }
+.seg { display: flex; gap: 4px; margin-top: 6px; background: var(--side); padding: 3px; border-radius: 9px; }
+.seg button { flex: 1; border: 0; background: transparent; border-radius: 7px; padding: 5px 0; font-size: 12px; cursor: pointer; color: var(--muted); }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+/* ---------- chat ---------- */
+.topbar { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 8px; padding: 10px 14px; z-index: 5; pointer-events: none; }
+.topbar > * { pointer-events: auto; }
+.topbar .title { font-size: 14px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#openSide { display: none; }
+.app.collapsed #openSide { display: grid; }
+#log { flex: 1; overflow-y: auto; padding: 60px 20px 150px; }
+.col { max-width: 780px; margin: 0 auto; }
+.msg { margin: 0 0 22px; }
+.user-msg { display: flex; justify-content: flex-end; }
+.bubble { background: var(--surface); padding: 10px 15px; border-radius: 18px 18px 6px 18px; max-width: 82%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.recall { font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+.recall summary { cursor: pointer; list-style: none; display: inline-flex; gap: 6px; align-items: center; padding: 3px 10px; border-radius: 99px; background: var(--surface); }
+.recall summary::-webkit-details-marker { display: none; }
+.recall ul { margin: 8px 0 0; padding-left: 18px; }
+.recall li { margin: 3px 0; }
+.lane { margin: 4px 0 16px; }
+.lane-h { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin-bottom: 4px; flex-wrap: wrap; }
+.lane-h .instr { color: var(--muted); }
+.lane-h .status { margin-left: auto; font-size: 12px; color: var(--faint); }
+.status.ok { color: var(--ok); } .status.bad { color: var(--bad); }
+.working::after { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 6px; animation: pulse 1s infinite ease-in-out; }
+@keyframes pulse { 50% { opacity: .25; } }
+.tools { font-size: 12px; color: var(--faint); margin: 2px 0 6px; }
+.tools div { padding: 1px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tools div::before { content: "↳ "; }
+.out { overflow-wrap: anywhere; }
+.out p { margin: 6px 0; }
+.out pre { background: var(--code); padding: 12px 14px; border-radius: 12px; overflow-x: auto; }
+.out code { background: var(--code); padding: 1px 5px; border-radius: 5px; }
+.out pre code { background: none; padding: 0; }
+.note { font-size: 12.5px; color: var(--warn); margin: 4px 0; }
+.ico { flex: none; vertical-align: -2px; }
+.chip { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); background: var(--surface); padding: 3px 10px; border-radius: 99px; margin: 4px 6px 0 0; }
+.fb { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.fb button { border: 0; background: transparent; border-radius: 8px; width: 30px; height: 30px; cursor: pointer; color: var(--muted); display: grid; place-items: center; }
+.fb button:hover { color: var(--ink); }
+.fb button:hover { background: var(--hover); opacity: 1; }
+.fb input { flex: 1; min-width: 160px; max-width: 360px; border: 0; background: var(--surface); color: var(--ink); border-radius: 99px; padding: 6px 12px; font: inherit; font-size: 13px; outline: none; }
+.learned { font-size: 13px; margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: rgba(171,209,198,.22); }
+
+.welcome { text-align: center; margin-top: 16vh; }
+.welcome h2 { font-size: 28px; letter-spacing: -.03em; margin: 0 0 8px; font-weight: 650; }
+.welcome p { color: var(--muted); margin: 0 auto; max-width: 520px; }
+.ex { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 22px; }
+.ex button { border: 0; background: var(--surface); border-radius: 12px; padding: 8px 14px; cursor: pointer; font-size: 13px; text-align: left; max-width: 360px; }
+.ex button:hover { background: var(--surface-2); }
+
+/* floating composer */
+.composer { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 20px 18px; pointer-events: none; background: linear-gradient(to top, var(--bg) 55%, transparent); }
+.dock { max-width: 780px; margin: 0 auto; pointer-events: auto; position: relative; }
+.bar { display: flex; align-items: flex-end; gap: 6px; background: var(--surface); border-radius: 22px; padding: 6px 6px 6px 16px; box-shadow: var(--shadow); }
+.field { position: relative; flex: 1; min-width: 0; display: grid; }
+.field > * { grid-area: 1 / 1; font: inherit; font-size: 15px; line-height: 22px; padding: 7px 0; margin: 0; border: 0; white-space: pre-wrap; overflow-wrap: anywhere; letter-spacing: normal; }
+.hl { color: var(--ink); pointer-events: none; overflow: hidden; max-height: 160px; }
+textarea { resize: none; background: transparent; color: transparent; caret-color: var(--ink); outline: none; max-height: 160px; min-height: 36px; overflow-y: auto; }
+textarea::placeholder { color: var(--faint); }
+.send { width: 36px; height: 36px; border-radius: 50%; border: 0; background: var(--send); color: var(--send-ink); cursor: pointer; display: grid; place-items: center; flex: none; transition: transform .1s, opacity .15s; }
+.send:disabled { opacity: .35; cursor: default; }
+.send:not(:disabled):active { transform: scale(.94); }
+.send.stop { background: var(--bad); color: #fff; }
+.hint { text-align: center; font-size: 11.5px; color: var(--faint); margin-top: 8px; }
+#ac { position: absolute; bottom: calc(100% + 8px); left: 8px; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); display: none; min-width: 280px; padding: 6px; z-index: 6; }
+#ac div { padding: 7px 10px; cursor: pointer; font-size: 14px; border-radius: 9px; }
+#ac div small { color: var(--muted); display: block; font-size: 12px; }
+#ac div.sel, #ac div:hover { background: var(--hover); }
+
+.side-label { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding: 10px 8px 6px; }
+.ell { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* profile modal: fixed-size floating card, centered */
+.modal { position: fixed; inset: 0; z-index: 25; display: grid; place-items: center; padding: 16px; background: rgba(20,19,18,.45); backdrop-filter: blur(3px); opacity: 0; pointer-events: none; transition: opacity .18s; }
+.modal.open { opacity: 1; pointer-events: auto; }
+.card { width: min(860px, calc(100vw - 32px)); height: min(580px, calc(100dvh - 32px)); background: var(--bg); border-radius: 20px; box-shadow: var(--shadow); display: flex; overflow: hidden; transform: translateY(8px) scale(.98); transition: transform .18s; }
+.modal.open .card { transform: none; }
+.mnav { width: 220px; flex: none; background: var(--side); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+.mhead { display: flex; gap: 10px; align-items: center; padding: 4px 8px 14px; }
+.mhead b { font-size: 14px; }
+.mhead span { font-size: 12px; color: var(--muted); }
+.mnav button { border: 0; background: transparent; text-align: left; padding: 9px 10px; border-radius: 9px; cursor: pointer; font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+.mnav button:hover { background: var(--hover); color: var(--ink); }
+.mnav button.on { background: var(--surface); color: var(--ink); font-weight: 500; }
+.mbody { flex: 1; min-width: 0; position: relative; overflow-y: auto; padding: 22px 26px; }
+.mbody section { display: none; }
+.mbody section > h3 { display: none; }  /* the category header names the page */
+.ghead { display: none; margin-bottom: 14px; }
+.ghead.on { display: block; }
+.ghead h3 { margin-bottom: 12px !important; }
+.subtabs { display: inline-flex; gap: 2px; background: var(--side); padding: 3px; border-radius: 11px; flex-wrap: wrap; }
+.subtabs button { border: 0; background: transparent; color: var(--muted); font-size: 13px; padding: 6px 12px; border-radius: 8px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.subtabs button:hover { color: var(--ink); }
+.subtabs button.on { background: var(--surface); color: var(--ink); font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.mnav button svg { flex: none; opacity: .75; }
+.mbody section.on { display: block; }
+.mbody h3 { margin: 0 0 6px; font-size: 18px; letter-spacing: -.01em; }
+.mbody .lead { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.mclose { position: absolute; top: 12px; right: 12px; }
+.mbody .sub-h { padding: 12px 0 6px; }
+.mbody .empty { padding: 4px 0; }
+.mbody .mono { overflow-wrap: anywhere; }
+.tile { background: var(--surface); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; font-size: 13.5px; }
+.tile .m { font-size: 11.5px; color: var(--faint); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.field-row { margin-bottom: 16px; }
+.field-row label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.field-row input[type=text] { width: 100%; max-width: 360px; border: 0; border-radius: 10px; padding: 9px 12px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; outline: none; }
+.meter { height: 6px; border-radius: 99px; background: var(--side); overflow: hidden; margin-top: 8px; }
+.meter i { display: block; height: 100%; background: var(--mint); border-radius: 99px; }
+.meter i.full { background: var(--bad); }
+.meter i.hot { background: var(--warn); }
+.agent-tile { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: center; }
+.limit { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.limit input { width: 64px; border: 0; border-radius: 8px; padding: 5px 8px; background: var(--side); color: var(--ink); font: inherit; font-size: 13px; outline: none; text-align: right; }
+.acct { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 99px; background: var(--side); font-size: 12px; }
+.btn-connect { border: 0; border-radius: 99px; padding: 5px 14px; background: var(--send); color: var(--send-ink); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+/* GitHub in the composer */
+.bar { align-items: center; }
+.repo-btn { width: 34px; height: 34px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; flex: none; margin-left: -8px; }
+.repo-btn:hover { background: var(--hover); color: var(--ink); }
+.repo-btn.on { color: var(--ink); }
+.repo-bar { display: none; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px 6px; font-size: 12.5px; color: var(--muted); }
+.repo-bar.show { display: flex; }
+.repo-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface); border-radius: 99px; padding: 4px 12px; box-shadow: 0 2px 8px rgba(20,18,16,.06); color: var(--ink); font-weight: 500; }
+.repo-chip .mono { color: var(--muted); font-weight: 400; }
+.pr-btn { border: 0; border-radius: 99px; padding: 4px 12px; background: var(--send); color: var(--send-ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.pr-btn:disabled { opacity: .5; cursor: default; }
+.repo-pop { position: absolute; bottom: calc(100% + 8px); left: 0; width: min(420px, 100%); max-height: 360px; background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 8px; display: none; z-index: 7; flex-direction: column; }
+.repo-pop.open { display: flex; }
+.repo-pop input { border: 0; border-radius: 10px; padding: 9px 11px; background: var(--side); color: var(--ink); font: inherit; font-size: 13.5px; outline: none; margin-bottom: 6px; }
+.repo-list { overflow-y: auto; }
+.repo-item { padding: 8px 10px; border-radius: 10px; cursor: pointer; font-size: 13.5px; }
+.repo-item:hover { background: var(--hover); }
+.repo-item small { display: block; color: var(--faint); font-size: 11.5px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connect-box { margin-top: 12px; background: var(--side); border-radius: 14px; padding: 14px 16px; }
+.connect-box .m { margin-top: 4px; display: block; line-height: 1.7; }
+.device-code { font: 600 22px/1.2 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .08em; margin: 8px 0 2px; }
+.connect-box input { width: 100%; border: 0; border-radius: 9px; padding: 9px 11px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; outline: none; margin-top: 8px; }
+.connect-box code { background: var(--surface); padding: 1px 6px; border-radius: 5px; }
+.btn-ghost { border: 0; border-radius: 99px; padding: 5px 12px; background: transparent; color: var(--muted); font-size: 12.5px; cursor: pointer; }
+.btn-ghost:hover { background: var(--hover); color: var(--ink); }
+.win { margin-top: 10px; }
+.win-h { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.win-h b { color: var(--ink); font-weight: 600; }
+.add-tile { display: flex; align-items: center; gap: 10px; cursor: pointer; color: var(--muted); background: transparent; border: 2px dashed var(--surface-2); }
+.add-tile:hover { color: var(--ink); background: var(--hover); }
+.plus { width: 30px; height: 30px; border-radius: 50%; background: var(--mint); color: var(--charcoal); display: grid; place-items: center; font-size: 18px; font-weight: 700; flex: none; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.form-grid input { width: 100%; border: 0; border-radius: 9px; padding: 8px 10px; background: var(--side); color: var(--ink); font: inherit; font-size: 13px; outline: none; }
+.form-grid .full { grid-column: 1 / -1; }
+.presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.presets button { border: 0; border-radius: 99px; padding: 3px 10px; background: var(--side); color: var(--muted); font-size: 12px; cursor: pointer; }
+.presets button:hover { color: var(--ink); }
+@media (max-width: 700px) { .form-grid { grid-template-columns: 1fr; } }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.scrim { display: none; }
+/* essential-cookies notice */
+.cookie-note { position: fixed; left: 16px; bottom: 16px; z-index: 50; max-width: 360px; background: var(--surface, #fff); color: var(--ink); border-radius: 16px; padding: 14px 16px; box-shadow: 0 12px 34px rgba(20,18,16,.18); font-size: 13px; line-height: 1.5; display: none; }
+.cookie-note.show { display: block; animation: cn-in .3s ease both; }
+@keyframes cn-in { from { opacity: 0; transform: translateY(8px); } }
+.cookie-note a { color: inherit; font-weight: 600; }
+.cookie-note button { margin-top: 10px; border: 0; border-radius: 99px; padding: 6px 14px; background: #312F2C; color: #ABD1C6; font: inherit; font-weight: 600; cursor: pointer; }
+
+/* sign-in: full-screen, calm, one card */
+#signin { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: none; align-items: center; justify-content: center; padding: 16px; }
+#signin.open { display: flex; }
+.si-card { width: 100%; max-width: 400px; background: var(--surface); border-radius: 22px; padding: 30px 26px 22px; box-shadow: var(--shadow); text-align: center; }
+.si-mark { width: 44px; height: 44px; border-radius: 13px; background: var(--charcoal); display: grid; place-items: center; margin: 0 auto 16px; }
+.si-mark i { width: 16px; height: 16px; border-radius: 50%; background: var(--mint); display: block; }
+.si-card h2 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
+.si-card > p { color: var(--muted); font-size: 13.5px; margin: 8px 0 18px; line-height: 1.55; }
+.wallets { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.wallet { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; border-radius: 14px; padding: 11px 14px; background: var(--side); cursor: pointer; font-weight: 500; font-size: 14.5px; transition: background .15s, transform .1s; }
+.wallet:hover { background: var(--surface-2); }
+.wallet:active { transform: scale(.99); }
+.wallet:disabled { opacity: .55; cursor: default; }
+.wallet img { width: 28px; height: 28px; border-radius: 8px; }
+.wallet span { flex: 1; text-align: left; }
+.wallet svg { color: var(--faint); }
+.si-status { min-height: 20px; margin-top: 12px; font-size: 13px; color: var(--muted); }
+.si-foot { font-size: 12px !important; color: var(--faint) !important; margin: 10px 0 0 !important; }
+#gate { position: fixed; inset: 0; background: var(--bg); display: none; align-items: center; justify-content: center; z-index: 30; padding: 16px; }
+#gate form { background: var(--surface); border-radius: 18px; padding: 26px; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); }
+#gate input { border: 0; border-radius: 10px; padding: 10px 12px; background: var(--side); color: var(--ink); font: inherit; outline: none; }
+#gate .btn { border: 0; border-radius: 10px; padding: 10px; background: var(--send); color: var(--send-ink); font-weight: 600; cursor: pointer; }
+
+@media (max-width: 700px) {
+  .modal { padding: 10px; }
+  .card { flex-direction: column; width: calc(100vw - 20px); height: calc(100dvh - 20px); }
+  .mbody { padding-top: 14px; }
+  .mclose { top: 8px; right: 8px; }
+  .mnav { width: auto; flex-direction: row; overflow-x: auto; padding: 10px; gap: 4px; }
+  .mhead { display: none; }
+  .mnav button { white-space: nowrap; flex: 1; flex-direction: column; gap: 3px; padding: 7px 2px; font-size: 11.5px; justify-content: center; }
+  .mnav { overflow-x: visible !important; }
+  .subtabs { display: flex; overflow-x: auto; flex-wrap: nowrap; }
+  .subtabs button { white-space: nowrap; }
+  .mbody { padding: 18px; }
+  .grid2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 860px) {
+  aside { position: fixed; inset: 0 auto 0 0; z-index: 15; transform: translateX(-100%); box-shadow: var(--shadow); width: min(320px, 86vw); }
+  .app.side-open aside { transform: none; }
+  .app.collapsed aside { margin-left: 0; }
+  #openSide { display: grid !important; }
+  .scrim { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 14; opacity: 0; pointer-events: none; transition: opacity .2s; }
+  .app.side-open .scrim { opacity: 1; pointer-events: auto; }
+  #log { padding: 56px 16px 140px; }
+  .composer { padding: 0 12px 12px; }
+  .welcome { margin-top: 10vh; }
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside>
+    <div class="side-top">
+      <a class="brand" href="/" style="color:inherit;text-decoration:none">Saga<small>agents that remember</small></a>
+      <button class="icon-btn" id="closeSide" title="Close sidebar" aria-label="Close sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+      </button>
+    </div>
+    <button class="new-chat" id="newChat">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>New chat
+    </button>
+    <div class="side-scroll">
+      <div class="side-label">Chats <span class="count" id="nChats"></span></div>
+      <div id="chats"><div class="empty">Loading from Walrus…</div></div>
+    </div>
+    <div class="profile">
+      <button class="profile-card" id="profileBtn">
+        <div class="avatar" id="avatar">?</div>
+        <div class="who"><b id="handle">…</b><span><i class="dot" id="memDot"></i><span id="memLine">connecting…</span></span></div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--faint)"><path d="M7 15l5-5 5 5"/></svg>
+      </button>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+  <main>
+    <div class="topbar">
+      <button class="icon-btn" id="openSide" title="Open sidebar" aria-label="Open sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+      </button>
+      <span class="title" id="title"></span>
+    </div>
+    <div id="log"><div class="col" id="thread"></div></div>
+    <div class="composer">
+      <div class="dock">
+        <div id="ac"></div>
+        <div class="repo-bar" id="repoBar"></div>
+        <div class="repo-pop" id="repoPop"></div>
+        <form class="bar" id="f">
+          <button type="button" class="repo-btn" id="repoBtn" title="Work on a GitHub repo" aria-label="Work on a GitHub repo"></button>
+          <div class="field">
+            <div class="hl" id="hl" aria-hidden="true"></div>
+            <textarea id="q" rows="1" placeholder="Message Saga — @ to hand off to an agent" autofocus></textarea>
+          </div>
+          <button class="send" id="send" disabled aria-label="Send">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
+        </form>
+        <div class="hint">Everything here is stored on Walrus mainnet · rate answers to teach the harness</div>
+      </div>
+    </div>
+  </main>
+</div>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="Profile and memory">
+  <div class="card">
+    <nav class="mnav">
+      <div class="mhead"><div class="avatar" id="mAvatar">?</div><div style="min-width:0"><b id="mHandle" class="ell">…</b><span id="mSub">Walrus memory</span></div></div>
+      <button data-g="account" class="on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Account</button>
+      <button data-g="connections"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>Connections</button>
+      <button data-g="memory"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/></svg>Memory</button>
+      <button data-g="harness"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>Harness</button>
+    </nav>
+    <div class="mbody">
+      <button class="icon-btn mclose" id="mClose" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <div class="ghead on" data-g="account"><h3>Account</h3></div>
+      <div class="ghead" data-g="connections"><h3>Connections</h3><div class="subtabs"><button data-p="agents">Agents</button><button data-p="github">GitHub</button></div></div>
+      <div class="ghead" data-g="memory"><h3>Memory</h3><div class="subtabs"><button data-p="about">About you <span class="count" id="nFacts"></span></button><button data-p="memory">Episodes &amp; lessons</button><button data-p="checkpoints">Checkpoints</button><button data-p="writes">Walrus writes <span class="count" id="nWrites"></span></button></div></div>
+      <div class="ghead" data-g="harness"><h3>Harness</h3></div>
+      <section data-p="profile" class="on"><h3>Profile</h3><div id="pProfile"></div></section>
+      <section data-p="about"><h3>About you</h3><p class="lead">Facts Saga extracted from your messages or that agents saved with <code>#remember</code>. Each one is an encrypted Walrus blob.</p><div id="facts"><div class="empty">Loading…</div></div></section>
+      <section data-p="agents"><h3>Agents</h3><p class="lead" id="agentsLead">Connect your provider accounts. Usage bars are each provider's own limits; when one runs out, Saga hands the work to the primary agent.</p><div id="agents"></div></section>
+      <section data-p="github"><h3>GitHub</h3><p class="lead">Connect GitHub to let your agents work on your repositories. Pick a repo in any chat; agents commit on a <code>saga/…</code> branch and you open the pull request.</p><div id="ghPane"></div></section>
+      <section data-p="memory"><h3>Memory</h3><div id="memory"></div></section>
+      <section data-p="harness"><h3>Harness improvement</h3><div id="harness"></div></section>
+      <section data-p="checkpoints"><h3>Checkpoints</h3><p class="lead">Every file an agent changes in this chat is snapshotted to Walrus and can be restored on any machine.</p><div id="checkpoints"></div></section>
+      <section data-p="writes"><h3>Walrus writes</h3><p class="lead">Blobs written this session, live.</p><div id="writes"><div class="empty">Nothing written yet.</div></div></section>
+    </div>
+  </div>
+</div>
+<div id="signin" role="dialog" aria-modal="true" aria-label="Sign in to Saga">
+  <div class="si-card">
+    <div class="si-mark"><i></i></div>
+    <h2 id="siTitle">Sign in to Saga</h2>
+    <p id="siBody">Connect a Sui wallet. Your memory on Walrus is keyed to your address, and a second signature unlocks your private vault. Neither sends a transaction or costs gas.</p>
+    <div id="wallets" class="wallets"><div class="empty">Looking for Sui wallets…</div></div>
+    <div id="siStatus" class="si-status" aria-live="polite"></div>
+    <p class="si-foot">Prefer Google? <a href="https://slush.app" target="_blank" rel="noopener">Slush</a> lets you create a wallet with your Google account. · <a href="/privacy" target="_blank">Privacy &amp; cookies</a></p>
+  </div>
+</div>
+<script type="module">
+  // Wallet Standard discovery: every installed Sui wallet registers itself here.
+  import { getWallets } from "https://esm.sh/@mysten/wallet-standard@0.21.27";
+  const registry = getWallets();
+  const isSui = w => w.chains.some(c => c.startsWith("sui:")) && w.features["standard:connect"] && w.features["sui:signPersonalMessage"];
+  const status = t => { document.querySelector("#siStatus").textContent = t; };
+  const post = (u, b) => fetch(u, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(b)}).then(async r => ({ok: r.ok, ...(await r.json())}));
+
+  function render() {
+    const list = registry.get().filter(isSui);
+    const box = document.querySelector("#wallets");
+    if (!list.length) {
+      box.innerHTML = `<div class="empty">No Sui wallet found in this browser. Install <a href="https://slush.app" target="_blank" rel="noopener">Slush</a> or another Sui wallet, then reload.</div>`;
+      return;
+    }
+    box.innerHTML = "";
+    for (const w of list) {
+      const b = document.createElement("button");
+      b.className = "wallet";
+      b.innerHTML = `<img src="${w.icon}" alt=""><span>${w.name.replace(/[<>&]/g, "")}</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>`;
+      b.onclick = () => signIn(w, b);
+      box.appendChild(b);
+    }
+  }
+  // The vault key: SHA-256 of the wallet's signature over a fixed message. Standard (Ed25519)
+  // wallets sign deterministically, so the same wallet recreates the same key on any device; the
+  // server only ever sees it per request and never stores it.
+  const vaultMessage = addr => `Unlock your Saga vault\n\nThis signature creates the key that encrypts the accounts you connect to Saga (Claude, ChatGPT, Grok and API keys). Saga never stores it. It does not send a transaction or cost gas.\n\nAddress: ${addr}\nVersion: 1`;
+  async function unlockVault(w, account) {
+    status("Approve the vault message in your wallet (2 of 2)…");
+    const { signature } = await w.features["sui:signPersonalMessage"].signPersonalMessage({
+      message: new TextEncoder().encode(vaultMessage(account.address)), account, chain: "sui:mainnet"});
+    const sig = Uint8Array.from(atob(signature), c => c.charCodeAt(0));
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([...new TextEncoder().encode("saga-vault-v1"), ...sig])));
+    const key = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    document.cookie = `saga_vault=${key}; Path=/; Max-Age=${14 * 86400}; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+  }
+  async function signIn(w, btn) {
+    document.querySelectorAll(".wallet").forEach(x => x.disabled = true);
+    const unlockOnly = document.querySelector("#signin").dataset.mode === "unlock";
+    try {
+      status(`Connecting to ${w.name}…`);
+      const { accounts } = await w.features["standard:connect"].connect();
+      const account = accounts.find(a => a.chains.some(c => c.startsWith("sui:"))) || accounts[0];
+      if (!account) throw new Error("the wallet returned no account");
+      if (unlockOnly) {
+        if (account.address !== window.sagaAddress) throw new Error("Use the wallet you signed in with (" + window.sagaAddress.slice(0, 8) + "…).");
+        await unlockVault(w, account);
+        location.reload();
+        return;
+      }
+      const ch = await post("/api/auth/challenge", {address: account.address});
+      if (!ch.ok) throw new Error(ch.error);
+      status("Approve the sign-in message in your wallet (1 of 2)…");
+      const { signature } = await w.features["sui:signPersonalMessage"].signPersonalMessage({
+        message: new TextEncoder().encode(ch.message), account, chain: "sui:mainnet"});
+      status("Verifying…");
+      const v = await post("/api/auth/verify", {address: account.address, signature});
+      if (!v.ok) throw new Error(v.error);
+      await unlockVault(w, account);
+      location.reload();
+    } catch (e) {
+      status(e && e.message ? e.message.replace(/^.*rejected.*$/i, "Sign-in was cancelled in the wallet.") : "Sign-in failed.");
+      document.querySelectorAll(".wallet").forEach(x => x.disabled = false);
+    }
+  }
+  registry.on("register", render);
+  registry.on("unregister", render);
+  render();
+</script>
+<div class="cookie-note" id="cookieNote" role="region" aria-label="Cookie notice">
+  Saga uses only essential cookies — to keep you signed in and unlock your vault. No analytics, no ads. <a href="/privacy">Privacy &amp; cookies</a>
+  <div><button id="cookieOk">Got it</button></div>
+</div>
+<script>
+(() => {
+  const seen = () => { try { return localStorage.getItem("saga-cookies") === "1"; } catch { return false; } };
+  const n = document.getElementById("cookieNote");
+  if (!seen()) n.classList.add("show");
+  document.getElementById("cookieOk").onclick = () => { try { localStorage.setItem("saga-cookies", "1"); } catch {} n.classList.remove("show"); };
+})();
+</script>
+<div id="gate">
+  <form id="gateForm">
+    <b style="font-size:18px">Saga</b>
+    <div class="empty" style="padding:0">This deployment is invite-only. Pick a handle so Saga can remember you across devices.</div>
+    <input id="gCode" placeholder="Access code" autocomplete="off">
+    <input id="gHandle" placeholder="Your handle (e.g. mira)" autocomplete="off">
+    <button class="btn">Enter</button>
+    <div id="gErr" class="note"></div>
+  </form>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const WALRUSCAN = id => `https://walruscan.com/mainnet/blob/${encodeURIComponent(id)}`;
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+// Monochrome line icons (Lucide-style, ISC); they take the surrounding text colour.
+const ICON_PATHS = {
+  brain: '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>',
+  up: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
+  down: '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/>',
+  save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
+  note: '<path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z"/>',
+  skill: '<rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+  evolve: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  term: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+};
+ICON_PATHS.gh = '<path fill="currentColor" stroke="none" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/>';
+ICON_PATHS.branch = '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>';
+const icon = (n, size = 14) => `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[n]}</svg>`;
+const KNOWN = ["claude", "codex", "grok", "xai", "qwen"];
+let agents = [], busy = null, uid = "", state = {}, me = {}, vault = {state: "ok"}, session = newSessionId();
+
+function newSessionId() { return "s-" + Math.random().toString(36).slice(2, 10); }
+const agentName = n => `<span class="ag ${KNOWN.includes(n) ? "ag-" + n : ""}">@${esc(n)}</span>`;
+const agentRe = () => new RegExp(`(^|[\\s(])@(${(agents.length ? agents.map(a => a.name) : KNOWN).join("|")})\\b`, "gi");
+const colorMentions = html => html.replace(agentRe(), (m, pre, n) => pre + agentName(n.toLowerCase()));
+const blob = id => id ? `<a class="blob" href="${WALRUSCAN(id)}" target="_blank" rel="noopener" title="${esc(id)} on Walruscan">${esc(id.slice(0, 8))}↗</a>` : "";
+const ago = ts => { if (!ts) return ""; const s = Date.now() / 1000 - ts; return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`; };
+const nsLabel = ns => ({facts: "about you", episodes: "past episodes", lessons: "lessons", skills: "skills"})[ns.split(":").pop()] || ns;
+
+function md(src) {
+  return String(src ?? "").split(/```/).map((b, i) => {
+    if (i % 2) { const nl = b.indexOf("\n"); return `<pre><code>${esc(nl >= 0 ? b.slice(nl + 1) : b)}</code></pre>`; }
+    return colorMentions(esc(b)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(/^#{1,4} (.*)$/gm, "<b>$1</b>")
+      .replace(/^\s*[-*] (.*)$/gm, "• $1"))
+      .split(/\n{2,}/).map(p => `<p>${p.replace(/\n/g, "<br>")}</p>`).join("");
+  }).join("");
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  if (r.status === 401) {
+    const j = await r.json().catch(() => ({}));
+    if (j.login) $("#signin").classList.add("open"); else $("#gate").style.display = "flex";
+    throw new Error("locked");
+  }
+  return r.json();
+}
+
+// ---------- theme ----------
+function applyTheme(t) { if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; store.set("saga-theme", t); }
+applyTheme(store.get("saga-theme") || "system");
+
+// ---------- sidebar ----------
+const app = $("#app"), mobile = () => matchMedia("(max-width: 860px)").matches;
+if (store.get("saga-side") === "closed" && !mobile()) app.classList.add("collapsed");
+$("#closeSide").onclick = () => { if (mobile()) app.classList.remove("side-open"); else { app.classList.add("collapsed"); store.set("saga-side", "closed"); } };
+$("#openSide").onclick = () => { if (mobile()) app.classList.add("side-open"); else { app.classList.remove("collapsed"); store.set("saga-side", "open"); } };
+$("#scrim").onclick = () => app.classList.remove("side-open");
+
+// ---------- profile modal ----------
+const modal = $("#modal");
+function openModal(pane) {
+  app.classList.remove("side-open");
+  showPane(pane || "profile"); modal.classList.add("open");
+  refreshMemory(); refreshCheckpoints(); refreshUsage(); renderProfilePane(); refreshGitHub();
+}
+function closeModal() { modal.classList.remove("open"); }
+const GROUPS = {account: ["profile"], connections: ["agents", "github"], memory: ["about", "memory", "checkpoints", "writes"], harness: ["harness"]};
+const lastPane = {};
+function showPane(p) {
+  if (GROUPS[p]) p = lastPane[p] || GROUPS[p][0];  // a category: its last-used page
+  const g = Object.keys(GROUPS).find(k => GROUPS[k].includes(p)) || "account";
+  lastPane[g] = p;
+  modal.querySelectorAll(".mnav button").forEach(el => el.classList.toggle("on", el.dataset.g === g));
+  modal.querySelectorAll(".ghead").forEach(el => el.classList.toggle("on", el.dataset.g === g));
+  modal.querySelectorAll(".subtabs button, .mbody section").forEach(el => el.classList.toggle("on", el.dataset.p === p));
+}
+$("#profileBtn").onclick = () => openModal();
+$("#mClose").onclick = closeModal;
+modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+modal.querySelectorAll(".mnav button").forEach(b => b.onclick = () => showPane(b.dataset.g));
+modal.querySelectorAll(".subtabs button").forEach(b => b.onclick = () => showPane(b.dataset.p));
+
+function renderProfilePane() {
+  const t = store.get("saga-theme") || "system";
+  $("#pProfile").innerHTML = `
+    <div class="grid2">
+      <div class="stat"><b>${doneWrites()}</b><span>blobs confirmed this session</span></div>
+      <div class="stat"><b>${state.memory_enabled ? "on" : "off"}</b><span>Walrus memory</span></div>
+    </div>
+    ${me.auth
+      ? `<div class="field-row"><label>Signed in with Sui — your memory follows this address across devices</label><div class="mono" style="overflow-wrap:anywhere">${esc(uid)}</div><div style="margin-top:10px"><button class="mini-btn" id="signOut">Sign out</button></div></div>`
+      : `<div class="field-row"><label>Handle — your memory follows this name across devices</label><input type="text" id="hIn" value="${esc(uid)}" spellcheck="false"><div class="empty" style="padding:6px 0 0">Press Enter to switch.</div></div>`}
+    <div class="field-row"><label>Theme</label><div class="seg" style="max-width:280px">${["system", "light", "dark"].map(x => `<button data-t="${x}" class="${t === x ? "on" : ""}">${x}</button>`).join("")}</div></div>
+    <div class="field-row"><label>Walrus Memory account</label><div class="mono" style="overflow-wrap:anywhere;color:var(--muted)">${esc(state.account_id || "not connected — add MEMWAL_* to .env")}</div></div>
+    <div class="field-row"><label>Your namespaces on Walrus</label><div class="mono" style="color:var(--muted);line-height:1.8">u:${esc(uid)}:facts · :episodes · :chat · :checkpoints · :settings</div></div>`;
+  $("#pProfile").querySelectorAll(".seg button").forEach(b => b.onclick = () => { applyTheme(b.dataset.t); renderProfilePane(); });
+  $("#signOut")?.addEventListener("click", async () => { await fetch("/api/auth/logout", {method: "POST"}); location.reload(); });
+  if ($("#hIn")) $("#hIn").onkeydown = async e => {
+    if (e.key !== "Enter") return;
+    const handle = e.target.value.trim(); if (!handle) return;
+    const r = await api("/api/login", {handle}); if (r.ok) location.reload();
+  };
+}
+const shortAddr = a => /^0x[0-9a-f]{64}$/.test(a) ? a.slice(0, 6) + "…" + a.slice(-4) : a;
+function renderProfile() {
+  const initial = (/^0x/.test(uid) ? uid[2] : uid.replace(/^anon-/, "")[0] || "?").toUpperCase();
+  $("#handle").textContent = shortAddr(uid); $("#mHandle").textContent = shortAddr(uid);
+  $("#avatar").textContent = initial; $("#mAvatar").textContent = initial;
+  $("#memDot").classList.toggle("on", !!state.memory_enabled);
+  $("#memLine").textContent = state.memory_enabled ? `Walrus memory · ${doneWrites()} blobs` : "memory off";
+  $("#mSub").textContent = state.memory_enabled ? `${doneWrites()} blobs on Walrus` : "memory off";
+}
+
+// ---------- boot ----------
+async function boot() {
+  me = await api("/api/me"); uid = me.uid;
+  if (me.auth) {
+    window.sagaAddress = uid;
+    vault = await api("/api/vault").catch(() => ({state: "missing"}));
+    if (vault.state === "missing") {
+      const si = $("#signin");
+      si.dataset.mode = "unlock";
+      $("#siTitle").textContent = "Unlock your vault";
+      $("#siBody").textContent = "Sign once with the wallet you signed in with. Your vault key encrypts the accounts you connect, and Saga never stores it.";
+      si.classList.add("open");
+    }
+  }
+  state = await api("/api/state"); agents = state.agents;
+  renderProfile();
+  refreshGitHub(); refreshRepo();
+  for (const w of state.recent_writes) addWrite(w, true);
+  renderWrites();
+  refreshSide();
+  const es = new EventSource("/api/writes");
+  es.onmessage = e => { addWrite(JSON.parse(e.data)); };
+}
+function refreshSide() { refreshChats(); if (modal.classList.contains("open")) { refreshMemory(); refreshCheckpoints(); refreshUsage(); } else refreshMemory(); }
+
+// ---------- sidebar content ----------
+const until = ts => { if (!ts) return ""; const d = ts - Date.now() / 1000; if (d <= 0) return "resets now"; const h = Math.floor(d / 3600), m = Math.floor(d % 3600 / 60); return h >= 24 ? `resets in ${Math.floor(h / 24)}d ${h % 24}h` : `resets in ${h}h ${m}m`; };
+const PRESETS = [
+  {label: "OpenRouter", base_url: "https://openrouter.ai/api/v1", model: "qwen/qwen3-coder"},
+  {label: "xAI", base_url: "https://api.x.ai/v1", model: "grok-4"},
+  {label: "Groq", base_url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile"},
+  {label: "OpenAI", base_url: "https://api.openai.com/v1", model: "gpt-5.5"},
+  {label: "Ollama (local)", base_url: "http://127.0.0.1:11434/v1", model: "qwen3:8b"},
+];
+let connectPoll = null, addOpen = false;
+const connectState = {};  // agent → {mode: token|api_key|busy, error}
+async function refreshUsage() {
+  const list = await api("/api/agents").catch(() => null); if (!list) return;
+  const tile = x => {
+    const a = x.account || {};
+    const connected = !!a.connected && !x.unavailable;
+    const who = [/^not (connected|signed in)$/.test(a.detail || "") ? "" : a.detail, a.plan ? a.plan + " plan" : "", a.account].filter(Boolean).map(esc).join(" · ");
+    const wins = (a.windows || []).map(w => {
+      const pct = Math.max(0, Math.min(100, w.used_percent || 0));
+      return `<div class="win"><div class="win-h"><span><b>${esc(w.label)}</b> limit</span><span>${Math.round(pct)}% used · ${until(w.resets_at)}</span></div><div class="meter"><i class="${pct >= 100 ? "full" : pct >= 90 ? "hot" : ""}" style="width:${pct}%"></i></div></div>`;
+    }).join("");
+    const how = x.connect || [], userMode = state.accounts === "user";
+    const label = how.includes("device") ? (x.kind === "codex" ? "Sign in with ChatGPT" : "Sign in with Grok") : "Connect";
+    const action = x.custom
+      ? `<button class="btn-ghost" data-remove="${esc(x.name)}">Remove</button>`
+      : connected && userMode ? `<button class="btn-ghost" data-disconnect="${esc(x.name)}">Disconnect</button>`
+      : how.length && !connected && !x.device ? `<button class="btn-connect" data-open="${esc(x.name)}">${label}</button>` : "";
+    const box = connectBox(x, how);
+    return `<div class="tile">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="flex:1;min-width:0">${agentName(x.name)} <span style="color:var(--faint);font-size:11.5px">${esc(x.kind)}${x.model ? " · " + esc(x.model) : ""}${x.primary ? " · primary" : ""}</span>
+          <div class="m">${esc(x.description)}</div></div>
+        ${action}
+      </div>
+      <div class="acct"><span class="pill"><i class="dot ${connected ? "on" : ""}"></i>${connected ? "Connected" : esc(x.unavailable || "Not connected")}</span>${who ? `<span>${who}</span>` : ""}<span style="margin-left:auto;color:var(--faint)">${x.runs_today} run${x.runs_today === 1 ? "" : "s"} today</span></div>
+      ${wins || (connected && a.windows_hint ? `<div class="m" style="margin-top:8px">${esc(a.windows_hint)} <button class="btn-ghost" data-probe="${esc(x.name)}" style="padding:2px 8px">Check usage</button></div>` : "")}
+      ${a.last_error ? `<div class="m off" style="margin-top:6px">${esc(a.last_error)}</div>` : ""}
+      ${box}
+    </div>`;
+  };
+  // Sign-in panel shown under an agent: device code, a pasted token, or an API key.
+  function connectBox(x, how) {
+    const st = connectState[x.name];
+    if (x.device) return `<div class="connect-box"><div class="m">Open <a href="${esc(x.device.url)}" target="_blank" rel="noopener">${esc(x.device.url.replace(/^https:\/\//, "").split("?")[0])}</a> and enter this code:</div><div class="device-code">${esc(x.device.code)}</div><div class="m">Waiting for you to approve it… this updates by itself.</div></div>`;
+    if (!st) return "";
+    const err = st.error ? `<div class="m off" style="margin-top:6px">${esc(st.error)}</div>`
+      : st.note ? `<div class="m" style="margin-top:6px">${esc(st.note)}</div>` : "";
+    if (st.mode === "token") return `<form class="connect-box" data-cred="${esc(x.name)}" data-kind="oauth_token">
+        <b style="font-size:13px">Use your Claude subscription</b>
+        <div class="m">On your own computer run <code>claude setup-token</code>, sign in, and paste the token it prints (starts with <code>sk-ant-oat</code>).</div>
+        <input name="value" type="password" placeholder="sk-ant-oat…" autocomplete="off" required>
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap"><button class="btn-connect">Save</button>${how.includes("api_key") ? `<button type="button" class="btn-ghost" data-mode="api_key" data-agent="${esc(x.name)}">Use an API key instead</button>` : ""}<button type="button" class="btn-ghost" data-close="${esc(x.name)}">Cancel</button></div>${err}</form>`;
+    if (st.mode === "api_key") return `<form class="connect-box" data-cred="${esc(x.name)}" data-kind="api_key">
+        <b style="font-size:13px">Use your ${x.kind === "codex" ? "OpenAI" : "Anthropic"} API key</b>
+        <div class="m">Billed to your own API account. Stored on the Saga host only, never in Walrus memory.</div>
+        <input name="value" type="password" placeholder="${x.kind === "codex" ? "sk-…" : "sk-ant-…"}" autocomplete="off" required>
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn-connect">Save</button><button type="button" class="btn-ghost" data-close="${esc(x.name)}">Cancel</button></div>${err}</form>`;
+    if (st.mode === "busy") return `<div class="connect-box"><div class="m">Starting sign-in…</div></div>`;
+    return err ? `<div class="connect-box">${err}${how.includes("api_key") ? `<div style="margin-top:8px"><button type="button" class="btn-ghost" data-mode="api_key" data-agent="${esc(x.name)}">Use an API key instead</button></div>` : ""}</div>` : "";
+  }
+  const addForm = `<form class="tile" id="addForm">
+      <b style="font-size:13.5px">Use your own API key</b>
+      <div class="m">Any OpenAI-compatible endpoint. The key stays on the Saga host (0600 file) and is never written to memory; the agent's settings are saved to Walrus.</div>
+      <div class="presets">${PRESETS.map((p, i) => `<button type="button" data-preset="${i}">${esc(p.label)}</button>`).join("")}</div>
+      <div class="form-grid">
+        <input name="name" placeholder="@handle, e.g. qwen" required>
+        <input name="model" placeholder="model" required>
+        <input name="base_url" class="full" placeholder="base URL, e.g. https://openrouter.ai/api/v1" required>
+        <input name="api_key" class="full" type="password" placeholder="API key (leave empty for local Ollama)" autocomplete="off">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn-connect">Add agent</button><button type="button" class="btn-ghost" id="addCancel">Cancel</button><span class="m off" id="addErr"></span></div>
+    </form>`;
+  const addTile = `<div class="tile add-tile" id="addTile"><div class="plus">+</div><div><b style="color:var(--ink);font-size:13.5px">Add an agent with your own API key</b><div class="m">OpenRouter, xAI, Groq, OpenAI, Ollama…</div></div></div>`;
+  const vaultNote = !me.auth ? "" : vault.state === "mismatch"
+    ? `<div class="tile" style="background:rgba(180,81,59,.10)"><b style="font-size:13.5px">Your saved accounts are locked with a different key</b><div class="m" style="display:block;line-height:1.6">This happens with some wallets (like Google sign-in) on a new device or session: the vault key can't be recreated, so Saga can't open what you connected before. Reset to delete the old, unreadable credentials and connect again here.</div><div style="margin-top:10px"><button class="btn-connect" id="vaultReset">Reset and reconnect</button></div></div>`
+    : `<div style="display:flex;gap:6px;align-items:center;margin:0 0 12px;font-size:12.5px;color:var(--muted)">${icon("save", 13)} Encrypted with your vault key — Saga can only use these while you're signed in. Disconnect deletes them. <a href="/privacy" target="_blank">Privacy</a></div>`;
+  $("#agents").innerHTML = vaultNote + list.map(tile).join("") + (addOpen ? addForm : addTile);
+  $("#vaultReset")?.addEventListener("click", async () => { await api("/api/vault/reset", {}); vault = {state: "ok"}; refreshUsage(); });
+
+  $("#agentsLead").textContent = state.accounts === "user"
+    ? "Connect your own accounts — agents run on your plan, in a sandbox only you can see. Usage bars are your provider's own limits; when one runs out, Saga hands the work to your primary agent."
+    : "Connect your provider accounts. Usage bars are each provider's own limits; when one runs out, Saga hands the work to the primary agent.";
+  const poll = () => {
+    clearInterval(connectPoll);
+    let n = 0; connectPoll = setInterval(() => { if (++n > 200 || !modal.classList.contains("open")) clearInterval(connectPoll); refreshUsage(); }, 4000);
+  };
+  $("#agents").querySelectorAll("[data-open]").forEach(b => b.onclick = async () => {
+    const x = list.find(v => v.name === b.dataset.open), how = x.connect || [];
+    if (how.includes("device") || how.includes("browser")) {
+      connectState[x.name] = {mode: "busy"}; refreshUsage();
+      const r = await fetch("/api/agents/connect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({agent: x.name})}).then(r => r.json());
+      connectState[x.name] = r.error ? {error: r.error} : (r.command ? {error: `Finish signing in in the browser window that opened on the Saga host (${r.command}).`} : null);
+      if (!connectState[x.name]) delete connectState[x.name];
+      refreshUsage(); poll();
+    } else {
+      connectState[x.name] = {mode: how[0]}; refreshUsage();
+    }
+  });
+  $("#agents").querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { connectState[b.dataset.agent] = {mode: b.dataset.mode}; refreshUsage(); });
+  $("#agents").querySelectorAll("[data-close]").forEach(b => b.onclick = () => { delete connectState[b.dataset.close]; refreshUsage(); });
+  $("#agents").querySelectorAll("form[data-cred]").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const agent = f.dataset.cred;
+    const r = await fetch("/api/agents/credential", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({agent, kind: f.dataset.kind, value: f.value.value.trim()})}).then(r => r.json());
+    if (r.error) { connectState[agent] = {...connectState[agent], error: r.error}; refreshUsage(); return; }
+    delete connectState[agent]; refreshUsage();
+  });
+  $("#agents").querySelectorAll("[data-disconnect]").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Disconnecting…";
+    const r = await api("/api/agents/disconnect", {agent: b.dataset.disconnect});
+    connectState[b.dataset.disconnect] = r.ok ? {note: "Disconnected — the stored credential was deleted."} : {error: r.error || "Could not delete the credential."};
+    refreshUsage();
+  });
+  if (list.some(v => v.device)) poll();
+  $("#agents").querySelectorAll("[data-probe]").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "checking…";
+    const r = await api("/api/agents/probe", {agent: b.dataset.probe});
+    if (r.error) b.textContent = r.error; else refreshUsage();
+  });
+  $("#agents").querySelectorAll("[data-remove]").forEach(b => b.onclick = async () => {
+    await api("/api/agents/remove", {name: b.dataset.remove}); await reloadAgents(); refreshUsage();
+  });
+  $("#addTile")?.addEventListener("click", () => { addOpen = true; refreshUsage(); });
+  const f = $("#addForm");
+  if (f) {
+    f.querySelectorAll("[data-preset]").forEach(b => b.onclick = () => {
+      const p = PRESETS[+b.dataset.preset];
+      f.base_url.value = p.base_url; f.model.value = p.model;
+      if (!f.name.value) f.name.value = p.label.toLowerCase().split(" ")[0];
+    });
+    $("#addCancel").onclick = () => { addOpen = false; refreshUsage(); };
+    f.onsubmit = async e => {
+      e.preventDefault();
+      const body = Object.fromEntries(new FormData(f));
+      body.name = body.name.replace(/^@/, "").trim().toLowerCase();
+      const r = await fetch("/api/agents", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(r => r.json());
+      if (r.error) { $("#addErr").textContent = r.error; return; }
+      addOpen = false; await reloadAgents(); refreshUsage();
+    };
+  }
+}
+// ---------- GitHub ----------
+let gh = {connected: false}, ghRepos = null, repo = null, ghPoll = null;
+async function refreshGitHub() {
+  gh = await api("/api/github").catch(() => ({connected: false}));
+  renderGhPane();
+}
+function renderGhPane() {
+  const box = $("#ghPane"); if (!box) return;
+  const dev = gh.device && gh.device.status === "waiting" ? gh.device : null;
+  if (gh.connected) {
+    box.innerHTML = `<div class="tile"><div style="display:flex;align-items:center;gap:10px">${icon("gh", 20)}<div style="flex:1"><b>@${esc(gh.login)}</b><div class="m">${gh.unlocked ? "Connected — token encrypted with your vault key." : "Connected, but locked on this device — unlock your vault to use it."}</div></div><button class="btn-ghost" id="ghOff">Disconnect</button></div></div>`;
+    $("#ghOff").onclick = async () => { await api("/api/github/disconnect", {}); ghRepos = null; refreshGitHub(); };
+    return;
+  }
+  box.innerHTML = (dev ? `<div class="connect-box"><div class="m">Open <a href="${esc(dev.url)}" target="_blank" rel="noopener">${esc(dev.url.replace(/^https:\/\//, ""))}</a> and enter:</div><div class="device-code">${esc(dev.code)}</div><div class="m">Waiting for you to approve it…</div></div>`
+      : gh.device_available ? `<button class="btn-connect" id="ghDevice">${icon("gh", 14)} Sign in with GitHub</button><div class="m" style="margin:10px 0 4px">or use a token:</div>` : "") +
+    `<form class="connect-box" id="ghTokenForm">
+      <b style="font-size:13px">Personal access token</b>
+      <div class="m">Create a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a> for the repos you want, with <b>Contents</b> and <b>Pull requests</b> set to read &amp; write. It's encrypted with your vault key; Disconnect deletes it.</div>
+      <input name="token" type="password" placeholder="github_pat_…" autocomplete="off" required>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn-connect">Connect</button><span class="m off" id="ghErr"></span></div>
+    </form>`;
+  $("#ghDevice")?.addEventListener("click", async () => {
+    const r = await fetch("/api/github/device", {method: "POST"}).then(r => r.json());
+    if (r.error) { $("#ghErr") && ($("#ghErr").textContent = r.error); return; }
+    await refreshGitHub();
+    clearInterval(ghPoll); let n = 0;
+    ghPoll = setInterval(async () => { await refreshGitHub(); if (gh.connected || ++n > 180) clearInterval(ghPoll); }, 5000);
+  });
+  $("#ghTokenForm").onsubmit = async e => {
+    e.preventDefault();
+    const r = await fetch("/api/github/token", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({token: e.target.token.value.trim()})}).then(r => r.json());
+    if (r.error) { $("#ghErr").textContent = r.error; return; }
+    ghRepos = null; refreshGitHub(); refreshRepo();
+  };
+}
+
+// The chat's repository: chip + Open PR above the composer, picker behind the GitHub button.
+async function refreshRepo() {
+  const r = await api("/api/github/repo?session=" + encodeURIComponent(session)).catch(() => ({repo: null}));
+  repo = r.repo;
+  const bar = $("#repoBar");
+  $("#repoBtn").classList.toggle("on", !!repo);
+  if (!repo) { bar.classList.remove("show"); bar.innerHTML = ""; return; }
+  const n = (repo.commits || 0) + (repo.uncommitted ? 1 : 0);
+  bar.innerHTML = `<span class="repo-chip">${icon("gh", 13)} ${esc(repo.full_name)} <span class="mono">${icon("branch", 12)} ${esc(repo.branch)}</span></span>
+    <span>${repo.commits || 0} commit${repo.commits === 1 ? "" : "s"}${repo.uncommitted ? ` · ${repo.uncommitted} uncommitted` : ""}</span>
+    <button class="pr-btn" id="prBtn" ${n ? "" : "disabled"}>Open pull request</button><span id="prOut"></span>`;
+  bar.classList.add("show");
+  $("#prBtn").onclick = async () => {
+    const b = $("#prBtn"); b.disabled = true; b.textContent = "Pushing…";
+    const title = $("#title").textContent || "Changes from Saga";
+    const r = await fetch("/api/github/pr", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({session, title})}).then(r => r.json());
+    if (r.error) { $("#prOut").innerHTML = `<span class="off">${esc(r.error)}</span>`; b.disabled = false; b.textContent = "Open pull request"; return; }
+    $("#prOut").innerHTML = `<a href="${esc(r.url)}" target="_blank" rel="noopener">PR #${r.number} ↗</a>`;
+    b.textContent = r.created ? "Opened" : "Updated"; refreshRepo();
+  };
+}
+async function openRepoPicker() {
+  const pop = $("#repoPop");
+  if (pop.classList.contains("open")) { pop.classList.remove("open"); return; }
+  if (repo) { pop.innerHTML = `<div class="m" style="padding:8px 10px">This chat works on <b>${esc(repo.full_name)}</b>. Start a new chat to work on another repo.</div>`; pop.classList.add("open"); return; }
+  if (!gh.connected) {
+    pop.innerHTML = `<div style="padding:8px 10px"><div class="m" style="margin-bottom:10px">Connect GitHub to let your agents work on your repositories.</div><button class="btn-connect" id="ghGo">Connect GitHub</button></div>`;
+    pop.classList.add("open");
+    $("#ghGo").onclick = () => { pop.classList.remove("open"); openModal("github"); };
+    return;
+  }
+  pop.innerHTML = `<input id="repoQ" placeholder="Search your repositories…" autocomplete="off"><div class="repo-list" id="repoList"><div class="empty">Loading…</div></div>`;
+  pop.classList.add("open"); $("#repoQ").focus();
+  if (!ghRepos) {
+    const r = await api("/api/github/repos").catch(e => ({error: e.message}));
+    if (r.error) { $("#repoList").innerHTML = `<div class="m off" style="padding:8px">${esc(r.error)}</div>`; return; }
+    ghRepos = r.repos;
+  }
+  const draw = q => {
+    const list = ghRepos.filter(x => x.full_name.toLowerCase().includes(q.toLowerCase())).slice(0, 60);
+    $("#repoList").innerHTML = list.length ? list.map(x => `<div class="repo-item" data-r="${esc(x.full_name)}">${esc(x.full_name)}${x.private ? ' <span style="color:var(--faint);font-size:11px">private</span>' : ""}<small>${esc(x.description || x.default_branch)}</small></div>`).join("") : `<div class="empty">No matching repositories you can push to.</div>`;
+    $("#repoList").querySelectorAll(".repo-item").forEach(el => el.onclick = () => attachRepo(el.dataset.r));
+  };
+  draw("");
+  $("#repoQ").oninput = e => draw(e.target.value);
+}
+async function attachRepo(full) {
+  $("#repoPop").innerHTML = `<div class="m" style="padding:10px">Cloning ${esc(full)}…</div>`;
+  const r = await fetch("/api/github/attach", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({session, repo: full})}).then(r => r.json());
+  if (r.error) { $("#repoPop").innerHTML = `<div class="m off" style="padding:10px">${esc(r.error)}</div>`; return; }
+  $("#repoPop").classList.remove("open");
+  if (!$("#title").textContent) $("#title").textContent = full;
+  refreshRepo();
+}
+$("#repoBtn").innerHTML = icon("gh", 18);
+$("#repoBtn").onclick = e => { e.stopPropagation(); openRepoPicker(); };
+document.addEventListener("click", e => { const pop = $("#repoPop"); if (pop.classList.contains("open") && !pop.contains(e.target)) pop.classList.remove("open"); });
+
+async function reloadAgents() { const st = await api("/api/state"); agents = st.agents; state = st; }
+async function refreshChats() {
+  const list = await api("/api/chats").catch(() => null); if (!list) return;
+  $("#nChats").textContent = list.length || "";
+  $("#chats").innerHTML = list.length ? list.map(c => `<div class="item click ${c.session === session ? "active" : ""}" data-s="${esc(c.session)}"><div class="t">${colorMentions(esc(c.title || "Untitled"))}</div><div class="m">${c.turns} turn${c.turns > 1 ? "s" : ""} · ${ago(c.updated)}</div></div>`).join("")
+    : `<div class="empty">No chats on Walrus yet.</div>`;
+  $("#chats").querySelectorAll(".item").forEach(el => el.onclick = () => openChat(el.dataset.s));
+}
+async function refreshMemory() {
+  const m = await api("/api/memory").catch(() => null); if (!m) return;
+  const items = arr => arr.map(x => `<div class="tile"><div>${x.agent ? agentName(x.agent) + " " : ""}${colorMentions(esc(x.text))}</div><div class="m">${blob(x.blob_id)}</div></div>`).join("");
+  $("#nFacts").textContent = m.facts.length || "";
+  $("#facts").innerHTML = m.facts.length ? items(m.facts) : `<div class="empty">Tell Saga about yourself — facts appear here, stored on Walrus.</div>`;
+  $("#memory").innerHTML = `<div class="sub-h">Recent episodes</div>${m.episodes.length ? items(m.episodes) : '<div class="empty">none yet</div>'}` +
+    `<div class="sub-h">Lessons per agent</div>${m.lessons.length ? items(m.lessons) : '<div class="empty">none yet — rate answers to teach agents</div>'}` +
+    `<div class="sub-h">Skills</div>${m.skills.length ? items(m.skills) : '<div class="empty">none yet</div>'}`;
+  const p = m.prompts;
+  $("#harness").innerHTML =
+    `<div class="grid2"><div class="stat"><b>v${Math.max(...p.versions.map(v => v.v))}</b><span>latest prompt</span></div><div class="stat"><b>${p.pending_critiques}</b><span>critiques queued</span></div></div>` +
+    `<div class="sub-h">Improvement log</div>` +
+    ((m.improvements || []).length ? m.improvements.map(i => {
+      const r = i.result || {}; const bits = [];
+      (r.lessons || []).forEach(l => bits.push(`${icon("note")} ${agentName(l.agent)} ${esc(l.lesson)}`));
+      if (r.skill) bits.push(`${icon("skill")} skill: ${esc(r.skill.name)}`);
+      if (r.critique) bits.push(`${icon("wrench")} ${esc(r.critique)}`);
+      if (r.evolved && r.evolved.version >= 0) bits.push(`${icon("evolve")} prompt → v${r.evolved.version}`);
+      return `<div class="tile"><div>${icon(i.rating > 0 ? "up" : "down")} ${bits.join("<br>") || "no change"}</div><div class="m">${ago(i.ts)} ${blob(i.blob_id)}</div></div>`;
+    }).join("") : `<div class="empty">Every rating produces a reflection stored here.</div>`) +
+    `<div class="sub-h">System prompt population</div>` +
+    p.versions.map(v => `<div class="tile"><div><b>v${v.v}</b>${v.parent >= 0 ? ` ← v${v.parent}` : ""} <span style="color:var(--faint)">${icon("up", 12)} ${v.wins} &nbsp;${icon("down", 12)} ${v.losses}</span></div><div class="m">${esc(v.why)}</div><details class="prompt"><summary>show prompt</summary><div>${esc(v.prompt)}</div></details></div>`).join("");
+}
+async function refreshCheckpoints() {
+  const list = await api("/api/checkpoints?session=" + encodeURIComponent(session)).catch(() => null); if (!list) return;
+  $("#checkpoints").innerHTML = list.length
+    ? list.map(c => `<div class="tile"><div>${agentName(c.agent)} <span style="color:var(--muted)">${esc(c.instruction)}</span></div><div class="m">${c.files.map(f => `<span class="mono">${esc(f.path)}</span>`).join(" ")} · ${ago(c.ts)} ${blob(c.blob_id)}</div></div>`).join("") +
+      `<div style="padding:6px 0"><button class="mini-btn" id="restoreBtn">Restore this chat's files from Walrus</button></div>`
+    : `<div class="empty">No checkpoints in this chat yet. Files agents change are snapshotted to Walrus.</div>`;
+  $("#restoreBtn")?.addEventListener("click", async () => {
+    const r = await api("/api/checkpoints/restore", {session});
+    $("#restoreBtn").outerHTML = `<div class="empty">restored ${r.restored?.length ?? 0} file(s) into ${esc(r.workspace || "")}</div>`;
+  });
+}
+const writes = new Map();
+const doneWrites = () => [...writes.values()].filter(w => w.status === "done").length;
+function addWrite(w, quiet) { writes.set(w.job_id || (w.namespace + w.ts + w.text), w); if (!quiet) { renderWrites(); renderProfile(); } }
+function renderWrites() {
+  const list = [...writes.values()].reverse();
+  $("#nWrites").textContent = list.length ? `${doneWrites()}/${list.length}` : "";
+  if (!list.length) return;
+  $("#writes").innerHTML = list.slice(0, 80).map(x => `<div class="tile"><div>${esc(x.text)}</div><div class="m"><span class="mono">${esc(x.namespace)}</span><span class="${x.status === "failed" ? "off" : ""}">${esc(x.status)}</span>${blob(x.blob_id)}</div></div>`).join("");
+}
+
+// ---------- composer ----------
+const q = $("#q"), hl = $("#hl"), ac = $("#ac"), sendBtn = $("#send");
+if (mobile()) q.placeholder = "Message Saga · @ to hand off";
+function syncField() {
+  hl.innerHTML = colorMentions(esc(q.value)) + "​";
+  q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 160) + "px";
+  hl.scrollTop = q.scrollTop;
+  sendBtn.disabled = !busy && !q.value.trim();
+}
+q.addEventListener("input", () => { syncField(); showAc(); });
+q.addEventListener("scroll", () => { hl.scrollTop = q.scrollTop; });
+let acSel = 0, acItems = [];
+q.addEventListener("keydown", e => {
+  if (ac.style.display === "block") {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { acSel = (acSel + (e.key === "ArrowDown" ? 1 : -1) + acItems.length) % acItems.length; drawAc(); e.preventDefault(); return; }
+    if (e.key === "Enter" || e.key === "Tab") { pickAc(acItems[acSel]); e.preventDefault(); return; }
+    if (e.key === "Escape") { ac.style.display = "none"; return; }
+  }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#f").requestSubmit(); }
+});
+function mentionAtCursor() {
+  const upto = q.value.slice(0, q.selectionStart);
+  const m = upto.match(/(^|\s)@([\w-]*)$/);
+  return m ? {start: upto.length - m[2].length - 1, text: m[2].toLowerCase()} : null;
+}
+function showAc() {
+  const m = mentionAtCursor();
+  acItems = m ? agents.filter(a => a.name.startsWith(m.text)) : [];
+  if (!acItems.length) { ac.style.display = "none"; return; }
+  acSel = 0; drawAc(); ac.style.display = "block";
+}
+function drawAc() {
+  ac.innerHTML = acItems.map((a, i) => `<div class="${i === acSel ? "sel" : ""}" data-i="${i}">${agentName(a.name)}<small>${esc(a.description)}${a.unavailable ? " — " + esc(a.unavailable) : ""}</small></div>`).join("");
+  ac.querySelectorAll("div[data-i]").forEach(d => d.onmousedown = e => { e.preventDefault(); pickAc(acItems[+d.dataset.i]); });
+}
+function pickAc(a) {
+  const m = mentionAtCursor(); if (!m) return;
+  q.value = q.value.slice(0, m.start) + "@" + a.name + " " + q.value.slice(q.selectionStart);
+  ac.style.display = "none"; syncField(); q.focus();
+}
+
+// ---------- thread ----------
+const thread = $("#thread"), log = $("#log");
+function showWelcome() {
+  $("#title").textContent = "";
+  thread.innerHTML = `<div class="welcome"><h2>What should we work on?</h2><p>Saga remembers you across sessions and hands work across agents. Everything it learns lives on Walrus mainnet.</p>
+    <div class="ex"><button>I'm Mira — I write Rust and like terse answers with code first.</button><button>Build a landing page for my coffee cart in index.html, then @codex add a tiny API server for the menu</button><button>What do you remember about me?</button></div></div>`;
+  thread.querySelectorAll(".ex button").forEach(b => {
+    const text = b.textContent; b.innerHTML = colorMentions(esc(text));
+    b.onclick = () => { q.value = text; syncField(); q.focus(); };
+  });
+}
+$("#newChat").onclick = () => {
+  if (busy) api("/api/cancel", {turn_id: busy});
+  session = newSessionId(); showWelcome(); refreshChats(); refreshCheckpoints(); refreshRepo();
+  app.classList.remove("side-open"); q.focus();
+};
+function userMsg(text) {
+  thread.insertAdjacentHTML("beforeend", `<div class="msg user-msg"><div class="bubble">${colorMentions(esc(text))}</div></div>`);
+}
+function laneHtml(agent, instruction, by, status, cls) {
+  return `<div class="lane-h">${agentName(agent)}<span class="instr">${colorMentions(esc((instruction || "").slice(0, 160)))}</span>${by && by !== "user" ? `<span class="instr">· handoff from ${agentName(by)}</span>` : ""}<span class="status ${cls || ""}">${status}</span></div><div class="tools"></div><div class="out"></div>`;
+}
+async function openChat(sid) {
+  if (busy) return;
+  session = sid; app.classList.remove("side-open");
+  thread.innerHTML = `<div class="empty" style="text-align:center;margin-top:20vh">Loading transcript from Walrus…</div>`;
+  const t = await api("/api/chats/" + encodeURIComponent(sid));
+  thread.innerHTML = "";
+  for (const turn of t.turns) {
+    userMsg(turn.user);
+    const el = document.createElement("div"); el.className = "msg";
+    for (const s of turn.steps || []) {
+      const lane = document.createElement("div"); lane.className = "lane";
+      lane.innerHTML = laneHtml(s.agent, s.instruction, s.requested_by, s.ok ? "" : "failed", s.ok ? "" : "bad");
+      lane.querySelector(".out").innerHTML = md(s.output);
+      el.appendChild(lane);
+    }
+    el.insertAdjacentHTML("beforeend", `<div style="font-size:11px;color:var(--faint)">${ago(turn.ts)} · prompt v${turn.prompt_version ?? 0} · ${blob(turn.blob_id)}</div>`);
+    thread.appendChild(el);
+  }
+  $("#title").textContent = t.turns[0]?.user?.slice(0, 80) || "";
+  refreshChats(); refreshCheckpoints(); refreshRepo();
+  log.scrollTop = log.scrollHeight;
+}
+
+$("#f").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (busy) { if (busy !== "pending") api("/api/cancel", {turn_id: busy}); return; }
+  const text = q.value.trim(); if (!text) return;
+  q.value = ""; syncField(); ac.style.display = "none";
+  if (thread.querySelector(".welcome")) { thread.innerHTML = ""; $("#title").textContent = text.slice(0, 80); }
+  userMsg(text);
+  const turn = document.createElement("div"); turn.className = "msg";
+  turn.innerHTML = `<div class="recall"><span class="chip">recalling from Walrus…</span></div>`;
+  thread.appendChild(turn); log.scrollTop = log.scrollHeight;
+  busy = "pending"; sendBtn.disabled = false; sendBtn.classList.add("stop");
+  sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`;
+  const lanes = {};
+  try {
+    const r = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: text, session})});
+    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    for (;;) {
+      const {value, done} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let nl; while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (line.trim()) onEvent(JSON.parse(line));
+      }
+      log.scrollTop = log.scrollHeight;
+    }
+  } catch (err) { turn.insertAdjacentHTML("beforeend", `<div class="note">${esc(err.message)}</div>`); }
+  busy = null; sendBtn.classList.remove("stop");
+  sendBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
+  syncField();
+  setTimeout(refreshSide, 6000);
+  refreshRepo();
+
+  function onEvent(ev) {
+    if (ev.type === "turn") { busy = ev.turn_id; turn.querySelector(".recall").innerHTML = ""; }
+    else if (ev.type === "recall") {
+      turn.querySelector(".recall").insertAdjacentHTML("beforeend", `<details style="display:inline-block;margin-right:6px"><summary>${icon("brain")} ${ev.items.length} from ${esc(nsLabel(ev.ns))}</summary><ul>${ev.items.map(m => `<li>${colorMentions(esc(m.text))} ${blob(m.blob_id)}</li>`).join("")}</ul></details>`);
+    } else if (ev.type === "step") {
+      const el = document.createElement("div"); el.className = "lane";
+      el.innerHTML = laneHtml(ev.agent, ev.instruction, ev.requested_by, "working", "working");
+      turn.appendChild(el); lanes[ev.step] = {el, text: ""};
+    } else if (ev.type === "fallback") {
+      const l = lanes[ev.step]; l.el.querySelector(".tools").insertAdjacentHTML("beforebegin", `<div class="note">${agentName(ev.from)} unavailable — handed to ${agentName(ev.to)}</div>`);
+    } else if (ev.type === "agent") {
+      const l = lanes[ev.step]; if (!l) return;
+      if (ev.kind === "tool") l.el.querySelector(".tools").insertAdjacentHTML("beforeend", `<div class="mono">${esc(ev.text)}</div>`);
+      else if (ev.kind === "delta") { l.text += ev.text; l.el.querySelector(".out").innerHTML = md(l.text); }
+      else if (ev.kind === "text") { l.text += (l.text ? "\n\n" : "") + ev.text; l.el.querySelector(".out").innerHTML = md(l.text); }
+    } else if (ev.type === "checkpoint") {
+      const l = lanes[ev.step]; if (!l) return;
+      l.el.insertAdjacentHTML("beforeend", `<span class="chip">${icon("save")} checkpoint → Walrus · ${ev.files.map(f => esc(f.path)).join(", ")}</span>`);
+    } else if (ev.type === "remember") {
+      const target = Object.values(lanes).pop()?.el || turn;
+      target.insertAdjacentHTML("beforeend", `<span class="chip">${icon("brain")} remembered: ${esc(ev.text)}</span>`);
+    } else if (ev.type === "step_done") {
+      const l = lanes[ev.step]; if (!l) return;
+      const st = l.el.querySelector(".status");
+      st.textContent = ev.ok ? `${Math.round(ev.seconds)}s` : "failed"; st.className = "status " + (ev.ok ? "ok" : "bad");
+      if (ev.ok && ev.output) l.el.querySelector(".out").innerHTML = md(ev.output);
+      if (!ev.ok) l.el.querySelector(".out").insertAdjacentHTML("beforeend", `<div class="note">${esc(ev.error)}</div>`);
+    } else if (ev.type === "done") {
+      addFeedback(turn, ev.turn_id);
+    } else if (ev.type === "error") {
+      turn.insertAdjacentHTML("beforeend", `<div class="note">${esc(ev.text)}</div>`);
+    }
+  }
+});
+
+function addFeedback(turn, id) {
+  const fb = document.createElement("div"); fb.className = "fb";
+  fb.innerHTML = `<button data-r="1" title="Good" aria-label="Good answer">${icon("up", 16)}</button><button data-r="-1" title="Bad" aria-label="Bad answer">${icon("down", 16)}</button><input placeholder="What should Saga learn? (optional)">`;
+  turn.appendChild(fb);
+  fb.querySelectorAll("button").forEach(b => b.onclick = async () => {
+    const comment = fb.querySelector("input").value.trim();
+    fb.innerHTML = `<span class="chip">reflecting…</span>`;
+    const r = await api("/api/feedback", {turn_id: id, rating: +b.dataset.r, comment});
+    let html = "";
+    if (r.error) html = esc(r.error);
+    else {
+      html = `${icon(b.dataset.r === "1" ? "up" : "down")} scored prompt v${r.prompt_version} — saved to Walrus.`;
+      for (const l of r.lessons || []) html += `<br>${icon("note")} lesson for ${agentName(l.agent)}: ${esc(l.lesson)}`;
+      if (r.skill) html += `<br>${icon("skill")} new skill: <b>${esc(r.skill.name)}</b>`;
+      if (r.critique) html += `<br>${icon("wrench")} critique queued for prompt evolution`;
+      if (r.evolved && r.evolved.version >= 0) html += `<br>${icon("evolve")} system prompt evolved → v${r.evolved.version}: ${esc(r.evolved.why)}`;
+    }
+    fb.outerHTML = `<div class="learned">${html}</div>`;
+    setTimeout(refreshMemory, 6000);
+  });
+}
+
+$("#gateForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({access_code: $("#gCode").value, handle: $("#gHandle").value})});
+  if (r.ok) location.reload(); else $("#gErr").textContent = (await r.json()).error;
+});
+showWelcome();
+syncField();
+boot().catch(() => {});
+</script>
+</body>
+</html>

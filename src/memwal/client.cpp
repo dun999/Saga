@@ -1,0 +1,216 @@
+#include "memwal/client.h"
+
+#include <ctime>
+#include <thread>
+
+#include "core/http.h"
+
+namespace saga::memwal {
+namespace {
+
+constexpr int kSealTtlMin = 5;                 // matches official SDKs
+constexpr int64_t kSealSafetyMarginMs = 30'000;
+
+int64_t now_ms() {
+  using namespace std::chrono;
+  return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
+
+std::string describe(const http::Response& r) {
+  std::string m = r.error.empty() ? "HTTP " + std::to_string(r.status) : r.error;
+  if (auto it = r.headers.find("x-auth-error"); it != r.headers.end()) m += " [" + it->second + "]";
+  if (!r.body.empty()) m += ": " + r.body.substr(0, 300);
+  return m;
+}
+
+}  // namespace
+
+std::string canonical_message(const std::string& ts, const std::string& method, const std::string& path,
+                              const std::string& body_sha256, const std::string& nonce,
+                              const std::string& account_id) {
+  return ts + "." + method + "." + path + "." + body_sha256 + "." + nonce + "." + account_id;
+}
+
+std::string seal_personal_message(const std::string& package_id, int ttl_min, int64_t creation_ms,
+                                  const crypto::Bytes& session_pub) {
+  const std::time_t secs = static_cast<std::time_t>(creation_ms / 1000);
+  std::tm tm{};
+  gmtime_r(&secs, &tm);
+  char when[32];
+  std::strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S UTC", &tm);
+  return "Accessing keys of package " + package_id + " for " + std::to_string(ttl_min) + " mins from " +
+         when + ", session key " + crypto::b64_encode(session_pub);
+}
+
+Client::Client(Config cfg) : cfg_(std::move(cfg)), key_(crypto::Ed25519Key::parse(cfg_.private_key)) {
+  while (!cfg_.server_url.empty() && cfg_.server_url.back() == '/') cfg_.server_url.pop_back();
+  address_ = key_.sui_address();
+}
+
+json Client::health() const {
+  auto r = http::get(cfg_.server_url + "/health");
+  if (!r.ok()) throw Error(r.status, "health: " + describe(r));
+  return json::parse(r.body);
+}
+
+json Client::server_config() {
+  std::lock_guard lk(mu_);
+  if (!config_cache_) {
+    auto r = http::get(cfg_.server_url + "/config");
+    if (!r.ok()) throw Error(r.status, "config: " + describe(r));
+    config_cache_ = json::parse(r.body);
+  }
+  return *config_cache_;
+}
+
+std::string Client::seal_session() {
+  const std::string package_id = server_config().value("packageId", "");
+  std::lock_guard lk(mu_);
+  if (!session_cache_.empty() && now_ms() < session_expiry_ms_) return session_cache_;
+  if (package_id.empty()) throw Error(0, "relayer /config has no packageId");
+
+  const auto session = crypto::Ed25519Key::generate();
+  const int64_t created = now_ms();
+  const std::string pm =
+      seal_personal_message(package_id, kSealTtlMin, created, {session.pub.begin(), session.pub.end()});
+  const json envelope = {
+      {"address", address_},
+      {"packageId", package_id},
+      {"mvrName", nullptr},
+      {"creationTimeMs", created},
+      {"ttlMin", kSealTtlMin},
+      {"personalMessageSignature", key_.sign_personal_message(pm)},
+      {"sessionKey", session.sui_private_key()},
+  };
+  session_cache_ = crypto::b64_encode(envelope.dump());
+  session_expiry_ms_ = created + kSealTtlMin * 60'000 - kSealSafetyMarginMs;
+  return session_cache_;
+}
+
+json Client::signed_request(const std::string& method, const std::string& path, const json& body,
+                            bool include_seal_session, long timeout_s) {
+  const std::string body_str = (method == "GET" || body.is_null()) ? "" : body.dump();
+  for (int attempt = 0;; ++attempt) {
+    const std::string ts = std::to_string(now_ms() / 1000);
+    const std::string nonce = crypto::uuid4();
+    const auto sig = key_.sign(
+        canonical_message(ts, method, path, crypto::sha256_hex(body_str), nonce, cfg_.account_id));
+
+    http::Headers h = {
+        {"Content-Type", "application/json"},
+        {"x-public-key", key_.pub_hex()},
+        {"x-signature", crypto::to_hex(sig.data(), sig.size())},
+        {"x-timestamp", ts},
+        {"x-nonce", nonce},
+        {"x-account-id", cfg_.account_id},
+    };
+    if (include_seal_session) h["x-seal-session"] = seal_session();
+
+    auto r = http::request(method, cfg_.server_url + path, h, body_str, timeout_s);
+    // 503 (Sui upstream / rate limiter) and 429 are retryable with backoff.
+    if ((r.status == 503 || r.status == 429 || !r.error.empty()) && attempt < 3) {
+      int wait_s = 2 << attempt;
+      if (auto it = r.headers.find("retry-after"); it != r.headers.end()) {
+        try { wait_s = std::max(1, std::stoi(it->second)); } catch (...) {}
+      }
+      std::this_thread::sleep_for(std::chrono::seconds(wait_s));
+      continue;
+    }
+    if (!r.ok()) throw Error(r.status, method + " " + path + ": " + describe(r));
+    return r.body.empty() ? json::object() : json::parse(r.body);
+  }
+}
+
+json Client::whoami() { return signed_request("GET", "/api/whoami", nullptr, false); }
+
+std::string Client::remember(const std::string& text, const std::string& ns) {
+  return signed_request("POST", "/api/remember", {{"text", text}, {"namespace", ns}}).value("job_id", "");
+}
+
+std::vector<std::string> Client::remember_bulk(const std::vector<std::pair<std::string, std::string>>& items) {
+  std::vector<std::string> ids;
+  for (size_t off = 0; off < items.size(); off += 20) {  // relayer cap: 20 per request
+    json arr = json::array();
+    for (size_t i = off; i < std::min(items.size(), off + 20); ++i)
+      arr.push_back({{"text", items[i].first}, {"namespace", items[i].second}});
+    auto res = signed_request("POST", "/api/remember/bulk", {{"items", arr}});
+    for (auto& id : res.value("job_ids", json::array())) ids.push_back(id.get<std::string>());
+  }
+  return ids;
+}
+
+static JobStatus parse_job(const json& j) {
+  JobStatus s;
+  s.job_id = j.value("job_id", "");
+  s.status = j.value("status", "");
+  if (j.contains("blob_id") && j["blob_id"].is_string()) s.blob_id = j["blob_id"];
+  if (j.contains("error") && j["error"].is_string()) s.error = j["error"];
+  if (j.contains("namespace") && j["namespace"].is_string()) s.namespace_ = j["namespace"];
+  return s;
+}
+
+JobStatus Client::job(const std::string& job_id) {
+  return parse_job(signed_request("GET", "/api/remember/" + job_id, nullptr, false));
+}
+
+std::vector<JobStatus> Client::jobs(const std::vector<std::string>& job_ids) {
+  std::vector<JobStatus> out;
+  for (size_t off = 0; off < job_ids.size(); off += 100) {
+    json ids(std::vector<std::string>(job_ids.begin() + off,
+                                      job_ids.begin() + std::min(job_ids.size(), off + 100)));
+    auto res = signed_request("POST", "/api/remember/bulk/status", {{"job_ids", ids}}, false);
+    for (auto& j : res.value("results", json::array())) out.push_back(parse_job(j));
+  }
+  return out;
+}
+
+JobStatus Client::wait(const std::string& job_id, std::chrono::seconds timeout) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  auto delay = std::chrono::milliseconds(500);
+  for (;;) {
+    auto s = job(job_id);
+    if (s.settled() || std::chrono::steady_clock::now() > deadline) return s;
+    std::this_thread::sleep_for(delay);
+    delay = std::min(delay * 2, std::chrono::milliseconds(4000));
+  }
+}
+
+std::vector<Memory> Client::recall(const std::string& query, const std::string& ns, const RecallOptions& opt) {
+  json body = {{"query", query}, {"limit", opt.limit}, {"namespace", ns}};
+  if (opt.recent) {
+    body["sort"] = "recent";
+  } else if (opt.recency_weight > 0 || opt.importance_weight > 0) {
+    body["scoring_weights"] = {{"semantic", 1.0},
+                               {"recency", opt.recency_weight},
+                               {"importance", opt.importance_weight}};
+  }
+  auto res = signed_request("POST", "/api/recall", body);
+  std::vector<Memory> out;
+  for (auto& r : res.value("results", json::array())) {
+    Memory m{r.value("blob_id", ""), r.value("text", ""), r.value("distance", 1.0), std::nullopt};
+    if (r.contains("score") && r["score"].is_number()) m.score = r["score"].get<double>();
+    if (opt.max_distance && m.distance > *opt.max_distance) continue;
+    out.push_back(std::move(m));
+  }
+  return out;
+}
+
+json Client::analyze(const std::string& text, const std::string& ns) {
+  return signed_request("POST", "/api/analyze", {{"text", text}, {"namespace", ns}}, true, 120);
+}
+
+json Client::restore(const std::string& ns, int limit) {
+  return signed_request("POST", "/api/restore", {{"namespace", ns}, {"limit", limit}}, true, 300);
+}
+
+json Client::stats(const std::string& ns) {
+  return signed_request("POST", "/api/stats", {{"namespace", ns}}, false);
+}
+
+json Client::namespaces() {
+  // The route is keyed by the account *owner* (wallet), not the delegate key address.
+  const std::string owner = whoami().value("owner", address_);
+  return signed_request("GET", "/v1/owners/" + owner + "/namespaces", nullptr, false);
+}
+
+}  // namespace saga::memwal

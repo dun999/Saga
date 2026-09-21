@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Saga — a harness that remembers, on Walrus</title>
+<meta name="description" content="A chatbot harness with native Walrus memory, built in C++. Hand work between Claude Code, Codex and Grok with @mentions; everything Saga learns lives on Walrus mainnet.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root {
+  --charcoal: #312F2C; --mint: #ABD1C6;
+  --canvas: #F6F4EF; --white: #FFFFFF; --panel: #ECE9E2; --panel-2: #E3DFD6;
+  --ink: #312F2C; --muted: #6F6A61; --faint: #9C968C;
+  --mint-deep: #3F7F6D;
+  --claude: #C8612F; --codex: #23875F; --grok: #6E58E0;
+  --radius: 26px;
+  --col: 1180px;
+  --sans: "Inter Tight", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Instrument Serif", ui-serif, Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #312F2C; --panel: #3A3835; --panel-2: #45423E;
+    --ink: #F2EFE9; --muted: #B3AEA5; --faint: #8A857C; --mint-deep: #ABD1C6;
+    --claude: #F0925F; --codex: #5FD3A0; --grok: #B3A4FF;
+  }
+}
+:root[data-theme="dark"] {
+  --canvas: #312F2C; --panel: #3A3835; --panel-2: #45423E;
+  --ink: #F2EFE9; --muted: #B3AEA5; --faint: #8A857C; --mint-deep: #ABD1C6;
+  --claude: #F0925F; --codex: #5FD3A0; --grok: #B3A4FF;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--canvas); color: var(--ink); font: 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+a { color: inherit; text-decoration: none; }
+.col { max-width: var(--col); margin: 0 auto; padding: 0 20px; }
+@media (min-width: 1024px) { .col { padding: 0 32px; } }
+.serif { font-family: var(--serif); font-weight: 400; font-style: italic; letter-spacing: -.01em; }
+.ag { font-weight: 600; }
+.ag-claude { color: var(--claude); } .ag-codex { color: var(--codex); } .ag-grok { color: var(--grok); }
+
+/* buttons */
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 22px; border-radius: 99px; font-weight: 600; font-size: 15px; border: 0; cursor: pointer; transition: transform .15s, background .2s; }
+.btn:active { transform: scale(.97); }
+.btn-dark { background: var(--charcoal); color: var(--mint); }
+.btn-dark:hover { background: #1f1d1b; }
+.btn-soft { background: var(--panel); color: var(--ink); }
+.btn-soft:hover { background: var(--panel-2); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn-dark { background: var(--mint); color: var(--charcoal); } }
+:root[data-theme="dark"] .btn-dark { background: var(--mint); color: var(--charcoal); }
+.btn-sm { height: 38px; padding: 0 16px; font-size: 13.5px; }
+
+/* header */
+header.top { position: sticky; top: 0; z-index: 30; backdrop-filter: saturate(1.4) blur(14px); background: color-mix(in srgb, var(--canvas) 78%, transparent); transition: background .3s, color .3s; }
+/* Over the white stage the bar turns white too, so nothing draws a band across it. */
+header.top.on-white { background: rgba(255,255,255,.86); color: #312F2C; }
+header.top.on-white nav.links { color: #6F6A61; }
+header.top .col { display: flex; align-items: center; justify-content: space-between; height: 68px; }
+.wordmark { font-weight: 700; font-size: 20px; letter-spacing: -.03em; display: flex; align-items: center; gap: 9px; }
+.mark { width: 26px; height: 26px; border-radius: 8px; background: var(--charcoal); display: grid; place-items: center; }
+.mark i { width: 10px; height: 10px; border-radius: 50%; background: var(--mint); display: block; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mark { background: var(--mint); } :root:not([data-theme="light"]) .mark i { background: var(--charcoal); } }
+nav.links { display: flex; gap: 26px; font-size: 14px; color: var(--muted); }
+nav.links a:hover { color: var(--ink); }
+@media (max-width: 760px) { nav.links { display: none; } }
+
+/* hero */
+/* The hero owns the whole first screen; the demo only arrives on scroll. */
+.hero { min-height: calc(100vh - 68px); min-height: calc(100svh - 68px); display: flex; align-items: center; padding: 40px 0 64px; position: relative; overflow: hidden; }
+.hero > .col { width: 100%; }
+.chip { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); background: var(--panel); padding: 6px 14px; border-radius: 99px; }
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #6FBF9F; box-shadow: 0 0 0 4px rgba(171,209,198,.35); }
+h1 { font-size: clamp(58px, 10.5vw, 158px); line-height: .92; letter-spacing: -.035em; font-weight: 600; margin: 0; max-width: 11ch; }
+/* The typed word owns a fixed-height line of its own, so deleting and retyping it never
+   collapses the line or re-wraps the heading — nothing below it moves. */
+.tw { display: block; height: 1.08em; white-space: nowrap; }
+.tw .caret { display: inline-block; width: .06em; height: .82em; background: var(--mint-deep); margin-left: .04em; vertical-align: -.06em; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.lede { margin: 32px 0 0; max-width: 58ch; color: var(--muted); font-size: clamp(17px, 1.5vw, 21px); line-height: 1.6; }
+.cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 40px; }
+.scroll-cue { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); font-size: 12px; color: var(--faint); display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.scroll-cue i { width: 1.5px; height: 26px; border-radius: 2px; background: var(--faint); opacity: .6; animation: cue 1.8s ease-in-out infinite; transform-origin: top; }
+@keyframes cue { 0% { transform: scaleY(0); } 50% { transform: scaleY(1); } 100% { transform: scaleY(1); opacity: 0; } }
+.hero-orb { position: absolute; right: -10vw; top: 8vh; width: 56vw; max-width: 820px; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 35% 35%, var(--mint), transparent 62%); opacity: .55; filter: blur(8px); pointer-events: none; animation: drift 14s ease-in-out infinite alternate; }
+@keyframes drift { to { transform: translate(-4vw, 5vh) scale(1.08); } }
+.rise { animation: rise .7s cubic-bezier(.2,.7,.2,1) both; }
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+
+/* ============ full-screen white chat stage ============ */
+.stage { position: relative; min-height: 100vh; min-height: 100svh; background: #FFFFFF; color: #312F2C; display: flex; flex-direction: column; justify-content: center; padding: calc(68px + 4vh) 0 5vh; overflow: hidden; }
+.stage .eyebrow { text-align: center; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #9C968C; }
+.stage .intro { padding: 0 20px; }
+.stage h2 { text-align: center; font-size: clamp(28px, 3.6vw, 46px); letter-spacing: -.035em; line-height: 1.08; font-weight: 600; margin: 12px auto 0; max-width: 26ch; }
+.stage .ag-claude { color: #C8612F; } .stage .ag-codex { color: #23875F; } .stage .ag-grok { color: #6E58E0; }
+/* Chat anchors to the bottom like a real thread; older lines slide up under a soft fade. */
+.thread { max-width: 720px; width: calc(100% - 40px); height: 540px; flex: none; margin: 4vh auto 0; padding: 0 0 4px; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 7%); mask-image: linear-gradient(to bottom, transparent, #000 7%); }
+.m { opacity: 0; transform: translateY(12px); transition: opacity .5s ease, transform .5s cubic-bezier(.2,.7,.2,1); }
+.m.in { opacity: 1; transform: none; }
+.m.out { opacity: 0; transition-duration: .6s; }
+.u-row { display: flex; justify-content: flex-end; }
+.u-bubble { background: #312F2C; color: #F6F2EA; padding: 12px 18px; border-radius: 22px 22px 6px 22px; font-size: 15.5px; max-width: 86%; }
+.u-bubble .ag-claude { color: #F4A67C; } .u-bubble .ag-codex { color: #7FDDB3; }
+.recall { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12.5px; }
+.recall span { display: inline-flex; align-items: center; gap: 6px; background: rgba(171,209,198,.3); color: #2E5F52; padding: 4px 12px; border-radius: 99px; }
+.ico { flex: none; }
+/* An agent turn: name line, the answer in a bubble, then what it did — outside the bubble. */
+.amsg { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.a-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: #8A857C; padding-left: 2px; }
+.a-head .st { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #A39E94; }
+.a-head .st.ok { color: #3F7F6D; }
+.a-bubble { font-size: 15px; line-height: 1.55; padding: 11px 16px; border-radius: 6px 20px 20px 20px; max-width: 88%; background: #F4F2EE; min-height: 44px; }
+.amsg.claude .a-bubble { background: #FBF1EA; } .amsg.codex .a-bubble { background: #EAF5EF; }
+.a-bubble + .a-bubble { border-radius: 20px; }
+.dots { display: inline-flex; gap: 4px; padding: 7px 0; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: #A39E94; animation: bob 1.1s ease-in-out infinite; }
+.dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes bob { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+.a-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: 12.5px; color: #8A857C; padding-left: 4px; }
+.a-meta > span { display: inline-flex; align-items: center; gap: 6px; opacity: 0; transform: translateY(4px); transition: opacity .35s, transform .35s; }
+.a-meta > span.in { opacity: 1; transform: none; }
+.a-meta .f { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #6F6A61; }
+.a-meta .plus { color: #3F7F6D; font-family: ui-monospace, monospace; }
+.a-meta .blob { color: #3F7F6D; font-family: ui-monospace, monospace; font-weight: 600; }
+.pulse { width: 7px; height: 7px; border-radius: 50%; background: #ABD1C6; animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
+.composer { max-width: 720px; width: calc(100% - 40px); margin: 14px auto 0; background: #FFFFFF; border-radius: 26px; box-shadow: 0 18px 50px rgba(49,47,44,.10), 0 2px 8px rgba(49,47,44,.06); display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 22px; }
+.composer .typed { flex: 1; font-size: 16px; min-height: 26px; color: #312F2C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer .typed .ph { color: #A39E94; }
+.composer .typed .cur { display: inline-block; width: 2px; height: 18px; background: #312F2C; vertical-align: -3px; margin-left: 1px; animation: blink 1s steps(1) infinite; }
+.composer .send { width: 40px; height: 40px; border-radius: 50%; background: #312F2C; color: #ABD1C6; display: grid; place-items: center; flex: none; transition: transform .15s; }
+.composer .send.hit { transform: scale(.86); }
+.ac { max-width: 720px; width: calc(100% - 40px); margin: 0 auto; position: relative; height: 0; }
+.ac > div { position: absolute; bottom: 10px; left: 14px; background: #FFFFFF; border-radius: 14px; box-shadow: 0 14px 40px rgba(49,47,44,.14); padding: 8px 12px; font-size: 14px; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; }
+.ac > div.in { opacity: 1; transform: none; }
+.ac small { display: block; color: #8A857C; font-size: 12px; }
+
+/* essential-cookies notice */
+.cookie-note { position: fixed; left: 16px; bottom: 16px; z-index: 50; max-width: 360px; background: var(--surface, #fff); color: var(--ink); border-radius: 16px; padding: 14px 16px; box-shadow: 0 12px 34px rgba(20,18,16,.18); font-size: 13px; line-height: 1.5; display: none; }
+.cookie-note.show { display: block; animation: cn-in .3s ease both; }
+@keyframes cn-in { from { opacity: 0; transform: translateY(8px); } }
+.cookie-note a { color: inherit; font-weight: 600; }
+.cookie-note button { margin-top: 10px; border: 0; border-radius: 99px; padding: 6px 14px; background: #312F2C; color: #ABD1C6; font: inherit; font-weight: 600; cursor: pointer; }
+
+/* research marquee: every card is a link to the paper */
+.band { padding: 28px 0 8px; }
+.marquee { position: relative; overflow: hidden; --gap: 12px; }
+.marquee + .marquee { margin-top: 12px; }
+.track { display: flex; gap: var(--gap); width: max-content; animation: slide var(--dur, 60s) linear infinite; }
+.marquee.rev .track { animation-direction: reverse; }
+.marquee:hover .track { animation-play-state: paused; }
+@keyframes slide { to { transform: translateX(calc(-50% - var(--gap) / 2)); } }
+.marquee::before, .marquee::after { content: ""; position: absolute; top: 0; bottom: 0; width: 12vw; z-index: 2; pointer-events: none; }
+.marquee::before { left: 0; background: linear-gradient(to right, var(--canvas), transparent); }
+.marquee::after { right: 0; background: linear-gradient(to left, var(--canvas), transparent); }
+.paper { flex: none; width: 300px; background: var(--panel); border-radius: 18px; padding: 16px 18px; transition: background .2s, transform .2s; }
+.paper:hover { background: var(--panel-2); transform: translateY(-2px); }
+.paper b { display: block; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.paper p { font-size: 13.5px; color: var(--muted); margin: 6px 0 0; line-height: 1.45; }
+
+/* section heads */
+.head { padding-top: 64px; }
+.head h2 { font-size: clamp(28px, 3.6vw, 44px); letter-spacing: -.035em; line-height: 1.05; font-weight: 600; margin: 0; max-width: 22ch; }
+.head p { color: var(--muted); max-width: 56ch; margin: 14px 0 0; font-size: 17px; }
+
+/* stacking cards */
+.stack { position: relative; margin-top: 8px; }
+.stack .pin { position: sticky; top: 0; height: 100vh; height: 100svh; display: flex; align-items: flex-start; padding-top: 10vh; }
+/* The last card has nothing to wait for: its pin is only as tall as the card, so the stack
+   releases as soon as it lands instead of leaving a screen of empty page behind it. */
+.stack .pin:last-child { height: auto; padding-bottom: 72px; }
+/* Clear air between the released card stack and the next section. */
+/* Everything after the card stack breathes on the same rhythm; sections above it keep their spacing. */
+.steps-head, #research, #faq { padding-top: clamp(120px, 16vh, 200px); }
+footer { margin-top: clamp(140px, 20vh, 240px) !important; }
+/* Every card carries its own edge (a soft lift shadow plus a hairline of its own tint),
+   so a charcoal card still reads on the charcoal page in dark mode. */
+.stack .card { width: 100%; min-height: 440px; border-radius: var(--radius); padding: 38px; display: flex; flex-direction: column; justify-content: space-between; transform-origin: top center; position: relative; overflow: hidden; will-change: transform;
+  box-shadow: 0 -2px 0 rgba(255,255,255,.06) inset, 0 24px 60px -18px rgba(20,18,16,.35), 0 2px 10px rgba(20,18,16,.10); }
+.card .logo { position: absolute; right: 34px; top: 32px; width: clamp(84px, 11vw, 132px); height: auto; color: inherit; opacity: .92; }
+.card .eb { font-size: 11.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; opacity: .65; }
+.card h3 { font-size: clamp(28px, 3.4vw, 42px); letter-spacing: -.035em; line-height: 1.06; margin: 0; font-weight: 600; max-width: 20ch; }
+.card p { max-width: 58ch; font-size: 15px; line-height: 1.6; opacity: .85; margin: 14px 0 0; }
+.card .art { position: absolute; right: 34px; top: 26px; font-family: var(--serif); font-style: italic; font-size: clamp(64px, 9vw, 120px); line-height: 1; opacity: .9; }
+.card code { font: 13px ui-monospace, monospace; background: rgba(255,255,255,.14); padding: 2px 7px; border-radius: 6px; }
+.card.light code { background: rgba(49,47,44,.08); }
+@media (max-width: 640px) { .stack .card { padding: 26px; min-height: 400px; } .card .art, .card .logo { right: 22px; top: 20px; } .card .logo { width: 72px; } }
+
+/* steps */
+.steps { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; margin-top: 34px; list-style: none; padding: 0; }
+.steps li { border-radius: var(--radius); padding: 28px; grid-column: span 4; box-shadow: 0 16px 40px -20px rgba(20,18,16,.35); }
+.steps li:nth-child(3) { grid-column: span 8; }
+.steps .n { font-size: 12.5px; font-weight: 700; opacity: .75; font-variant-numeric: tabular-nums; }
+.steps h4 { font-size: 19px; margin: 12px 0 0; font-weight: 600; letter-spacing: -.015em; }
+.steps p { font-size: 15px; margin: 8px 0 0; max-width: 56ch; line-height: 1.6; color: inherit; }  /* not the muted .head p */
+.steps code { font: 12.5px ui-monospace, monospace; }
+@media (max-width: 640px) { .steps li, .steps li:nth-child(3) { grid-column: span 8; } }
+
+/* faq */
+.faq { margin-top: 32px; display: grid; gap: 8px; }
+.faq details { background: var(--panel); border-radius: 16px; }
+.faq summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 16px; padding: 18px 22px; font-weight: 500; font-size: 15px; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; font-size: 20px; line-height: 1; color: var(--faint); transition: transform .2s; }
+.faq details[open] summary::after { transform: rotate(45deg); }
+.faq .a { padding: 0 22px 20px; color: var(--muted); font-size: 14.5px; line-height: 1.65; max-width: 80ch; }
+.faq details { overflow: hidden; transition: background .2s; }
+.faq details:hover { background: var(--panel-2); }
+.faq summary::after { transition: transform .3s cubic-bezier(.2,.7,.2,1); }
+
+/* footer */
+footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow: hidden; }
+.giant { text-align: center; font-size: 24vw; line-height: .78; letter-spacing: -.06em; font-weight: 700; margin: 0; user-select: none;
+  background: linear-gradient(to bottom, var(--muted), var(--faint)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lid { position: relative; margin-top: -7vw; border-radius: 17vw 17vw 0 0; background: var(--canvas); padding: 11vw 20px 48px; text-align: center; }
+.lid nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 28px; font-weight: 500; font-size: 15px; }
+.lid nav a:hover { color: var(--mint-deep); }
+.lid p { max-width: 70ch; margin: 22px auto 0; color: var(--faint); font-size: 12.5px; line-height: 1.7; }
+
+@media (max-width: 640px) { .thread { height: 500px; } .a-bubble { font-size: 14.5px; } }
+@media (max-height: 760px) and (min-width: 641px) { .thread { height: 430px; } }
+@media (prefers-reduced-motion: reduce) {
+  .track, .hero-orb, .tw .caret, .pulse { animation: none; }
+  .m, .a-meta > span { transition: none; } .dots i { animation: none; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="col">
+    <a class="wordmark" href="/"><span class="mark"><i></i></span>Saga</a>
+    <nav class="links">
+      <a href="#demo">How it works</a>
+      <a href="#memory">Memory</a>
+      <a href="#research">Research</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn btn-dark btn-sm" href="/app">Open Saga</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="hero-orb" aria-hidden="true"></div>
+    <div class="col" style="position:relative">
+      <h1 class="rise" style="animation-delay:.05s">Harness that <span class="tw" id="tw">remembers</span></h1>
+      <p class="lede rise" style="animation-delay:.12s">Walrus memory, native. Saga is a chatbot harness where everything it learns — who you are, what was built, how to do it better — lives as encrypted blobs on Walrus mainnet. Bring the agents you already use and hand work between <span class="ag ag-claude">@claude</span>, <span class="ag ag-codex">@codex</span> and <span class="ag ag-grok">@grok</span> with a mention.</p>
+      <div class="cta rise" style="animation-delay:.18s">
+        <a class="btn btn-dark" href="/app">Start chatting <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <a class="btn btn-soft" href="#demo">Watch a handoff</a>
+      </div>
+    </div>
+    <div class="scroll-cue" aria-hidden="true">scroll<i></i></div>
+  </section>
+
+  <!-- Full-screen, plain white stage: one conversation, one handoff, on loop. -->
+  <section class="stage" id="demo" aria-label="Animated example of a Saga conversation">
+    <div class="intro"><div class="eyebrow">One message, two agents</div>
+    <h2>Ask <span class="ag ag-claude">@claude</span>. It hands off to <span class="ag ag-codex">@codex</span>. Saga carries the context.</h2></div>
+    <div class="thread" id="thread" aria-live="off"></div>
+    <div class="ac" id="ac"></div>
+    <div class="composer" aria-hidden="true">
+      <div class="typed" id="typed"><span class="ph">Message Saga — @ to hand off to an agent</span></div>
+      <div class="send" id="send"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></div>
+    </div>
+  </section>
+
+  <section class="col head" id="memory" style="padding-top:96px">
+    <h2>Four things a chat window forgets.</h2>
+    <p>Saga keeps them — on Walrus, not in a database you have to run.</p>
+  </section>
+  <div class="stack col" id="stack"></div>
+
+  <section class="col head steps-head">
+    <h2>Three steps from zero to remembered.</h2>
+    <p>It's one binary. Your agents stay the ones you already pay for.</p>
+    <ol class="steps">
+      <li style="background:#242220;color:#F6F2EA"><span class="n">01</span><h4>Connect your agents</h4><p>Sign in to Claude Code, Codex or Grok once — Saga shows each provider's own 5-hour and weekly limits — or add an API key with <b>＋</b>.</p></li>
+      <li style="background:#ABD1C6;color:#1F2B27"><span class="n">02</span><h4>Chat and mention</h4><p>Write what you want. <b>@codex</b> the backend, <b>@grok</b> the review. Agents can hand off to each other too.</p></li>
+      <li style="background:#5B5449;color:#FBF8F2"><span class="n">03</span><h4>It remembers, and gets better</h4><p>Facts, transcripts, file checkpoints and lessons land on Walrus as they happen. A <span class="i-up"></span> or <span class="i-down"></span> rating becomes a lesson; three critiques evolve the system prompt. Restart anywhere — <code>saga serve</code> picks up where you left off.</p></li>
+    </ol>
+  </section>
+
+  <section class="col head" id="research">
+    <h2>Built on what the research says harnesses should do.</h2>
+    <p>The design follows the YC Paper Club <i>Harness Edition</i> reading list.</p>
+  </section>
+  <section class="band">
+    <div class="marquee" style="--dur:64s"><div class="track" id="papersA"></div></div>
+    <div class="marquee rev" style="--dur:72s"><div class="track" id="papersB"></div></div>
+  </section>
+
+  <section class="col head" id="faq">
+    <h2>Questions worth asking first.</h2>
+    <div class="faq">
+      <details open><summary>Is there really no database?</summary><div class="a">Saga itself stores nothing locally except your config. Every memory is SEAL-encrypted by the Walrus Memory relayer and written to Walrus mainnet as a blob owned by a Sui account. The relayer keeps a search index over those blobs, and Saga rebuilds it from Walrus with <code>restore</code> at boot — Walrus is the record.</div></details>
+      <details><summary>Which agents can I use?</summary><div class="a">Claude Code, OpenAI Codex and Grok Build through their own CLIs and your existing subscriptions, plus any OpenAI-compatible API — OpenRouter, xAI, Groq, OpenAI, or a local model through Ollama or llama.cpp. Mention any of them with @.</div></details>
+      <details><summary>What happens when an agent hits its limit?</summary><div class="a">Saga reads each provider's own usage windows. When one is exhausted — or the CLI isn't signed in, or the API is unreachable — the step is handed to your primary agent, and the chat shows the fallback so you always get a result.</div></details>
+      <details><summary>How does it actually improve?</summary><div class="a">After a rating, a reflection pass reads the full trace and writes lessons for the agent involved. Successful multi-agent procedures become reusable skills. Critiques accumulate, and the system prompt evolves; each version is scored by your ratings and served by Thompson sampling, so a bad mutation loses traffic by itself.</div></details>
+      <details><summary>Where do my API keys and sign-ins go?</summary><div class="a">They are encrypted on the Saga server with your vault key — a key your browser derives from a wallet signature and Saga never stores — so they can only be opened while you're signed in. They are never written to Walrus, and Disconnect deletes them. See <a href="/privacy">Privacy &amp; cookies</a>.</div></details>
+      <details><summary>Why C++?</summary><div class="a">One small binary with no runtime to install. Saga speaks the Walrus Memory protocol natively — Ed25519 request signing and SEAL session keys over libsodium — and its crypto is tested byte-for-byte against the official SDK.</div></details>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <h2 class="giant" aria-hidden="true">Saga</h2>
+  <div class="lid">
+    <nav>
+      <a href="/app">Open Saga</a>
+      <a href="#demo">How it works</a>
+      <a href="#memory">Memory</a>
+      <a href="#research">Research</a>
+      <a href="https://github.com/MystenLabs/MemWal" target="_blank" rel="noopener">Walrus Memory</a>
+      <a href="/privacy">Privacy &amp; cookies</a>
+    </nav>
+    <p>Saga is a hackathon project for the Walrus “Chatbots That Remember” challenge. It drives third-party agents with your own accounts and keys; their usage is subject to each provider's terms and limits. Memories are stored on Walrus mainnet.</p>
+  </div>
+</footer>
+<div class="cookie-note" id="cookieNote" role="region" aria-label="Cookie notice">
+  Saga uses only essential cookies — to keep you signed in and unlock your vault. No analytics, no ads. <a href="/privacy">Privacy &amp; cookies</a>
+  <div><button id="cookieOk">Got it</button></div>
+</div>
+<script>
+(() => {
+  const seen = () => { try { return localStorage.getItem("saga-cookies") === "1"; } catch { return false; } };
+  const n = document.getElementById("cookieNote");
+  if (!seen()) n.classList.add("show");
+  document.getElementById("cookieOk").onclick = () => { try { localStorage.setItem("saga-cookies", "1"); } catch {} n.classList.remove("show"); };
+})();
+</script>
+
+<script>
+(() => {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const sleep = ms => new Promise(r => setTimeout(r, reduce ? 0 : ms));
+  const $ = s => document.querySelector(s);
+
+  /* ---- hero typewriter ---- */
+  (async () => {
+    const el = $("#tw"), words = ["remembers", "hands off", "improves", "remembers"];
+    if (reduce) return;
+    el.innerHTML = 'remembers<span class="caret"></span>';
+    for (let i = 1; ; i = (i + 1) % words.length) {
+      await sleep(2600);
+      let t = el.textContent;
+      while (t.length) { t = t.slice(0, -1); el.innerHTML = t + '<span class="caret"></span>'; await sleep(55); }
+      for (const ch of words[i]) { t += ch; el.innerHTML = t + '<span class="caret"></span>'; await sleep(85); }
+    }
+  })();
+
+  /* ---- research: what each paper is, and what Saga takes from it ---- */
+  const PAPERS = [
+    ["ReAct", "Reasoning interleaved with actions — the loop every agent runs.", "2210.03629"],
+    ["Reflexion", "Agents learn from verbal feedback — Saga's per-agent lessons.", "2303.11366"],
+    ["Voyager", "A growing library of reusable skills.", "2305.16291"],
+    ["MemGPT", "LLMs managing their own tiered memory.", "2310.08560"],
+    ["Multi-Agent Collaboration", "Addressable agents with roles — here, @mentions.", "2306.03314"],
+    ["DSPy", "Prompts compiled and optimised like programs.", "2310.03714"],
+    ["GEPA", "Reflective prompt evolution from failed traces.", "2507.19457"],
+    ["Meta-Harness", "Optimising the harness around fixed model weights.", "2603.28052"],
+    ["Continual Harness", "Online adaptation of memory, skills and prompts.", "2605.09998"],
+    ["Recursive Language Models", "Context as a programmable resource.", "2512.24601"],
+  ];
+  const paper = ([t, d, id]) => `<a class="paper" href="https://arxiv.org/abs/${id}" target="_blank" rel="noopener" title="arXiv:${id}"><b>${t}</b><p>${d}</p></a>`;
+  const half = Math.ceil(PAPERS.length / 2);
+  const loop = list => list.map(paper).join("") + list.map(paper).join("");
+  $("#papersA").innerHTML = loop(PAPERS.slice(0, half));
+  $("#papersB").innerHTML = loop(PAPERS.slice(half));
+
+  /* ---- stacking cards ---- */
+  // The Walrus Memory mark (MystenLabs/MemWal, apps/app/public/walrus-memory-favicon.svg), drawn in the card's ink.
+  const WALRUS = `<svg class="logo" viewBox="0 0 16 16" aria-label="Walrus"><path fill="currentColor" d="M5.74039 11.4995L6.47757 3H9.52243L10.2593 11.4995L10.6735 11.5826C11.0695 10.6141 12.1627 7.20084 12.4354 3H16L13.2513 14H8.93784L8.21281 8.5H7.78734L7.06231 14H2.74872L0 3H3.56456C3.8373 7.20084 4.93032 10.6141 5.32647 11.5827L5.74039 11.4996V11.4995Z"/></svg>`;
+  const CARDS = [
+    {eb: "Memory · on Walrus", art: WALRUS, bg: "#ABD1C6", ink: "#23302C", title: "It knows you the second time.",
+     body: "Every message is distilled into facts stored as encrypted blobs on Walrus mainnet. Next week, on another machine, Saga already knows you write Rust and want terse answers — and so does every agent you mention."},
+    {eb: "Handoff", art: '<span class="art">@</span>', bg: "#242220", ink: "#F2EFE9", title: "Agents that pass the baton.",
+     body: "Split work with a mention. A shared blackboard means @codex reads what @claude built and why, instead of starting cold. Agents can hand off to each other on their own."},
+    {eb: "Checkpoints", art: '<span class="art">↺</span>', bg: "#E9E4DA", ink: "#312F2C", title: "Work you can restore anywhere.",
+     body: "Every file an agent changes is snapshotted to Walrus as it happens. Wipe the machine, open the chat, press restore — the workspace comes back from the network."},
+    {eb: "Self-improving", art: '<span class="art">∞</span>', bg: "#5B5449", ink: "#F6F2EA", title: "A harness that rewrites itself.",
+     body: "Ratings become per-agent lessons, good runs become skills, and critiques evolve the system prompt. The model's weights stay fixed; the harness around them keeps getting better."},
+  ];
+  const stack = $("#stack");
+  stack.innerHTML = CARDS.map((c, i) => `<div class="pin"><article class="card" style="background:${c.bg};color:${c.ink};top:${i * 24}px">
+      <span class="eb">${c.eb}</span>${c.art}
+      <div><h3>${c.title}</h3><p>${c.body}</p></div></article></div>`).join("");
+  const cards = [...stack.querySelectorAll(".card")];
+  // Card i shrinks only while later cards slide over it; the last card never scales, and each
+  // card's scale is a pure function of scroll so nothing jumps when the stack releases.
+  const onScroll = () => {
+    const pins = stack.querySelectorAll(".pin"), n = cards.length;
+    const first = pins[0].getBoundingClientRect().top, step = innerHeight;
+    const progress = Math.min(n - 1, Math.max(0, -first / step));  // 0 … n-1 cards covered
+    cards.forEach((c, i) => {
+      const covered = Math.min(n - 1 - i, Math.max(0, progress - i));
+      c.style.transform = `scale(${1 - covered * 0.045})`;
+      c.style.filter = covered > 0 ? `brightness(${1 - Math.min(covered, 1) * 0.06})` : "";
+    });
+  };
+  if (!reduce) { addEventListener("scroll", onScroll, {passive: true}); addEventListener("resize", onScroll); onScroll(); }
+
+  /* ---- FAQ: height-animated accordion, one answer open at a time ---- */
+  document.querySelectorAll(".faq details").forEach(d => {
+    const sum = d.querySelector("summary"), body = d.querySelector(".a");
+    sum.addEventListener("click", e => {
+      e.preventDefault();
+      if (d.dataset.busy) return;
+      const opening = !d.open;
+      if (opening) document.querySelectorAll(".faq details[open]").forEach(o => o !== d && o.querySelector("summary").click());
+      const from = d.offsetHeight;
+      d.dataset.busy = "1";
+      if (opening) d.open = true;
+      const to = opening ? sum.offsetHeight + body.offsetHeight : sum.offsetHeight;
+      if (reduce) { if (!opening) d.open = false; delete d.dataset.busy; return; }
+      body.animate([{opacity: opening ? 0 : 1, transform: `translateY(${opening ? -6 : 0}px)`}, {opacity: opening ? 1 : 0, transform: `translateY(${opening ? 0 : -6}px)`}], {duration: 260, easing: "ease"});
+      d.animate([{height: from + "px"}, {height: to + "px"}], {duration: 320, easing: "cubic-bezier(.2,.7,.2,1)"}).onfinish = () => {
+        if (!opening) d.open = false;
+        delete d.dataset.busy;
+      };
+    });
+  });
+
+// Monochrome line icons (Lucide-style, ISC); they take the surrounding text colour.
+  const ICON_PATHS = {
+    brain: '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>',
+    up: '<path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/>',
+    down: '<path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/>',
+    save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
+    note: '<path d="M12 20h9"/><path d="M16.376 3.622a1 1 0 0 1 3.002 3.002L7.368 18.635a2 2 0 0 1-.855.506l-2.872.838a.5.5 0 0 1-.62-.62l.838-2.872a2 2 0 0 1 .506-.854z"/>',
+    skill: '<rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3"/>',
+    wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+    evolve: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+    file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+    term: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+  };
+  const icon = (n, size = 14) => `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[n]}</svg>`;
+  document.querySelectorAll(".i-up").forEach(e => e.outerHTML = icon("up", 15));
+  document.querySelectorAll(".i-down").forEach(e => e.outerHTML = icon("down", 15));
+
+  /* ---- the white stage: a scripted conversation on loop ---- */
+  const thread = $("#thread"), typed = $("#typed"), send = $("#send"), ac = $("#ac");
+  const PH = `<span class="ph">${matchMedia("(max-width: 600px)").matches ? "Message Saga · @ to hand off" : "Message Saga — @ to hand off to an agent"}</span>`;
+  const colorize = s => s.replace(/@claude/g, '<span class="ag ag-claude">@claude</span>').replace(/@codex/g, '<span class="ag ag-codex">@codex</span>');
+  const add = html => { const d = document.createElement("div"); d.className = "m"; d.innerHTML = html; thread.appendChild(d); requestAnimationFrame(() => requestAnimationFrame(() => d.classList.add("in"))); return d; };
+  const AGENTS = [["claude", "Claude Code · primary"], ["codex", "OpenAI Codex CLI"], ["grok", "Grok Build CLI"]];
+  // Types `text` after `prefix`, popping the @-autocomplete while a handle is being written.
+  async function type(prefix, text) {
+    let out = prefix;
+    for (const ch of text) {
+      out += ch;
+      typed.innerHTML = colorize(out) + '<span class="cur"></span>';
+      const m = out.match(/@([a-z]*)$/);
+      if (m) showAc(m[1]); else hideAc();
+      await sleep(ch === " " ? 45 : 34 + Math.random() * 34);
+      if (m && AGENTS.some(([n]) => n === m[1])) await sleep(260);
+    }
+    hideAc();
+    return out;
+  }
+  function showAc(q) {
+    const hits = AGENTS.filter(([n]) => n.startsWith(q));
+    if (!hits.length || reduce) return hideAc();
+    ac.innerHTML = `<div>${hits.map(([n, d]) => `<div style="padding:4px 0"><span class="ag ag-${n}">@${n}</span><small>${d}</small></div>`).join("")}</div>`;
+    requestAnimationFrame(() => ac.firstChild && ac.firstChild.classList.add("in"));
+  }
+  function hideAc() { ac.innerHTML = ""; }
+  // One agent turn. `say` streams into the bubble; `meta` items appear after it, outside the bubble.
+  function agentTurn(agent, by) {
+    const el = add(`<div class="amsg ${agent}"><div class="a-head"><span class="ag ag-${agent}">@${agent}</span>${by ? `<span>handoff from <span class="ag ag-${by}">@${by}</span></span>` : ""}<span class="st"><i class="pulse"></i>working</span></div></div>`);
+    return el.firstChild;
+  }
+  async function bubble(turn, text, thinkMs) {
+    const b = document.createElement("div"); b.className = "a-bubble"; b.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+    turn.appendChild(b);
+    await sleep(thinkMs);
+    b.textContent = "";
+    let out = "";
+    for (const w of text.split(" ")) { out += (out ? " " : "") + w; b.innerHTML = colorize(out); await sleep(36); }
+    return b;
+  }
+  async function meta(turn, items) {
+    const row = document.createElement("div"); row.className = "a-meta"; turn.appendChild(row);
+    for (const html of items) {
+      const sp = document.createElement("span"); sp.innerHTML = html; row.appendChild(sp);
+      await sleep(40); sp.classList.add("in"); await sleep(360);
+    }
+  }
+  const done = (turn, s) => { const st = turn.querySelector(".st"); st.className = "st ok"; st.innerHTML = icon("check", 12) + s; };
+  const file = (name, n) => `${icon("file", 13)}<span class="f">${name}</span><span class="plus">+${n}</span>`;
+
+  async function scene() {
+    thread.innerHTML = ""; typed.innerHTML = PH;
+    await sleep(900);
+    const msg = await type("", "@claude build a landing page for my coffee cart, then ask codex to implement the backend");
+    typed.innerHTML = colorize(msg);
+    await sleep(450);
+    send.classList.add("hit"); await sleep(140); send.classList.remove("hit");
+    typed.innerHTML = PH;
+    add(`<div class="u-row"><div class="u-bubble">${colorize(msg)}</div></div>`);
+    await sleep(650);
+    add(`<div class="recall"><span>${icon("brain", 13)} you're Mira · Rust · likes terse answers</span><span>${icon("brain", 13)} the cart is called “Kopi Kilat”</span></div>`);
+    await sleep(700);
+
+    const c = agentTurn("claude");
+    await bubble(c, "Done — I've built the Kopi Kilat landing page: hero, menu grid and an order button. The menu loads from /api/menu.", 1500);
+    await meta(c, [file("index.html", 142), file("styles.css", 88), `${icon("save", 13)} checkpoint → Walrus <span class="blob">7f3a…c21</span>`]);
+    await sleep(500);
+    await bubble(c, "@codex your turn — implement GET /api/menu for the page, serving the items in menu.json.", 700);
+    done(c, "21s");
+    await sleep(900);
+
+    const x = agentTurn("codex", "claude");
+    await meta(x, [`${icon("note", 13)} read blackboard · @claude built index.html`]);
+    await bubble(x, "Done — I've implemented the menu API: server.py serves GET /api/menu from menu.json, matching the page's fetch.", 1600);
+    await meta(x, [file("server.py", 64), file("menu.json", 12), file("test_menu.py", 31), `${icon("term", 13)} pytest · 3 passed`, `${icon("brain", 13)} remembered: Mira sells coffee from a cart`]);
+    done(x, "34s");
+    await sleep(4200);
+    [...thread.children].forEach(n => n.classList.add("out"));
+    await sleep(800);
+  }
+  // Header follows the surface beneath it.
+  const hdr = document.querySelector("header.top"), stageEl = $("#demo");
+  const tint = () => { const r = stageEl.getBoundingClientRect(); hdr.classList.toggle("on-white", r.top <= 68 && r.bottom > 68); };
+  addEventListener("scroll", tint, {passive: true}); tint();
+
+  let running = false;
+  const io = new IntersectionObserver(async ([e]) => {
+    if (!e.isIntersecting || running) return;
+    running = true;
+    if (reduce) { await scene(); return; }
+    while (true) { await scene(); }
+  }, {threshold: .35});
+  io.observe($("#demo"));
+})();
+</script>
+</body>
+</html>

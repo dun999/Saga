@@ -1,0 +1,12 @@
+{
+  // "@name" handles users can mention. `primary` gets un-mentioned text; `brain` runs reflection/evolution.
+  // Users add their own OpenAI-compatible APIs from the UI ("+" in Agents), so they are not listed here.
+  "primary": "claude",
+  "brain": "claude-brain",
+  "agents": [
+    {"name": "claude", "kind": "claude-code", "description": "Claude Code: generalist, frontend, refactors, writing"},
+    {"name": "codex",  "kind": "codex", "model": "gpt-5.5", "description": "OpenAI Codex CLI: backend services, scripts, tests"},
+    {"name": "grok",   "kind": "grok-cli", "description": "Grok Build CLI: fast iteration, reviews, research"},
+    {"name": "claude-brain", "kind": "claude-code", "model": "sonnet", "description": "internal: reflection and prompt evolution"}
+  ]
+}

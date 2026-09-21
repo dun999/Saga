@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Saga — Privacy &amp; cookies</title>
+<meta name="description" content="What Saga stores, where, and how to delete it.">
+<style>
+:root { --charcoal: #312F2C; --mint: #ABD1C6; --bg: #F6F4EF; --panel: #ECE9E2; --ink: #312F2C; --muted: #6F6A61; --faint: #9C968C; --link: #3F7F6D; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #312F2C; --panel: #3A3835; --ink: #F2EFE9; --muted: #B3AEA5; --faint: #8A857C; --link: #ABD1C6; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: var(--link); }
+header { max-width: 820px; margin: 0 auto; padding: 22px 20px; display: flex; align-items: center; justify-content: space-between; }
+.wordmark { font-weight: 700; font-size: 19px; letter-spacing: -.03em; display: flex; align-items: center; gap: 9px; color: var(--ink); text-decoration: none; }
+.mark { width: 24px; height: 24px; border-radius: 7px; background: var(--charcoal); display: grid; place-items: center; }
+.mark i { width: 9px; height: 9px; border-radius: 50%; background: var(--mint); display: block; }
+main { max-width: 820px; margin: 0 auto; padding: 8px 20px 96px; }
+h1 { font-size: clamp(34px, 5vw, 52px); letter-spacing: -.04em; line-height: 1.05; margin: 28px 0 10px; }
+.updated { color: var(--faint); font-size: 14px; margin: 0 0 30px; }
+h2 { font-size: 22px; letter-spacing: -.02em; margin: 44px 0 10px; }
+p, li { color: var(--muted); }
+strong { color: var(--ink); font-weight: 600; }
+.summary { background: var(--panel); border-radius: 18px; padding: 20px 22px; }
+.summary p { margin: 0; color: var(--ink); }
+table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14.5px; }
+th { text-align: left; font-weight: 600; padding: 10px 12px; color: var(--ink); background: var(--panel); }
+th:first-child { border-radius: 10px 0 0 10px; } th:last-child { border-radius: 0 10px 10px 0; }
+td { padding: 12px; vertical-align: top; color: var(--muted); border-bottom: 1px solid color-mix(in srgb, var(--faint) 25%, transparent); }
+td code, p code, li code { font: 13px ui-monospace, "SF Mono", Menlo, monospace; background: var(--panel); padding: 1px 6px; border-radius: 5px; color: var(--ink); }
+ul { padding-left: 20px; }
+li { margin: 6px 0; }
+@media (max-width: 640px) { table, thead, tbody, tr, th, td { display: block; } thead { display: none; } tr { background: var(--panel); border-radius: 14px; padding: 6px 4px; margin-bottom: 10px; } td { border: 0; padding: 6px 12px; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="wordmark" href="/"><span class="mark"><i></i></span>Saga</a>
+  <a href="/app">Open Saga</a>
+</header>
+<main>
+  <h1>Privacy &amp; cookies</h1>
+  <p class="updated">Last updated: September 2026</p>
+
+  <div class="summary"><p><strong>In short:</strong> Saga uses only the cookies it needs to sign you in and unlock your vault — no analytics, no ads, no tracking. Your memory is stored encrypted on Walrus. Accounts you connect are encrypted with a key derived from your wallet that Saga never stores, and <strong>Disconnect deletes them</strong>.</p></div>
+
+  <h2>Who runs this</h2>
+  <p>Saga is open-source software built for the Walrus “Chatbots That Remember” hackathon. Each deployment is run by its operator — whoever hosts the server you are using. This page describes how the software handles data; the operator is responsible for the server it runs on.</p>
+
+  <h2>Cookies and local storage</h2>
+  <p>All of these are essential for the app to work, so they are set without a consent prompt. Nothing is shared with third parties or used to track you.</p>
+  <table>
+    <thead><tr><th>Name</th><th>What it does</th><th>Lifetime</th></tr></thead>
+    <tbody>
+      <tr><td><code>saga_session</code></td><td>Keeps you signed in. Contains your Sui address and an expiry, signed by the server. <em>HttpOnly</em> — page scripts can't read it.</td><td>14 days, or until you sign out</td></tr>
+      <tr><td><code>saga_vault</code></td><td>Your vault key: a hash of your wallet's signature over a fixed “Unlock your Saga vault” message. It is sent with your requests so the server can unlock <em>your</em> connected accounts for that request only; the server never writes it down.</td><td>14 days, or until you sign out</td></tr>
+      <tr><td><code>saga_access</code></td><td>Only on invite-only deployments: remembers that you entered the access code.</td><td>1 year</td></tr>
+      <tr><td><code>saga_uid</code></td><td>Only when sign-in is turned off (single-user local runs): an anonymous handle for your memory.</td><td>1 year</td></tr>
+      <tr><td>Local storage: <code>saga-theme</code>, <code>saga-side</code>, <code>saga-cookies</code></td><td>Your theme, whether the sidebar is open, and that you've seen the cookie notice. Stays in your browser.</td><td>Until you clear it</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What Saga stores, and where</h2>
+  <table>
+    <thead><tr><th>Data</th><th>Where</th><th>Protection</th></tr></thead>
+    <tbody>
+      <tr><td>Your Sui address</td><td>Your session cookie; used as the name of your memory namespaces</td><td>Public by nature; never linked to your name or email by Saga</td></tr>
+      <tr><td>Memory: facts about you, chat transcripts, file checkpoints, lessons</td><td>Walrus mainnet, through the Walrus Memory (MemWal) relayer</td><td>Encrypted with SEAL before it is stored. The relayer sees plaintext while it indexes and serves your recalls, and keeps a search index of your memories.</td></tr>
+      <tr><td>Connected accounts: Claude token or API key, your own API keys, ChatGPT/Codex and Grok sign-ins</td><td>The Saga server (a key file, and a private folder per user)</td><td>Encrypted with your vault key (XSalsa20-Poly1305). Without you signed in, they can't be read. They are never written to Walrus.</td></tr>
+      <tr><td>GitHub token, and clones of repos you pick</td><td>The Saga server: the token in the key file, clones in your chat workspace</td><td>The token is encrypted with your vault key and only handed to git for a single push or clone; clones are only visible to your own agents. Disconnect deletes the token.</td></tr>
+      <tr><td>Files agents create in your chats</td><td>The Saga server (your workspace) and, as checkpoints, Walrus</td><td>Your workspace is only visible to your own agents, inside a sandbox</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Your connected accounts</h2>
+  <ul>
+    <li><strong>Encrypted at rest.</strong> Tokens, API keys and provider sign-ins are sealed with your vault key. The server keeps only the ciphertext and a short fingerprint used to tell whether your browser holds the right key.</li>
+    <li><strong>Unlocked only for your requests.</strong> While one of your agents runs, Saga decrypts what it needs for that run, inside a sandbox that no other user's agents can see, then seals it again. During that window the server necessarily holds the plaintext in memory — so you are trusting the operator of this deployment while your agents run.</li>
+    <li><strong>Disconnect deletes.</strong> Disconnecting an agent removes its stored token, key or sign-in from the server. Signing out clears your session and vault cookies.</li>
+    <li><strong>Use a capped key if you prefer.</strong> An API key with a monthly spending limit bounds what any key can cost.</li>
+    <li><strong>Some wallets can't recreate the key.</strong> Wallets that sign with rotating keys (for example Google sign-in wallets) may produce a different vault key on a new device. Saga can't open what was sealed before, and asks you to reconnect.</li>
+  </ul>
+
+  <h2>Third parties</h2>
+  <p>Using Saga involves these services, each under its own terms and privacy policy:</p>
+  <ul>
+    <li><strong>Walrus Memory (MemWal) relayer and Walrus mainnet</strong> — stores and recalls your encrypted memory.</li>
+    <li><strong>Sui mainnet (GraphQL)</strong> — verifies wallet signatures that aren't checked locally.</li>
+    <li><strong>The AI providers you connect</strong> — Anthropic (Claude), OpenAI (Codex / ChatGPT), xAI (Grok) and any API you add receive the prompts your agents send, including relevant memories, under your own account.</li>
+    <li><strong>esm.sh</strong> — serves the open-source Wallet Standard library the sign-in page uses to find your wallet.</li>
+    <li><strong>Google Fonts</strong> — the landing page loads its typefaces from Google.</li>
+  </ul>
+
+  <h2>Deleting your data</h2>
+  <ul>
+    <li>Connected accounts: <strong>Agents → Disconnect</strong> deletes them from the server.</li>
+    <li>Session and vault key: <strong>Profile → Sign out</strong>, or clear this site's cookies.</li>
+    <li>Memory on Walrus: memories are stored as blobs on a decentralised network. Ask the operator to forget your namespaces in the relayer's index; blobs themselves expire with their Walrus storage period.</li>
+  </ul>
+
+  <h2>Changes</h2>
+  <p>If this page changes, the date at the top changes with it.</p>
+</main>
+</body>
+</html>
