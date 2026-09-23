@@ -24,16 +24,12 @@ FetchContent_Declare(httplib
   GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
   GIT_TAG v0.26.0
   GIT_SHALLOW TRUE)
-FetchContent_Declare(doctest
-  GIT_REPOSITORY https://github.com/doctest/doctest.git
-  GIT_TAG v2.4.12
-  GIT_SHALLOW TRUE)
 set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(json httplib doctest)
+FetchContent_MakeAvailable(json httplib)
 
 find_package(CURL REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -64,8 +60,16 @@ target_compile_options(saga_core PRIVATE -Wall -Wextra -Wno-missing-field-initia
 add_executable(saga src/main.cpp)
 target_link_libraries(saga PRIVATE saga_core)
 
-enable_testing()
+# Tests are local only (tests/ is not in the repo); built when the folder is present.
 file(GLOB SAGA_TEST_SOURCES CONFIGURE_DEPENDS tests/*.cpp)
-add_executable(saga_tests ${SAGA_TEST_SOURCES})
-target_link_libraries(saga_tests PRIVATE saga_core doctest::doctest)
-add_test(NAME saga_tests COMMAND saga_tests)
+if(SAGA_TEST_SOURCES)
+  FetchContent_Declare(doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG v2.4.12
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(doctest)
+  enable_testing()
+  add_executable(saga_tests ${SAGA_TEST_SOURCES})
+  target_link_libraries(saga_tests PRIVATE saga_core doctest::doctest)
+  add_test(NAME saga_tests COMMAND saga_tests)
+endif()

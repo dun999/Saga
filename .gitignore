@@ -5,3 +5,4 @@ ab_report.md
 compile_commands.json
 agent-homes/
 build-asan/
+tests/

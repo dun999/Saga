@@ -70,7 +70,6 @@ sudo dnf install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel
 sudo apt install cmake ninja-build g++ libcurl4-openssl-dev libsodium-dev pkg-config
 
 cmake -S . -B build -G Ninja && cmake --build build
-./build/saga_tests                 # crypto vectors match the official MemWal SDK byte-for-byte
 
 cp .env.example .env               # add your delegate key + account id from https://memory.walrus.xyz
 ./build/saga doctor                # health → whoami → remember → Walrus blob → recall
@@ -161,8 +160,6 @@ It was ported from the relayer source (`services/server/src/auth.rs`) and the Py
   The session key is encoded as a bech32 `suiprivkey`. It is cached until 30 s before expiry.
 * Writes go through `/api/remember/bulk` (≤20 per call) on a background thread, which polls job status
   until Walrus returns a blob id. The UI shows each blob live, linked to Walruscan.
-
-`tests/test_crypto.cpp` pins all of this to vectors generated with the official Python SDK.
 
 ## Layout
 
