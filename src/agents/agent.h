@@ -56,6 +56,7 @@ struct Spec {
   std::string owner;    // uid for a user's own API agent; empty = shared
   std::string api_key;  // operator-configured key (host mode); never serialised to memory
   std::string key_hint; // last 4 chars of a user's own key, for display
+  bool locked = false;  // model fixed by the operator and hidden from users
 };
 
 // Provider-side account state: sign-in and the provider's own usage windows (e.g. 5-hour, weekly).
@@ -71,7 +72,7 @@ class Agent {
   virtual ~Agent() = default;
   const Spec& spec() const { return spec_; }
   const std::string& name() const { return spec_.name; }
-  const std::string& model_for(const Task& t) const { return t.model.empty() ? spec_.model : t.model; }
+  const std::string& model_for(const Task& t) const { return t.model.empty() || spec_.locked ? spec_.model : t.model; }
   virtual bool can_edit_files() const { return true; }
   // Empty string when usable, else the reason it is not.
   virtual std::string unavailable_reason() const = 0;

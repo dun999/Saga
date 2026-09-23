@@ -484,6 +484,7 @@ Spec spec_from_json(const json& j) {
   s.permission_mode = j.value("permission_mode", s.permission_mode);
   s.extra_args = j.value("extra_args", std::vector<std::string>{});
   s.owner = j.value("owner", "");
+  s.locked = j.value("locked", false);
   return s;
 }
 

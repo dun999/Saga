@@ -12,7 +12,7 @@
 <style>
 :root {
   --charcoal: #312F2C; --mint: #ABD1C6;
-  --canvas: #F6F4EF; --white: #FFFFFF; --panel: #ECE9E2; --panel-2: #E3DFD6;
+  --canvas: #F6F4EF; --white: #FFFFFF; --panel: #ECE9E2; --panel-2: #E3DFD6; --surface: #FFFFFF;
   --ink: #312F2C; --muted: #6F6A61; --faint: #9C968C;
   --mint-deep: #3F7F6D;
   --claude: #C8612F; --codex: #23875F; --grok: #6E58E0;
@@ -24,13 +24,13 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --canvas: #312F2C; --panel: #3A3835; --panel-2: #45423E;
+    --canvas: #312F2C; --panel: #3A3835; --panel-2: #45423E; --surface: #3A3835;
     --ink: #F2EFE9; --muted: #B3AEA5; --faint: #8A857C; --mint-deep: #ABD1C6;
     --claude: #F0925F; --codex: #5FD3A0; --grok: #B3A4FF;
   }
 }
 :root[data-theme="dark"] {
-  --canvas: #312F2C; --panel: #3A3835; --panel-2: #45423E;
+  --canvas: #312F2C; --panel: #3A3835; --panel-2: #45423E; --surface: #3A3835;
   --ink: #F2EFE9; --muted: #B3AEA5; --faint: #8A857C; --mint-deep: #ABD1C6;
   --claude: #F0925F; --codex: #5FD3A0; --grok: #B3A4FF;
 }
@@ -63,7 +63,11 @@ header.top { position: sticky; top: 0; z-index: 30; backdrop-filter: saturate(1.
 header.top.on-white { background: rgba(255,255,255,.86); color: #312F2C; }
 header.top.on-white nav.links { color: #6F6A61; }
 header.top .col { display: flex; align-items: center; justify-content: space-between; height: 68px; }
-.wordmark { font-weight: 700; font-size: 20px; letter-spacing: -.03em; display: flex; align-items: center; gap: 9px; }
+.wordmark { display: flex; align-items: center; color: var(--ink); }
+/* The Saga wordmark: a transparent image used as a mask, so it takes the colour of the text around it. */
+.logo-mark { display: inline-block; flex: none; aspect-ratio: 1363 / 340; height: 24px; background: currentColor;
+  -webkit-mask: url(/saga-logo.png) center / contain no-repeat; mask: url(/saga-logo.png) center / contain no-repeat; }
+
 .mark { width: 26px; height: 26px; border-radius: 8px; background: var(--charcoal); display: grid; place-items: center; }
 .mark i { width: 10px; height: 10px; border-radius: 50%; background: var(--mint); display: block; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mark { background: var(--mint); } :root:not([data-theme="light"]) .mark i { background: var(--charcoal); } }
@@ -114,16 +118,25 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 .u-row { display: flex; justify-content: flex-end; }
 .u-bubble { background: #312F2C; color: #F6F2EA; padding: 12px 18px; border-radius: 22px 22px 6px 22px; font-size: 15.5px; max-width: 86%; }
 .u-bubble .ag-claude { color: #F4A67C; } .u-bubble .ag-codex { color: #7FDDB3; }
-.recall { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12.5px; }
-.recall span { display: inline-flex; align-items: center; gap: 6px; background: rgba(171,209,198,.3); color: #2E5F52; padding: 4px 12px; border-radius: 99px; }
 .ico { flex: none; }
 /* An agent turn: name line, the answer in a bubble, then what it did — outside the bubble. */
 .amsg { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.a-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: #8A857C; padding-left: 2px; }
-.a-head .st { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #A39E94; }
+.a-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: #5B5650; padding-left: 2px; }
+.a-head .st { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #6F6A61; transition: color .4s; }
 .a-head .st.ok { color: #3F7F6D; }
-.a-bubble { font-size: 15px; line-height: 1.55; padding: 11px 16px; border-radius: 6px 20px 20px 20px; max-width: 88%; background: #F4F2EE; min-height: 44px; }
-.amsg.claude .a-bubble { background: #FBF1EA; } .amsg.codex .a-bubble { background: #EAF5EF; }
+.a-bubble { font-size: 15px; line-height: 1.55; padding: 11px 16px; border-radius: 6px 20px 20px 20px; max-width: 88%; background: #EFEBE3; min-height: 44px; }
+/* Solid agent colours, white text: the bubble says who is talking at a glance. */
+.amsg.claude .a-bubble { background: #C8612F; color: #FFFFFF; } .amsg.codex .a-bubble { background: #23875F; color: #FFFFFF; }
+.amsg .a-bubble { font-weight: 500; }
+.amsg .a-bubble > div + div { margin-top: 3px; }
+/* A mention inside a bubble is just coloured text: a light green that stays readable on orange. */
+.amsg .a-bubble .ag { font-weight: 600; } .amsg .a-bubble .ag-codex { color: #B6F5D6; }
+.a-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #6F6A61; padding-left: 4px; opacity: 0; transform: translateY(4px); transition: opacity .35s, transform .35s; }
+.a-note.in { opacity: 1; transform: none; }
+.a-note code { font: 500 12.5px ui-monospace, "SF Mono", Menlo, monospace; color: #3F7F6D; }
+.amsg .a-bubble code { font: 500 13.5px ui-monospace, "SF Mono", Menlo, monospace; background: rgba(0,0,0,.16); padding: 1px 6px; border-radius: 6px; }
+.amsg .a-bubble .dots i { background: rgba(255,255,255,.85); }
+.amsg .a-bubble .wcaret { background: #FFFFFF; }
 .a-bubble + .a-bubble { border-radius: 20px; }
 .a-bubble { transform-origin: 0 0; animation: bpop .4s cubic-bezier(.34,1.36,.64,1) backwards; }
 .u-bubble { transform-origin: 100% 100%; animation: bpop .4s cubic-bezier(.34,1.36,.64,1) backwards; }
@@ -133,14 +146,6 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 .dots i { width: 6px; height: 6px; border-radius: 50%; background: #A39E94; animation: bob 1.1s ease-in-out infinite; }
 .dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
 @keyframes bob { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
-.a-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: 12.5px; color: #8A857C; padding-left: 4px; }
-.a-meta > span { display: inline-flex; align-items: center; gap: 6px; opacity: 0; transform: translateY(4px); transition: opacity .35s, transform .35s; }
-.a-meta > span.in { opacity: 1; transform: none; }
-.a-meta .f { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #6F6A61; }
-.a-meta .plus { color: #3F7F6D; font-family: ui-monospace, monospace; }
-.a-meta .blob { color: #3F7F6D; font-family: ui-monospace, monospace; font-weight: 600; }
-.pulse { width: 7px; height: 7px; border-radius: 50%; background: #ABD1C6; animation: pulse 1s ease-in-out infinite; }
-@keyframes pulse { 50% { opacity: .25; transform: scale(.7); } }
 .composer { max-width: 720px; width: calc(100% - 40px); margin: 14px auto 0; background: #FFFFFF; border-radius: 26px; box-shadow: 0 18px 50px rgba(49,47,44,.10), 0 2px 8px rgba(49,47,44,.06); display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 22px; }
 .composer .typed { flex: 1; font-size: 16px; min-height: 26px; color: #312F2C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .composer .typed .ph { color: #A39E94; }
@@ -157,6 +162,8 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 .cookie-note.show { display: block; animation: cn-in .3s ease both; }
 @keyframes cn-in { from { opacity: 0; transform: translateY(8px); } }
 .cookie-note a { color: inherit; font-weight: 600; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cookie-note button { background: #ABD1C6; color: #312F2C; } }
+:root[data-theme="dark"] .cookie-note button { background: #ABD1C6; color: #312F2C; }
 .cookie-note button { margin-top: 10px; border: 0; border-radius: 99px; padding: 6px 14px; background: #312F2C; color: #ABD1C6; font: inherit; font-weight: 600; cursor: pointer; }
 
 /* research marquee: every card is a link to the paper */
@@ -179,6 +186,36 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 .head { padding-top: 64px; }
 .head h2 { font-size: clamp(28px, 3.6vw, 44px); letter-spacing: -.035em; line-height: 1.05; font-weight: 600; margin: 0; max-width: 22ch; }
 .head p { color: var(--muted); max-width: 56ch; margin: 14px 0 0; font-size: 17px; }
+/* ============ full-width night band: Saga carries the work over to Claude ============ */
+.night { position: relative; overflow: hidden; isolation: isolate; color: #EEF0F8; text-align: center; padding: 64px 0 0;
+  background: radial-gradient(90% 70% at 82% 0%, #2A3170 0%, transparent 60%), linear-gradient(180deg, #0C1030 0%, #151B45 62%, #1E2556 100%); }
+.night > :not(.sky) { position: relative; z-index: 1; }
+.night .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #9AA3D1; }
+.night h2 { font-size: clamp(28px, 3.6vw, 46px); letter-spacing: -.035em; line-height: 1.08; font-weight: 600; margin: 12px auto 0; max-width: 22ch; padding: 0 20px; }
+.night p { color: #AEB6E0; max-width: 52ch; margin: 14px auto 0; font-size: 17px; padding: 0 20px; }
+/* The scene's floor sits 14 stage-px above its bottom edge; pull the ground up to meet it at any width. */
+.night .carry-scene { width: min(640px, calc(100% - 40px)); margin: 0 auto max(-14px, -2.2%); z-index: 2; }
+/* Ground: moonlit pixel grass on top, dark soil with a few pebbles below, across the full width. */
+.land { height: 44px; background: linear-gradient(180deg, #3F7F6E 0 3px, #2D5A50 3px 12px, #22433F 12px 22px, #16213A 22px 100%); }
+.land::before { content: ""; position: absolute; left: 0; right: 0; top: -6px; height: 6px;
+  background: repeating-linear-gradient(90deg, transparent 0 18px, #2D5A50 18px 24px, transparent 24px 52px, #2D5A50 52px 56px, transparent 56px 86px, #3F7F6E 86px 92px, transparent 92px 120px); }
+/* Pebbles: one small square per tile, three tile widths so they never line up into stripes. */
+.land::after { content: ""; position: absolute; left: 0; right: 0; top: 26px; bottom: 0;
+  background:
+    linear-gradient(90deg, transparent 0 34px, #26355A 34px 40px, transparent 40px) 0 2px / 170px 4px repeat-x,
+    linear-gradient(90deg, transparent 0 90px, #202D4B 90px 98px, transparent 98px) 0 10px / 230px 3px repeat-x; }
+.sky { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.star { position: absolute; width: var(--s); height: var(--s); border-radius: 50%; background: #FFF8E7; opacity: .75; animation: twinkle var(--d) ease-in-out var(--delay) infinite; }
+@keyframes twinkle { 0%, 100% { opacity: .85; transform: none; } 50% { opacity: .2; transform: scale(.6); } }
+/* A crescent: the lit disc with a circle cut out of it, so the real sky shows through; the glow follows the shape. */
+.moon { position: absolute; top: 15%; right: 10%; width: 64px; height: 64px; filter: drop-shadow(0 0 14px rgba(247,235,200,.45)) drop-shadow(0 0 44px rgba(247,235,200,.18)); }
+.moon::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: #F7EBC8;
+  -webkit-mask: radial-gradient(44% 44% at 74% 30%, transparent 97%, #000 100%); mask: radial-gradient(44% 44% at 74% 30%, transparent 97%, #000 100%); }
+.cloud { position: absolute; left: 0; height: var(--h); width: var(--w); border-radius: 999px; background: rgba(206,214,255,.08); filter: blur(9px); animation: drift var(--t) linear var(--delay) infinite; }
+.cloud::before, .cloud::after { content: ""; position: absolute; border-radius: 50%; background: inherit; }
+.cloud::before { width: 55%; height: 170%; left: 14%; bottom: 20%; } .cloud::after { width: 38%; height: 130%; left: 52%; bottom: 25%; }
+@keyframes drift { from { transform: translateX(-100%); } to { transform: translateX(100vw); } }
+@media (max-width: 600px) { .night { padding-top: 48px; } .moon { width: 40px; height: 40px; top: 7%; right: 7%; } .land { height: 32px; } }
 
 /* stacking cards */
 .stack { position: relative; margin-top: 8px; }
@@ -229,8 +266,8 @@ footer { margin-top: clamp(140px, 20vh, 240px) !important; }
 
 /* footer */
 footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow: hidden; }
-.giant { text-align: center; font-size: 24vw; line-height: .78; letter-spacing: -.06em; font-weight: 700; margin: 0; user-select: none;
-  background: linear-gradient(to bottom, var(--muted), var(--faint)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.giant { display: flex; justify-content: center; margin: 0; user-select: none; }
+.giant .logo-mark { height: auto; width: min(92vw, 1500px); background: linear-gradient(to bottom, var(--muted), var(--faint)); }
 .lid { position: relative; margin-top: -7vw; border-radius: 17vw 17vw 0 0; background: var(--canvas); padding: 11vw 20px 48px; text-align: center; }
 .lid nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 28px; font-weight: 500; font-size: 15px; }
 .lid nav a:hover { color: var(--mint-deep); }
@@ -247,15 +284,15 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .track, .hero-orb, .tw .caret, .pulse, .rise, h1 .ln > span, .a-bubble, .u-bubble { animation: none; }
-  .m, .a-meta > span { transition: none; } .dots i { animation: none; }
+  .track, .hero-orb, .tw .caret, .star, .cloud, .rise, h1 .ln > span, .a-bubble, .u-bubble { animation: none; }
+  .m, .a-note { transition: none; } .dots i { animation: none; }
 }
 </style>
 </head>
 <body>
 <header class="top">
   <div class="col">
-    <a class="wordmark" href="/"><span class="mark"><i></i></span>Saga</a>
+    <a class="wordmark" href="/" aria-label="Saga home"><span class="logo-mark"></span></a>
     <nav class="links">
       <a href="#demo">How it works</a>
       <a href="#memory">Memory</a>
@@ -290,6 +327,15 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
       <div class="typed" id="typed"><span class="ph">Message Saga — @ to hand off to an agent</span></div>
       <div class="send" id="send"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></div>
     </div>
+  </section>
+
+  <section class="night" aria-label="Saga carries a parcel over to Claude">
+    <div class="sky" id="sky" aria-hidden="true"><div class="moon"></div></div>
+    <div class="eyebrow">Saga does the carrying</div>
+    <h2>You talk to Saga. Saga walks the work over.</h2>
+    <p>When a job needs Claude, Saga brings it along with your memories, the files and what was already tried.</p>
+    <div class="carry-scene" id="carry"></div>
+    <div class="land" aria-hidden="true"></div>
   </section>
 
   <section class="col head" id="memory" style="padding-top:96px">
@@ -331,7 +377,7 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
 </main>
 
 <footer>
-  <h2 class="giant" aria-hidden="true">Saga</h2>
+  <div class="giant" aria-hidden="true"><span class="logo-mark"></span></div>
   <div class="lid">
     <nav>
       <a href="/app">Open Saga</a>
@@ -348,6 +394,8 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
   Saga uses only essential cookies — to keep you signed in and unlock your vault. No analytics, no ads. <a href="/privacy">Privacy &amp; cookies</a>
   <div><button id="cookieOk">Got it</button></div>
 </div>
+<script src="/mascot.js"></script>
+<script>window.SagaMascot && SagaMascot.mount(document.getElementById("carry"), {loop: true});</script>
 <script>
 (() => {
   const seen = () => { try { return localStorage.getItem("saga-cookies") === "1"; } catch { return false; } };
@@ -490,7 +538,18 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
   const cue = $(".scroll-cue");
   addEventListener("scroll", () => cue.classList.toggle("gone", scrollY > 40), {passive: true});
 
-  /* ---- the white stage: a scripted conversation on loop ---- */
+  /* ---- the night sky behind Saga and Claude: stars that twinkle, a few clouds drifting past ---- */
+  {
+    const sky = $("#sky"), rnd = (a, b) => a + Math.random() * (b - a);
+    let html = "";
+    for (let i = 0; i < 80; i++)
+      html += `<i class="star" style="left:${rnd(0, 100)}%;top:${rnd(0, 62)}%;--s:${rnd(1, 2.6).toFixed(1)}px;--d:${rnd(2.4, 5.5).toFixed(1)}s;--delay:-${rnd(0, 5).toFixed(1)}s"></i>`;
+    [[12, 220, 40, 90], [40, 300, 50, 120], [26, 160, 32, 70]].forEach(([top, w, h, t], i) =>
+      html += `<div class="cloud" style="top:${top}%;--w:${w}px;--h:${h}px;--t:${t}s;--delay:-${(t * (0.2 + i * 0.3)).toFixed(0)}s"></div>`);
+    sky.insertAdjacentHTML("beforeend", html);
+  }
+
+  /* ---- the chat stage: a scripted conversation on loop ---- */
   const thread = $("#thread"), typed = $("#typed"), send = $("#send"), ac = $("#ac");
   const PH = `<span class="ph">${matchMedia("(max-width: 600px)").matches ? "Message Saga · @ to hand off" : "Message Saga — @ to hand off to an agent"}</span>`;
   const colorize = s => s.replace(/@claude/g, '<span class="ag ag-claude">@claude</span>').replace(/@codex/g, '<span class="ag ag-codex">@codex</span>');
@@ -519,28 +578,32 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
   function hideAc() { ac.innerHTML = ""; }
   // One agent turn. `say` streams into the bubble; `meta` items appear after it, outside the bubble.
   function agentTurn(agent, by) {
-    const el = add(`<div class="amsg ${agent}"><div class="a-head"><span class="ag ag-${agent}">@${agent}</span>${by ? `<span>handoff from <span class="ag ag-${by}">@${by}</span></span>` : ""}<span class="st"><i class="pulse"></i>working</span></div></div>`);
+    const el = add(`<div class="amsg ${agent}"><div class="a-head"><span class="ag ag-${agent}">@${agent}</span>${by ? `<span>from <span class="ag ag-${by}">@${by}</span></span>` : ""}<span class="st">working</span></div></div>`);
     return el.firstChild;
   }
-  async function bubble(turn, text, thinkMs) {
+  // One bubble per agent: a few short lines, each typed out, then shown with its formatting
+  // (file names and the blob id in code style).
+  async function bubble(turn, lines, thinkMs) {
     const b = document.createElement("div"); b.className = "a-bubble"; b.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
     turn.appendChild(b);
     await sleep(thinkMs);
-    b.textContent = "";
-    let out = "";
-    for (const w of text.split(" ")) { out += (out ? " " : "") + w; b.innerHTML = colorize(out) + '<span class="wcaret"></span>'; await sleep(36); }
-    b.innerHTML = colorize(out);
+    b.innerHTML = "";
+    for (const {text, html} of lines) {
+      const el = document.createElement("div"); b.appendChild(el);
+      let out = "";
+      for (const w of text.split(" ")) { out += (out ? " " : "") + w; el.innerHTML = colorize(out) + '<span class="wcaret"></span>'; await sleep(34); }
+      el.innerHTML = html || colorize(out);
+      await sleep(90);
+    }
     return b;
   }
-  async function meta(turn, items) {
-    const row = document.createElement("div"); row.className = "a-meta"; turn.appendChild(row);
-    for (const html of items) {
-      const sp = document.createElement("span"); sp.innerHTML = html; row.appendChild(sp);
-      await sleep(40); sp.classList.add("in"); await sleep(360);
-    }
+  // Where the work went: one line under the bubble.
+  async function saved(turn, blob) {
+    const n = document.createElement("div"); n.className = "a-note";
+    n.innerHTML = `${icon("save", 13)} Saved to Walrus · blob <code>${blob}</code>`;
+    turn.appendChild(n); await sleep(40); n.classList.add("in"); await sleep(300);
   }
   const done = (turn, s) => { const st = turn.querySelector(".st"); st.className = "st ok"; st.innerHTML = icon("check", 12) + s; };
-  const file = (name, n) => `${icon("file", 13)}<span class="f">${name}</span><span class="plus">+${n}</span>`;
 
   async function scene() {
     thread.innerHTML = ""; typed.innerHTML = PH;
@@ -552,21 +615,21 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
     typed.innerHTML = PH;
     add(`<div class="u-row"><div class="u-bubble">${colorize(msg)}</div></div>`);
     await sleep(650);
-    add(`<div class="recall"><span>${icon("brain", 13)} you're Mira · Rust · likes terse answers</span><span>${icon("brain", 13)} the cart is called “Kopi Kilat”</span></div>`);
-    await sleep(700);
-
     const c = agentTurn("claude");
-    await bubble(c, "Done — I've built the Kopi Kilat landing page: hero, menu grid and an order button. The menu loads from /api/menu.", 1500);
-    await meta(c, [file("index.html", 142), file("styles.css", 88), `${icon("save", 13)} checkpoint → Walrus <span class="blob">7f3a…c21</span>`]);
-    await sleep(500);
-    await bubble(c, "@codex your turn — implement GET /api/menu for the page, serving the items in menu.json.", 700);
+    await bubble(c, [
+      {text: "Landing page is up, I've edited landing.tsx with 142 lines changed. @codex, can you serve /api/menu?",
+       html: `Landing page is up, I've edited <code>landing.tsx</code> with 142 lines changed. ${colorize("@codex")}, can you serve <code>/api/menu</code>?`},
+    ], 1300);
+    await saved(c, "n6Mv…F1c");
     done(c, "21s");
-    await sleep(900);
+    await sleep(800);
 
     const x = agentTurn("codex", "claude");
-    await meta(x, [`${icon("note", 13)} read blackboard · @claude built index.html`]);
-    await bubble(x, "Done — I've implemented the menu API: server.py serves GET /api/menu from menu.json, matching the page's fetch.", 1600);
-    await meta(x, [file("server.py", 64), file("menu.json", 12), file("test_menu.py", 31), `${icon("term", 13)} pytest · 3 passed`, `${icon("brain", 13)} remembered: Mira sells coffee from a cart`]);
+    await bubble(x, [
+      {text: "Menu API is up, I've edited server.py with 64 lines changed and all 3 tests pass.",
+       html: "Menu API is up, I've edited <code>server.py</code> with 64 lines changed and all 3 tests pass."},
+    ], 1400);
+    await saved(x, "I8iB…IVU");
     done(x, "34s");
     await sleep(4200);
     [...thread.children].forEach(n => n.classList.add("out"));

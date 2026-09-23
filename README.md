@@ -98,6 +98,7 @@ every user connects their *own* providers in **Agents**, and nothing runs on the
 
 | Agent | How a user connects |
 |---|---|
+| `@saga` | nothing to connect: the default agent, DeepSeek V4 Flash on [Boundless](https://inference.boundless.network), on the operator's `BOUNDLESS_API_KEY` |
 | `@claude` | paste a token from `claude setup-token` (Claude subscription) or an Anthropic API key |
 | `@codex` | **Sign in with ChatGPT** (device code, shown in the browser) or an OpenAI API key |
 | `@grok` | **Sign in with Grok** (device code) |
@@ -136,7 +137,7 @@ Agents are configured in `saga.json`:
 
 | kind | backend | notes |
 |---|---|---|
-| `claude-code` | `claude -p --output-format stream-json` | default primary; also the default *brain* (`--tools ""`) |
+| `claude-code` | `claude -p --output-format stream-json` | the default *brain* (`--tools ""`) |
 | `codex` | `codex exec --json -s workspace-write` | set `model` to one your plan allows |
 | `grok-cli` | `grok -p --output-format streaming-messages-json` | |
 | `openai` | `POST {base_url}/chat/completions` (streaming) | xAI, OpenRouter, Groq, Together, **Ollama / llama.cpp** |

@@ -18,6 +18,7 @@ namespace saga::memwal {
 
 struct WriteRecord {
   std::string ns, kind, text, job_id, blob_id, status = "queued", error;
+  std::string ref;         // what this write belongs to, for the UI ("<turn>" or "<turn>:<step>")
   int64_t ts = 0;
   int attempts = 0;        // transient relayer failures are retried with backoff
   int64_t retry_at = 0;    // unix seconds; 0 = now
@@ -40,7 +41,7 @@ class Store {
   Client* client() const { return client_; }
 
   // Queue a memory. Returns immediately; listener fires on status changes.
-  void put(const std::string& ns, const std::string& kind, const std::string& text);
+  void put(const std::string& ns, const std::string& kind, const std::string& text, const std::string& ref = "");
   // Server-side fact extraction (relayer LLM), one memory per extracted fact.
   void analyze(const std::string& ns, const std::string& text);
   // Semantic recall; errors are logged and yield an empty result so a relayer hiccup

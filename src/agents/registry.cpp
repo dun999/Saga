@@ -88,7 +88,8 @@ json Registry::roster(const std::string& uid) const {
     if (is_internal(a)) continue;
     arr.push_back({{"name", a->name()},
                    {"kind", a->spec().kind},
-                   {"model", a->spec().model},
+                   {"model", a->spec().locked ? "" : a->spec().model},
+                   {"locked", a->spec().locked},
                    {"description", a->spec().description},
                    {"edits_files", a->can_edit_files()},
                    {"primary", a->name() == primary_},

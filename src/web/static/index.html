@@ -18,29 +18,29 @@
   --ok: #3F7F6D; --bad: #B4513B; --warn: #9A6A12;
   --shadow: 0 10px 30px rgba(49,47,44,.10), 0 2px 6px rgba(49,47,44,.06);
   --code: #EFECE5;
-  --a-claude: #C8612F; --a-codex: #23875F; --a-grok: #6E58E0; --a-xai: #2F6FC4; --a-qwen: #A87A12; --a-other: #8A5BB5;
+  --a-saga: #2B8A86; --a-claude: #C8612F; --a-codex: #23875F; --a-grok: #6E58E0; --a-xai: #2F6FC4; --a-qwen: #A87A12; --a-other: #8A5BB5;
   --line: rgba(49,47,44,.08);
   --ease-out: cubic-bezier(.2,.7,.2,1); --ease-pop: cubic-bezier(.34,1.36,.64,1);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #312F2C; --side: #2A2826; --surface: #3A3835; --surface-2: #45423E; --hover: rgba(255,255,255,.05);
+    --bg: #312F2C; --side: #2A2826; --surface: #3A3835; --surface-2: #45423E; --bar-shadow: 0 18px 50px rgba(0,0,0,.34), 0 2px 8px rgba(0,0,0,.22); --hover: rgba(255,255,255,.05);
     --ink: #F2EFE9; --muted: #ABA69D; --faint: #7E7A72;
     --accent-text: var(--mint); --send: var(--mint); --send-ink: var(--charcoal);
     --ok: #ABD1C6; --bad: #F08F79; --warn: #E3B563;
     --shadow: 0 12px 34px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.25);
     --code: #2A2826; --line: rgba(255,255,255,.07);
-    --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #B3A4FF; --a-xai: #86B7FF; --a-qwen: #E9C46A; --a-other: #D2A8F0;
+    --a-saga: #6CCFC8; --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #B3A4FF; --a-xai: #86B7FF; --a-qwen: #E9C46A; --a-other: #D2A8F0;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #312F2C; --side: #2A2826; --surface: #3A3835; --surface-2: #45423E; --hover: rgba(255,255,255,.05);
+  --bg: #312F2C; --side: #2A2826; --surface: #3A3835; --surface-2: #45423E; --bar-shadow: 0 18px 50px rgba(0,0,0,.34), 0 2px 8px rgba(0,0,0,.22); --hover: rgba(255,255,255,.05);
   --ink: #F2EFE9; --muted: #ABA69D; --faint: #7E7A72;
   --accent-text: var(--mint); --send: var(--mint); --send-ink: var(--charcoal);
   --ok: #ABD1C6; --bad: #F08F79; --warn: #E3B563;
   --shadow: 0 12px 34px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.25);
   --code: #2A2826; --line: rgba(255,255,255,.07);
-  --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #B3A4FF; --a-xai: #86B7FF; --a-qwen: #E9C46A; --a-other: #D2A8F0;
+  --a-saga: #6CCFC8; --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #B3A4FF; --a-xai: #86B7FF; --a-qwen: #E9C46A; --a-other: #D2A8F0;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -51,7 +51,7 @@ a { color: var(--accent-text); }
 
 /* agent names: colored text, no frames */
 .ag { font-weight: 600; color: var(--a-other); }
-.ag-claude { color: var(--a-claude); } .ag-codex { color: var(--a-codex); } .ag-grok { color: var(--a-grok); }
+.ag-saga { color: var(--a-saga); } .ag-claude { color: var(--a-claude); } .ag-codex { color: var(--a-codex); } .ag-grok { color: var(--a-grok); }
 .ag-xai { color: var(--a-xai); } .ag-qwen { color: var(--a-qwen); }
 
 /* ---------- layout ---------- */
@@ -61,8 +61,13 @@ aside { width: 300px; flex: none; background: var(--side); display: flex; flex-d
 main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 
 .side-top { display: flex; align-items: center; gap: 6px; padding: 14px 12px 6px 16px; }
-.brand { font-weight: 700; font-size: 18px; letter-spacing: -.02em; flex: 1; }
-.brand small { font-weight: 500; font-size: 12px; color: var(--muted); margin-left: 6px; letter-spacing: 0; }
+.brand { flex: 1; display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; min-width: 0; }
+.brand .logo-mark { height: 20px; }
+.brand small { font-weight: 500; font-size: 12px; color: var(--muted); white-space: nowrap; }
+/* The Saga wordmark: a transparent image used as a mask, so it takes the colour of the text around it. */
+.logo-mark { display: inline-block; flex: none; aspect-ratio: 1363 / 340; height: 24px; background: currentColor;
+  -webkit-mask: url(/saga-logo.png) center / contain no-repeat; mask: url(/saga-logo.png) center / contain no-repeat; }
+
 .icon-btn { width: 34px; height: 34px; border-radius: 10px; border: 0; background: transparent; cursor: pointer; display: grid; place-items: center; color: var(--muted); }
 .icon-btn:hover { background: var(--hover); color: var(--ink); }
 .new-chat { margin: 6px 12px 8px; padding: 9px 12px; border: 0; border-radius: 12px; background: var(--surface); cursor: pointer; text-align: left; display: flex; gap: 8px; align-items: center; font-weight: 500; }
@@ -89,6 +94,7 @@ ul.rules { margin: 6px 0 2px; padding-left: 16px; font-size: 12.5px; color: var(
 ul.rules li { margin: 2px 0; }
 ul.rules li span { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
 ul.rules li.muted { text-decoration: line-through; color: var(--faint); }
+.msg .carry { width: min(280px, 72%); margin: 2px 0 6px; overflow: hidden; }
 details.prompt summary { cursor: pointer; font-size: 11px; color: var(--faint); list-style: none; }
 details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 
@@ -122,33 +128,50 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 .msg { margin: 0 0 22px; }
 .user-msg { display: flex; justify-content: flex-end; }
 .bubble { background: var(--surface); padding: 10px 15px; border-radius: 18px 18px 6px 18px; max-width: 82%; white-space: pre-wrap; overflow-wrap: anywhere; }
-.recall { font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
-.recall summary { cursor: pointer; list-style: none; display: inline-flex; gap: 6px; align-items: center; padding: 3px 10px; border-radius: 99px; background: var(--surface); }
+/* One quiet line for what Saga recalled; the memories themselves are one click away. */
+.recall { font-size: 12.5px; color: var(--faint); margin: -12px 0 12px; text-align: right; }
+.recall summary { cursor: pointer; list-style: none; display: inline-flex; gap: 6px; align-items: center; }
 .recall summary::-webkit-details-marker { display: none; }
-.recall ul { margin: 8px 0 0; padding-left: 18px; }
+.recall summary:hover { color: var(--muted); }
+.recall ul { margin: 8px 0 0; padding: 10px 12px 10px 28px; text-align: left; background: var(--surface); border-radius: 12px; color: var(--muted); }
 .recall li { margin: 3px 0; }
-.lane { margin: 4px 0 16px; --agent: var(--a-other); }
-.lane.a-claude { --agent: var(--a-claude); } .lane.a-codex { --agent: var(--a-codex); } .lane.a-grok { --agent: var(--a-grok); }
-.lane.a-xai { --agent: var(--a-xai); } .lane.a-qwen { --agent: var(--a-qwen); }
-.lane-h { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin-bottom: 6px; }
-.lane-h .from { flex: none; display: inline-flex; gap: 6px; color: var(--faint); }
-.lane-h .instr { color: var(--muted); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lane-h .status { margin-left: auto; flex: none; font-size: 12px; color: var(--faint); }
+/* An agent turn is three things: name line, one solid bubble with the answer, one quiet line under it.
+   Bubble colours are the same in light and dark mode, deep enough for white text. */
+.lane { margin: 4px 0 18px; --solid: #7A5AA8; }
+.lane.a-saga { --solid: #2B8A86; } .lane.a-claude { --solid: #C8612F; } .lane.a-codex { --solid: #23875F; } .lane.a-grok { --solid: #6E58E0; }
+.lane.a-xai { --solid: #2F6FC4; } .lane.a-qwen { --solid: #8F670F; }
+.lane-h { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; color: var(--muted); }
+.lane-h .from { flex: none; display: inline-flex; gap: 5px; }
+.lane-h .status { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 /* the answer sits in a bubble tinted with its agent's colour, as in the landing demo */
-.lane .out { background: color-mix(in srgb, var(--agent) 10%, var(--bg)); padding: 10px 16px; border-radius: 6px 18px 18px 18px; width: fit-content; max-width: 100%; }
+.lane .out { background: var(--solid); color: #FFFFFF; font-weight: 500; padding: 10px 16px; border-radius: 6px 18px 18px 18px; width: fit-content; max-width: 100%; }
+.lane .out a { color: #FFFFFF; text-decoration: underline; }
+.lane .out code { background: rgba(0,0,0,.18); color: #FFFFFF; }
+.lane .out pre { background: rgba(0,0,0,.28); color: #FFFFFF; font-weight: 400; }
+.lane .out .dots i { background: rgba(255,255,255,.85); }
+.lane .out .caret { background: #FFFFFF; }
+.lane .out .ag { font-weight: 600; }
+.lane .out .ag-saga { color: #BDF0EC; } .lane .out .ag-claude { color: #FFD2BA; } .lane .out .ag-codex { color: #B6F5D6; } .lane .out .ag-grok { color: #DCD3FF; }
+/* The line under the bubble: steps, files, what was remembered, the Walrus blob, rating. */
+.lane .meta { display: flex; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); margin-top: 6px; padding-left: 4px; min-height: 0; }
+.lane .meta:empty { display: none; }
+.lane .meta > * + *::before { content: "·"; margin: 0 8px; color: var(--faint); }
+.lane .meta code { font: 500 12px ui-monospace, "SF Mono", Menlo, monospace; }
+.lane .meta a { color: var(--accent-text); text-decoration: none; }
+.lane .meta a:hover { text-decoration: underline; }
+.lane .meta .running { color: var(--faint); max-width: 44ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lane .meta button.steps { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.lane .meta button.steps:hover { color: var(--ink); }
+.steplist { font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--faint); margin: 6px 0 0 4px; padding: 8px 12px; background: var(--surface); border-radius: 10px; }
+.steplist div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 0; }
 .lane .out:empty { display: none; }
 .lane .out > :first-child { margin-top: 0; } .lane .out > :last-child { margin-bottom: 0; }
 .status.ok { color: var(--ok); } .status.bad { color: var(--bad); }
-.working::after { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: 6px; animation: pulse 1s infinite ease-in-out; }
+/* Something in progress: the word breathes, no dot. */
+.working { animation: breathe 1.6s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .working { animation: none; } }
 @keyframes pulse { 50% { opacity: .25; } }
-.tools { font-size: 12px; color: var(--faint); margin: 2px 0 6px; }
-.tools div { padding: 1px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tools div::before { content: "↳ "; }
-.tools summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 1px 0; }
-.tools summary::-webkit-details-marker { display: none; }
-.tools summary::after { content: "›"; font-size: 14px; line-height: 1; transition: transform .2s var(--ease-out); }
-.tools details[open] summary::after { transform: rotate(90deg); }
-.tools summary:hover { color: var(--muted); }
 .out { overflow-wrap: anywhere; }
 .out p { margin: 6px 0; }
 .out pre { background: var(--code); padding: 12px 14px; border-radius: 12px; overflow-x: auto; }
@@ -157,12 +180,16 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 .note { font-size: 12.5px; color: var(--warn); margin: 4px 0; }
 .ico { flex: none; vertical-align: -2px; }
 .chip { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); background: var(--surface); padding: 3px 10px; border-radius: 99px; margin: 4px 6px 0 0; }
-.fb { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-.fb button { border: 0; background: transparent; border-radius: 8px; width: 30px; height: 30px; cursor: pointer; color: var(--muted); display: grid; place-items: center; }
-.fb button:hover { color: var(--ink); }
-.fb button:hover { background: var(--hover); opacity: 1; }
-.fb input { flex: 1; min-width: 160px; max-width: 360px; border: 0; background: var(--surface); color: var(--ink); border-radius: 99px; padding: 6px 12px; font: inherit; font-size: 13px; outline: none; }
-.learned { font-size: 13px; margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: rgba(171,209,198,.22); }
+/* Rating stays out of the way: it shows when you hover the answer (always, faintly, on touch screens). */
+.fb { display: inline-flex; gap: 2px; align-items: center; opacity: 0; transition: opacity .2s; }
+.msg:hover .fb, .fb:focus-within { opacity: 1; }
+@media (hover: none) { .fb { opacity: .6; } }
+.fb button { border: 0; background: transparent; border-radius: 6px; width: 24px; height: 22px; cursor: pointer; color: var(--muted); display: grid; place-items: center; }
+.fb button:hover { color: var(--ink); background: var(--hover); }
+.fb-note { display: flex; gap: 6px; margin: 8px 0 0 4px; max-width: 420px; }
+.fb-note input { flex: 1; border: 0; background: var(--surface); color: var(--ink); border-radius: 99px; padding: 6px 12px; font: inherit; font-size: 13px; outline: none; }
+.fb-note button { border: 0; border-radius: 99px; padding: 0 12px; background: var(--send); color: var(--send-ink); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.noted { color: var(--accent-text); transition: opacity .6s; }
 
 .welcome { text-align: center; margin-top: 16vh; }
 .welcome h2 { font-size: 28px; letter-spacing: -.03em; margin: 0 0 8px; font-weight: 650; }
@@ -207,13 +234,17 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 /* floating composer */
 .composer { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 20px 18px; pointer-events: none; background: linear-gradient(to top, var(--bg) 55%, transparent); }
 .dock { max-width: 780px; margin: 0 auto; pointer-events: auto; position: relative; }
-.bar { display: flex; align-items: flex-end; gap: 6px; background: var(--surface); border-radius: 22px; padding: 6px 6px 6px 16px; box-shadow: var(--shadow); }
+/* Same shape as the landing page's chat bar: round, roomy, a soft long shadow, a round send button. */
+.bar { display: flex; align-items: flex-end; gap: 8px; background: var(--surface); border-radius: 26px; padding: 8px 8px 8px 22px;
+  box-shadow: var(--bar-shadow, 0 18px 50px rgba(49,47,44,.10), 0 2px 8px rgba(49,47,44,.06)); }
 .field { position: relative; flex: 1; min-width: 0; display: grid; }
-.field > * { grid-area: 1 / 1; font: inherit; font-size: 15px; line-height: 22px; padding: 7px 0; margin: 0; border: 0; white-space: pre-wrap; overflow-wrap: anywhere; letter-spacing: normal; }
+.field > * { grid-area: 1 / 1; font: inherit; font-size: 16px; line-height: 22px; padding: 9px 0; margin: 0; border: 0; white-space: pre-wrap; overflow-wrap: anywhere; letter-spacing: normal; }
 .hl { color: var(--ink); pointer-events: none; overflow: hidden; max-height: 160px; }
-textarea { resize: none; background: transparent; color: transparent; caret-color: var(--ink); outline: none; max-height: 160px; min-height: 36px; overflow-y: auto; }
+textarea { resize: none; background: transparent; color: transparent; caret-color: var(--ink); outline: none; max-height: 160px; min-height: 40px; overflow-y: auto; }
 textarea::placeholder { color: var(--faint); }
-.send { width: 36px; height: 36px; border-radius: 50%; border: 0; background: var(--send); color: var(--send-ink); cursor: pointer; display: grid; place-items: center; flex: none; transition: transform .1s, opacity .15s, background .2s, color .2s; }
+/* Bottom-aligned for multi-line text, so the smaller controls sit centred on the 40px send button. */
+.bar > .repo-btn { margin-bottom: 1px; } .bar > .model-chip { margin-bottom: 2px; }
+.send { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--send); color: var(--send-ink); cursor: pointer; display: grid; place-items: center; flex: none; transition: transform .1s, opacity .15s, background .2s, color .2s; }
 .send:disabled { opacity: .35; cursor: default; }
 .send:not(:disabled):active { transform: scale(.94); }
 .send.stop { background: var(--bad); color: #fff; }
@@ -223,7 +254,6 @@ textarea::placeholder { color: var(--faint); }
 .live:hover { color: var(--muted); }
 .live b { color: var(--accent-text); font-weight: 600; display: inline-block; }
 .dot.busy { animation: pulse 1s infinite ease-in-out; }
-@media (max-width: 700px) { .hint-rate { display: none; } }
 #ac { position: absolute; bottom: calc(100% + 8px); left: 8px; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow); display: none; min-width: 280px; padding: 6px; z-index: 6; transform-origin: 0 100%; animation: pop .22s var(--ease-out) backwards; }
 #ac div { padding: 7px 10px; cursor: pointer; font-size: 14px; border-radius: 9px; }
 #ac div small { color: var(--muted); display: block; font-size: 12px; }
@@ -296,6 +326,7 @@ textarea::placeholder { color: var(--faint); }
 .model-chip svg { flex: none; opacity: .6; transition: transform .2s var(--ease-out); }
 .model-chip[aria-expanded="true"] svg { transform: rotate(180deg); }
 .model-chip[hidden] { display: none; }
+.model-chip.locked, .model-chip.locked:hover { cursor: default; background: transparent; color: var(--muted); padding-right: 11px; }
 .model-chip { animation: fade .3s ease backwards; }
 .model-pop { position: absolute; bottom: calc(100% + 8px); right: 0; width: 310px; max-width: calc(100vw - 24px); max-height: min(460px, 62vh); overflow-y: auto; background: var(--surface); border-radius: 16px; box-shadow: var(--shadow); padding: 6px; display: none; z-index: 7; transform-origin: 100% 100%; scrollbar-width: thin; }
 .model-pop.open { display: block; animation: pop .2s var(--ease-out) backwards; }
@@ -391,6 +422,8 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 @media (max-width: 860px) { .cookie-note { left: 12px; right: 12px; top: 12px; bottom: auto; max-width: none; } .cookie-note.show { animation-name: cn-down; } }
 @keyframes cn-down { from { opacity: 0; transform: translateY(-8px); } }
 .cookie-note a { color: inherit; font-weight: 600; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cookie-note button { background: #ABD1C6; color: #312F2C; } }
+:root[data-theme="dark"] .cookie-note button { background: #ABD1C6; color: #312F2C; }
 .cookie-note button { margin-top: 10px; border: 0; border-radius: 99px; padding: 6px 14px; background: #312F2C; color: #ABD1C6; font: inherit; font-weight: 600; cursor: pointer; }
 
 /* sign-in: full-screen, calm, one card */
@@ -411,10 +444,20 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 .wallet span { flex: 1; text-align: left; }
 .wallet svg { color: var(--faint); }
 .si-status { min-height: 20px; margin-top: 12px; font-size: 13px; color: var(--muted); }
+.si-back { border: 0; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; margin-top: 12px; }
+.si-back:hover { color: var(--ink); }
 .si-foot { font-size: 12px !important; color: var(--faint) !important; margin: 10px 0 0 !important; }
 #gate { position: fixed; inset: 0; background: var(--bg); display: none; align-items: center; justify-content: center; z-index: 30; padding: 16px; }
 #gate form { background: var(--surface); border-radius: 18px; padding: 26px; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); }
 #gate input { border: 0; border-radius: 10px; padding: 10px 12px; background: var(--side); color: var(--ink); font: inherit; outline: none; }
+#gate .btn-ghost { align-self: center; }
+#gate .g-or { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 12px; margin: 2px 0; }
+#gate .g-or::before, #gate .g-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+#gate .g-wallet { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: transparent; color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+#gate .g-wallet:hover { background: var(--hover); }
+#gate .note { font-size: 12px; color: var(--faint); }
+#gate #gErr { color: var(--warn); }
+#gate #gErr:empty { display: none; }
 #gate .btn { border: 0; border-radius: 10px; padding: 10px; background: var(--send); color: var(--send-ink); font-weight: 600; cursor: pointer; }
 
 @media (max-width: 700px) {
@@ -451,7 +494,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 <div class="app" id="app">
   <aside>
     <div class="side-top">
-      <a class="brand" href="/" style="color:inherit;text-decoration:none">Saga<small>agents that remember</small></a>
+      <a class="brand" href="/" aria-label="Saga home"><span class="logo-mark"></span><small>agents that remember</small></a>
       <button class="icon-btn" id="closeSide" title="Close sidebar" aria-label="Close sidebar">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
       </button>
@@ -498,7 +541,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
           </button>
         </form>
-        <div class="hint"><button type="button" class="live" id="live" title="See what was written to Walrus"><i class="dot" id="liveDot"></i><span id="liveText">Everything here is stored on Walrus mainnet</span></button><span class="hint-rate"> · rate answers to teach the harness</span></div>
+        <div class="hint"><button type="button" class="live" id="live" title="See what was written to Walrus"><i class="dot" id="liveDot"></i><span id="liveText">Everything here is stored on Walrus mainnet</span></button></div>
       </div>
     </div>
   </main>
@@ -531,11 +574,12 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 </div>
 <div id="signin" role="dialog" aria-modal="true" aria-label="Sign in to Saga">
   <div class="si-card">
-    <div class="si-mark"><i></i></div>
+    <span class="logo-mark" style="height:28px;margin-bottom:14px" aria-hidden="true"></span>
     <h2 id="siTitle">Sign in to Saga</h2>
     <p id="siBody">Connect a Sui wallet. Your memory on Walrus is keyed to your address, and a second signature unlocks your private vault. Neither sends a transaction or costs gas.</p>
     <div id="wallets" class="wallets"><div class="empty">Looking for Sui wallets…</div></div>
     <div id="siStatus" class="si-status" aria-live="polite"></div>
+    <button type="button" class="si-back" id="siBack" hidden>Use a username instead</button>
     <p class="si-foot">Prefer Google? <a href="https://slush.app" target="_blank" rel="noopener">Slush</a> lets you create a wallet with your Google account. · <a href="/privacy" target="_blank">Privacy &amp; cookies</a></p>
   </div>
 </div>
@@ -623,14 +667,20 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 </script>
 <div id="gate">
   <form id="gateForm">
-    <b style="font-size:18px">Saga</b>
-    <div class="empty" style="padding:0">This deployment is invite-only. Pick a handle so Saga can remember you across devices.</div>
+    <span class="logo-mark" style="height:26px;margin-bottom:6px;align-self:flex-start" aria-hidden="true"></span>
+    <b style="font-size:18px" id="gTitle">Sign in to Saga</b>
+    <div class="empty" style="padding:0" id="gBody">Enter your username. Your memory on Walrus follows it to any device.</div>
     <input id="gCode" placeholder="Access code" autocomplete="off">
-    <input id="gHandle" placeholder="Your handle (e.g. mira)" autocomplete="off">
-    <button class="btn">Enter</button>
+    <input id="gHandle" placeholder="Username (e.g. mira)" autocomplete="off" spellcheck="false" autocapitalize="off">
+    <button class="btn">Continue</button>
+    <div class="g-or" aria-hidden="true"><span>or</span></div>
+    <button type="button" class="g-wallet" id="gWallet">Connect a Sui wallet</button>
+    <button type="button" class="btn-ghost" id="gCancel" hidden>Cancel</button>
+    <div class="note">Anyone who enters the same username sees its memory. For private memory, connect a wallet.</div>
     <div id="gErr" class="note"></div>
   </form>
 </div>
+<script src="/mascot.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -654,7 +704,7 @@ ICON_PATHS.gh = '<path fill="currentColor" stroke="none" d="M12 .5a11.5 11.5 0 0
 ICON_PATHS.history = '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>';
 ICON_PATHS.branch ='<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>';
 const icon = (n, size = 14) => `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[n]}</svg>`;
-const KNOWN = ["claude", "codex", "grok", "xai", "qwen"];
+const KNOWN = ["saga", "claude", "codex", "grok", "xai", "qwen"];
 let agents = [], busy = null, uid = "", state = {}, me = {}, vault = {state: "ok"}, session = newSessionId();
 
 function newSessionId() { return "s-" + Math.random().toString(36).slice(2, 10); }
@@ -682,7 +732,7 @@ async function api(path, body) {
   const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
   if (r.status === 401) {
     const j = await r.json().catch(() => ({}));
-    if (j.login) $("#signin").classList.add("open"); else $("#gate").style.display = "flex";
+    if (j.login) $("#signin").classList.add("open"); else showGate(false);
     throw new Error("locked");
   }
   return r.json();
@@ -732,8 +782,7 @@ function renderProfilePane() {
     <div class="list">
       <div class="row"><div class="avatar">${esc(initial)}</div>
         <div class="l"><b class="${me.auth ? "mono" : ""}">${esc(me.auth ? shortAddr(uid) : uid)}</b><span>${me.auth ? "Signed in with Sui. Your memory follows this wallet." : "Your memory follows this handle to any device."}</span></div>
-        ${me.auth ? `<button class="btn-ghost" id="signOut">Sign out</button>` : ""}</div>
-      ${me.auth ? "" : `<div class="row"><div class="l"><b>Handle</b></div><input id="hIn" class="inp" value="${esc(uid)}" spellcheck="false" autocomplete="off" aria-label="Handle"></div>`}
+        ${me.auth ? `<button class="btn-ghost" id="signOut">Sign out</button>` : `<button class="btn-ghost" id="switchUser">Switch</button>`}</div>
       <div class="row"><div class="l"><b>Theme</b></div><div class="seg">${["system", "light", "dark"].map(x => `<button data-t="${x}" class="${t === x ? "on" : ""}">${x[0].toUpperCase() + x.slice(1)}</button>`).join("")}</div></div>
     </div>
     <div class="group-h">Walrus memory</div>
@@ -745,11 +794,8 @@ function renderProfilePane() {
     </div>`;
   $("#pProfile").querySelectorAll(".seg button").forEach(b => b.onclick = () => { applyTheme(b.dataset.t); renderProfilePane(); });
   $("#signOut")?.addEventListener("click", async () => { await fetch("/api/auth/logout", {method: "POST"}); location.reload(); });
-  // a new handle takes effect on Enter or when the field loses focus
-  if ($("#hIn")) $("#hIn").onchange = async e => {
-    const handle = e.target.value.trim(); if (!handle || handle === uid) return;
-    const r = await api("/api/login", {handle}); if (r.ok) location.reload();
-  };
+  // Switching memory is a sign-in, never an edit: it goes through the username screen.
+  $("#switchUser")?.addEventListener("click", () => { closeModal(); showGate(true); });
 }
 const shortAddr = a => /^0x[0-9a-f]{64}$/.test(a) ? a.slice(0, 6) + "…" + a.slice(-4) : a;
 function renderProfile() {
@@ -1107,7 +1153,21 @@ async function refreshStats() {
   walrus = {blobs: r.blobs, base: myDone()};
   renderProfile(); renderLive();
 }
-function addWrite(w, quiet) { writes.set(w.job_id || (w.namespace + w.ts + w.text), w); if (!quiet) { renderWrites(); renderProfile(); } }
+function addWrite(w, quiet) {
+  writes.set(w.job_id || (w.namespace + w.ts + w.text), w);
+  if (w.ref && (w.status === "done" || w.status === "failed")) settleRef(w.ref, w);
+  if (!quiet) { renderWrites(); renderProfile(); }
+}
+// Bubbles wait for the Walrus blob of what they saved (the step's files, or the turn's transcript).
+const refSlots = new Map(), refDone = new Map();
+const blobText = id => `Saved to Walrus · blob <a href="${WALRUSCAN(id)}" target="_blank" rel="noopener" title="${esc(id)} on Walruscan"><code>${esc(id.slice(0, 4))}…${esc(id.slice(-3))}</code></a>`;
+function fillSlot(el, w) { el.innerHTML = w.status === "done" && w.blob_id ? blobText(w.blob_id) : "not saved to Walrus"; }
+function settleRef(ref, w) { refDone.set(ref, w); for (const el of refSlots.get(ref) || []) fillSlot(el, w); refSlots.delete(ref); }
+function awaitBlob(el, ref) {
+  if (refDone.has(ref)) return fillSlot(el, refDone.get(ref));
+  el.textContent = "saving to Walrus…";
+  refSlots.set(ref, [...(refSlots.get(ref) || []), el]);
+}
 function renderWrites() {
   renderLive();
   const list = [...writes.values()].reverse();
@@ -1122,8 +1182,8 @@ function renderLive() {
   const dot = $("#liveDot"), text = $("#liveText");
   if (!state.memory_enabled) { dot.className = "dot"; text.textContent = "Memory is off: nothing is saved to Walrus"; return; }
   dot.className = "dot on" + (writing ? " busy" : "");
-  text.innerHTML = n ? `<b id="liveN">${n}</b> blob${n === 1 ? "" : "s"} on Walrus mainnet`
-    : writing ? "Writing to Walrus…" : "Everything here is stored on Walrus mainnet";
+  text.innerHTML = n ? `<b id="liveN">${n}</b> blob${n === 1 ? "" : "s"} on Walrus`
+    : writing ? "Writing to Walrus…" : "Saved on Walrus";
   if (liveShown >= 0 && n > liveShown && !calm) {
     $("#liveN").animate([{transform: "translateY(5px) scale(.8)", opacity: 0}, {transform: "none", opacity: 1}], {duration: 380, easing: "cubic-bezier(.34,1.36,.64,1)"});
     dot.animate([{boxShadow: "0 0 0 0 rgba(111,191,159,.7)"}, {boxShadow: "0 0 0 9px rgba(111,191,159,0)"}], {duration: 800, easing: "ease-out"});
@@ -1205,6 +1265,9 @@ function targetAgent() {
 function renderChip() {
   const chip = $("#modelChip"), a = models.find(x => x.name === targetAgent());
   chip.hidden = !a; if (!a) return;
+  // Saga's own model is fixed: the chip just names it and opens nothing.
+  chip.disabled = !!a.locked; chip.classList.toggle("locked", !!a.locked);
+  if (a.locked) { chip.innerHTML = `<span class="lbl">Saga</span>`; chip.title = "Saga's built-in assistant"; return; }
   const cur = a.pick || a.default;
   chip.innerHTML = `<span class="lbl">${a.primary ? "" : agentName(a.name) + " · "}${esc(cur ? modelLabel(cur) : "Default")}</span>${CHEVRON}`;
   chip.title = `Model for @${a.name}`;
@@ -1212,7 +1275,8 @@ function renderChip() {
 function closeModelMenu() { $("#modelPop").classList.remove("open"); $("#modelChip").setAttribute("aria-expanded", "false"); }
 function openModelMenu() {
   const pop = $("#modelPop"), t = targetAgent();
-  const order = [...models].sort((a, b) => (b.name === t) - (a.name === t));
+  if (models.find(x => x.name === t)?.locked) return;
+  const order = [...models].filter(a => !a.locked).sort((a, b) => (b.name === t) - (a.name === t));
   pop.innerHTML = order.map(a => {
     const opts = ["", ...a.options.filter(o => o !== a.default)];  // Default already names its model
     if (a.pick && !opts.includes(a.pick)) opts.push(a.pick);
@@ -1386,19 +1450,50 @@ function userMsg(text, live) {
   thread.insertAdjacentHTML("beforeend", `<div class="msg user-msg"><div class="bubble${live ? " pop" : ""}">${colorMentions(esc(text))}</div></div>`);
 }
 const laneClass = agent => "lane a-" + (KNOWN.includes(agent) ? agent : "other");
-function laneHtml(agent, instruction, by, status, cls) {
-  const instr = (instruction || "").slice(0, 160);
-  const from = by && by !== "user" ? `<span class="from" title="handoff from @${esc(by)}">${agentName(by)}<span aria-hidden="true">→</span></span>` : "";
-  return `<div class="lane-h">${from}${agentName(agent)}<span class="instr" title="${esc(instr)}">${colorMentions(esc(instr))}</span><span class="status ${cls || ""}">${status}</span></div><div class="tools"></div><div class="out"></div>`;
+// Saga walks the task over to Claude once per turn, then the little scene folds away.
+function carryTo(turn) {
+  if (!window.SagaMascot) return;
+  const box = document.createElement("div"); box.className = "carry pop"; box.setAttribute("aria-hidden", "true");
+  turn.appendChild(box); follow();
+  SagaMascot.mount(box, {loop: false, onDone: () => {
+    const h = box.offsetHeight;
+    const a = box.animate([{height: h + "px", opacity: 1}, {height: "0px", opacity: 0, marginBottom: "0px"}],
+                          {duration: calm ? 1 : 420, easing: "cubic-bezier(.2,.7,.2,1)", fill: "forwards"});
+    a.onfinish = () => box.remove();
+  }});
 }
-// Once a step finishes, its tool calls fold into one line; the answer is what matters now.
-function foldTools(tools) {
-  const lines = [...tools.children];
-  if (lines.length < 2) return;
-  const from = tools.offsetHeight;
-  tools.innerHTML = `<details><summary>${icon("wrench", 12)} ${lines.length} steps</summary></details>`;
-  tools.firstChild.append(...lines);
-  if (!calm) tools.animate([{height: from + "px", overflow: "hidden"}, {height: tools.offsetHeight + "px", overflow: "hidden"}], {duration: 300, easing: "cubic-bezier(.2,.7,.2,1)"});
+function laneHtml(agent, instruction, by, status, cls) {
+  const from = by && by !== "user" ? `<span class="from">from ${agentName(by)}</span>` : "";
+  return `<div class="lane-h"><span title="${esc((instruction || "").slice(0, 300))}">${agentName(agent)}</span>${from}<span class="status ${cls || ""}">${status}</span></div><div class="out"></div><div class="meta"></div>`;
+}
+// The meta line keeps a fixed order, whatever arrives first.
+const META_ORDER = ["steps", "files", "mem", "blob", "fb"];
+function metaSlot(lane, key) {
+  const meta = lane.querySelector(".meta");
+  let el = meta.querySelector(`[data-k="${key}"]`);
+  if (!el) {
+    el = document.createElement("span"); el.dataset.k = key;
+    const after = [...meta.children].find(c => META_ORDER.indexOf(c.dataset.k) > META_ORDER.indexOf(key));
+    meta.insertBefore(el, after || null);
+  }
+  return el;
+}
+// While an agent works, the line shows what it is doing right now; afterwards, "N steps", click to see them.
+function showStep(lane, text) {
+  (lane.steps ||= []).push(text);
+  metaSlot(lane, "steps").innerHTML = `<span class="running">${esc(text)}</span>`;
+}
+function foldSteps(lane) {
+  const n = (lane.steps || []).length, slot = lane.querySelector('.meta [data-k="steps"]');
+  if (!n) { slot?.remove(); return; }
+  slot.innerHTML = `<button class="steps" type="button" aria-expanded="false">${n} step${n === 1 ? "" : "s"}</button>`;
+  slot.firstChild.onclick = () => {
+    let list = lane.querySelector(".steplist");
+    if (list) { list.remove(); slot.firstChild.setAttribute("aria-expanded", "false"); return; }
+    list = document.createElement("div"); list.className = "steplist fade";
+    list.innerHTML = lane.steps.map(t => `<div>${esc(t)}</div>`).join("");
+    lane.querySelector(".meta").after(list); slot.firstChild.setAttribute("aria-expanded", "true");
+  };
 }
 async function openChat(sid) {
   if (busy) return;
@@ -1410,13 +1505,17 @@ async function openChat(sid) {
   for (const turn of t.turns) {
     userMsg(turn.user);
     const el = document.createElement("div"); el.className = "msg";
+    let lane = null;
     for (const s of turn.steps || []) {
-      const lane = document.createElement("div"); lane.className = laneClass(s.agent);
+      lane = document.createElement("div"); lane.className = laneClass(s.agent);
       lane.innerHTML = laneHtml(s.agent, s.instruction, s.requested_by, s.ok ? "" : "failed", s.ok ? "" : "bad");
       if (s.output) lane.querySelector(".out").innerHTML = md(s.output);
       el.appendChild(lane);
     }
-    el.insertAdjacentHTML("beforeend", `<div style="font-size:11px;color:var(--faint)">${ago(turn.ts)} · prompt v${turn.prompt_version ?? 0} · ${blob(turn.blob_id)}</div>`);
+    if (lane) {
+      metaSlot(lane, "steps").textContent = ago(turn.ts);
+      if (turn.blob_id) metaSlot(lane, "blob").innerHTML = blobText(turn.blob_id);
+    }
     thread.appendChild(el);
   }
   $("#title").textContent = t.turns[0]?.user?.slice(0, 80) || "";
@@ -1433,12 +1532,14 @@ $("#f").addEventListener("submit", async e => {
   if (hello) { $("#title").textContent = text.slice(0, 80); await leave(hello); thread.innerHTML = ""; }
   userMsg(text, true);
   const turn = document.createElement("div"); turn.className = "msg";
-  turn.innerHTML = `<div class="recall"><span class="chip pop working" style="animation-delay:.12s">recalling from Walrus…</span></div>`;
+  turn.innerHTML = `<details class="recall fade"><summary class="working">recalling…</summary><ul></ul></details>`;
   thread.appendChild(turn);
   stick = true; log.scrollTo({top: log.scrollHeight, behavior: calm ? "auto" : "smooth"});
   busy = "pending"; sendBtn.disabled = false; sendBtn.classList.add("stop");
   sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`;
   const lanes = {};
+  let turnId = "", recalled = 0;
+  const lastLane = () => Object.values(lanes).pop()?.el;
   try {
     const r = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: text, session})});
     if (!r.ok) throw new Error((await r.json()).error || r.statusText);
@@ -1461,36 +1562,46 @@ $("#f").addEventListener("submit", async e => {
   refreshRepo();
 
   function onEvent(ev) {
-    if (ev.type === "turn") { busy = ev.turn_id; turn.querySelector(".recall").innerHTML = ""; }
+    if (ev.type === "turn") { busy = turnId = ev.turn_id; }
     else if (ev.type === "recall") {
-      const row = turn.querySelector(".recall");
-      row.insertAdjacentHTML("beforeend", `<details class="pop" style="display:inline-block;margin-right:6px;animation-delay:${row.children.length * 60}ms"><summary>${icon("brain")} ${ev.items.length} from ${esc(nsLabel(ev.ns))}</summary><ul>${ev.items.map(m => `<li>${colorMentions(esc(m.text))} ${blob(m.blob_id)}</li>`).join("")}</ul></details>`);
+      const r = turn.querySelector(".recall");
+      recalled += ev.items.length;
+      r.querySelector("summary").className = "";
+      r.querySelector("summary").textContent = `used ${recalled} memor${recalled === 1 ? "y" : "ies"}`;
+      r.querySelector("ul").insertAdjacentHTML("beforeend", ev.items.map(m => `<li>${colorMentions(esc(m.text))} ${blob(m.blob_id)}</li>`).join(""));
     } else if (ev.type === "step") {
+      if (!recalled) turn.querySelector(".recall")?.remove();  // nothing recalled: no line at all
+      if (ev.agent === "claude" && !turn.querySelector(".carry")) carryTo(turn);
       const el = document.createElement("div"); el.className = laneClass(ev.agent) + " rise";
       el.innerHTML = laneHtml(ev.agent, ev.instruction, ev.requested_by, "working", "working");
       turn.appendChild(el); lanes[ev.step] = {el, w: writer(el.querySelector(".out"))};
     } else if (ev.type === "fallback") {
-      const l = lanes[ev.step]; l.el.querySelector(".tools").insertAdjacentHTML("beforebegin", `<div class="note pop">${agentName(ev.from)} unavailable — handed to ${agentName(ev.to)}</div>`);
+      const l = lanes[ev.step]; l.el.querySelector(".lane-h").insertAdjacentHTML("afterend", `<div class="note pop">${agentName(ev.from)} unavailable, handed to ${agentName(ev.to)}</div>`);
     } else if (ev.type === "agent") {
       const l = lanes[ev.step]; if (!l) return;
       const t = l.w.text;
-      if (ev.kind === "tool") l.el.querySelector(".tools").insertAdjacentHTML("beforeend", `<div class="mono fade">${esc(ev.text)}</div>`);
+      if (ev.kind === "tool") showStep(l.el, ev.text);
       else if (ev.kind === "delta") l.w.write(t + ev.text);
       else if (ev.kind === "text") l.w.write(t + (t ? "\n\n" : "") + ev.text);
     } else if (ev.type === "checkpoint") {
       const l = lanes[ev.step]; if (!l) return;
-      l.el.insertAdjacentHTML("beforeend", `<span class="chip pop">${icon("save")} checkpoint → Walrus · ${ev.files.map(f => esc(f.path)).join(", ")}</span>`);
+      metaSlot(l.el, "files").innerHTML = "Edited " + ev.files.map(f => `<code>${esc(f.path.split("/").pop())}</code>`).join(" ");
+      awaitBlob(metaSlot(l.el, "blob"), turnId + ":" + ev.step);
     } else if (ev.type === "remember") {
-      const target = Object.values(lanes).pop()?.el || turn;
-      target.insertAdjacentHTML("beforeend", `<span class="chip pop">${icon("brain")} remembered: ${esc(ev.text)}</span>`);
+      const el = lastLane(); if (!el) return;
+      const slot = metaSlot(el, "mem"), facts = [...(el.facts ||= []), ev.text]; el.facts = facts;
+      slot.textContent = `remembered ${facts.length} fact${facts.length === 1 ? "" : "s"}`; slot.title = facts.join("\n");
     } else if (ev.type === "step_done") {
       const l = lanes[ev.step]; if (!l) return;
       const st = l.el.querySelector(".status");
-      st.textContent = ev.ok ? `${Math.round(ev.seconds)}s` : "failed"; st.className = "status fade " + (ev.ok ? "ok" : "bad");
+      st.innerHTML = ev.ok ? `${icon("check", 12)}${Math.round(ev.seconds)}s` : "failed"; st.className = "status fade " + (ev.ok ? "ok" : "bad");
       l.w.finish(ev.ok && ev.output ? ev.output : undefined);
-      foldTools(l.el.querySelector(".tools"));
+      foldSteps(l.el);
       if (!ev.ok) l.el.querySelector(".out").insertAdjacentHTML("afterend", `<div class="note pop">${esc(ev.error)}</div>`);
     } else if (ev.type === "done") {
+      // The transcript blob goes under the last bubble, unless that step already shows its files' blob.
+      const el = lastLane();
+      if (el && !el.querySelector('.meta [data-k="blob"]')) awaitBlob(metaSlot(el, "blob"), ev.turn_id);
       // rate the answer once it has finished writing, not while it's still appearing
       Promise.all(Object.values(lanes).map(l => l.w.idle())).then(() => addFeedback(turn, ev.turn_id));
     } else if (ev.type === "error") {
@@ -1499,34 +1610,61 @@ $("#f").addEventListener("submit", async e => {
   }
 });
 
+// 👍 / 👎 sit at the end of the line under the last bubble, visible on hover. 👎 asks what went wrong.
 function addFeedback(turn, id) {
-  const fb = document.createElement("div"); fb.className = "fb rise";
-  fb.innerHTML = `<button data-r="1" title="Good" aria-label="Good answer">${icon("up", 16)}</button><button data-r="-1" title="Bad" aria-label="Bad answer">${icon("down", 16)}</button><input placeholder="What should Saga learn? (optional)">`;
-  turn.appendChild(fb); follow();
-  fb.querySelectorAll("button").forEach(b => b.onclick = async () => {
-    const comment = fb.querySelector("input").value.trim();
-    fb.innerHTML = `<span class="chip pop working">reflecting…</span>`;
-    const r = await api("/api/feedback", {turn_id: id, rating: +b.dataset.r, comment});
-    let html = "";
-    if (r.error) html = esc(r.error);
-    else {
-      html = `${icon(b.dataset.r === "1" ? "up" : "down")} scored prompt v${r.prompt_version} — saved to Walrus.`;
-      for (const l of r.lessons || []) html += `<br>${icon("note")} lesson for ${agentName(l.agent)}: ${esc(l.lesson)}`;
-      if (r.skill) html += `<br>${icon("skill")} new skill: <b>${esc(r.skill.name)}</b>`;
-      for (const c of r.credit || []) html += `<br>${icon(c.helpful ? "up" : "down", 12)} rule ${c.helpful ? "helped" : "hurt"}: ${esc(c.text)}`;
-      if (r.critique) html += `<br>${icon("wrench")} critique queued for prompt evolution`;
-      if (r.evolving) html += `<br>${icon("evolve")} testing a new playbook against your past chats…`;
-    }
-    fb.outerHTML = `<div class="learned pop">${html}</div>`;
+  const lanesIn = turn.querySelectorAll(".lane"), lane = lanesIn[lanesIn.length - 1];
+  const fb = lane ? metaSlot(lane, "fb") : turn.appendChild(document.createElement("span"));
+  fb.className = "fb";
+  fb.innerHTML = `<button data-r="1" title="Good answer" aria-label="Good answer">${icon("up", 14)}</button><button data-r="-1" title="Bad answer" aria-label="Bad answer">${icon("down", 14)}</button>`;
+  follow();
+  const send = async (rating, comment) => {
+    fb.innerHTML = `<span class="working">noting…</span>`; fb.style.opacity = 1;
+    turn.querySelector(".fb-note")?.remove();
+    const r = await api("/api/feedback", {turn_id: id, rating, comment}).catch(e => ({error: e.message}));
+    fb.innerHTML = r.error ? esc(r.error) : `<span class="noted">${icon("check", 12)} noted</span>`;
+    if (!r.error) setTimeout(() => { const n = fb.querySelector(".noted"); if (n) n.style.opacity = .55; }, 2500);
     setTimeout(refreshMemory, 6000);
     if (r.evolving) setTimeout(refreshMemory, 150000);  // the replay takes a couple of minutes
-  });
+  };
+  fb.querySelector('[data-r="1"]').onclick = () => send(1, "");
+  fb.querySelector('[data-r="-1"]').onclick = () => {
+    if (turn.querySelector(".fb-note")) return;
+    const note = document.createElement("form"); note.className = "fb-note pop";
+    note.innerHTML = `<input placeholder="What went wrong? (optional)" aria-label="What went wrong"><button>Send</button>`;
+    (lane || turn).appendChild(note); note.querySelector("input").focus(); follow();
+    note.onsubmit = e => { e.preventDefault(); send(-1, note.querySelector("input").value.trim()); };
+    note.querySelector("input").onkeydown = e => { if (e.key === "Escape") note.remove(); };
+  };
 }
 
+// The username screen: shown when the server asks for it, or when the user switches account.
+function showGate(switching) {
+  $("#gCode").hidden = switching && !me.gated;
+  $("#gTitle").textContent = switching ? "Switch account" : "Sign in to Saga";
+  $("#gBody").textContent = me.gated && !switching
+    ? "This deployment is invite-only. Enter the access code and a username."
+    : "Enter your username. Your memory on Walrus follows it to any device.";
+  $("#gCancel").hidden = !switching;
+  $("#gErr").textContent = ""; $("#gHandle").value = "";
+  $("#gate").style.display = "flex"; $("#gHandle").focus();
+}
+$("#gCancel").onclick = () => { $("#gate").style.display = "none"; };
+// Both ways in: a username, or a Sui wallet (proven by signature, so its memory is yours alone).
+$("#gWallet").onclick = () => {
+  const si = $("#signin"); delete si.dataset.mode;
+  $("#siTitle").textContent = "Connect a Sui wallet";
+  $("#siBack").hidden = !!me.wallet_required;
+  $("#gate").style.display = "none"; si.classList.add("open");
+};
+$("#siBack").onclick = () => { $("#signin").classList.remove("open"); showGate(!$("#gCancel").hidden); };
 $("#gateForm").addEventListener("submit", async e => {
   e.preventDefault();
-  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({access_code: $("#gCode").value, handle: $("#gHandle").value})});
-  if (r.ok) location.reload(); else $("#gErr").textContent = (await r.json()).error;
+  const handle = $("#gHandle").value.trim();
+  if (!handle) { $("#gErr").textContent = "Enter a username."; return; }
+  if (handle === uid) { $("#gate").style.display = "none"; return; }
+  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({access_code: $("#gCode").value, handle})});
+  const j = await r.json().catch(() => ({}));
+  if (r.ok && j.uid) location.reload(); else $("#gErr").textContent = j.error || "That username can't be used. Try letters and numbers.";
 });
 showWelcome();
 syncField();

@@ -15,7 +15,11 @@
 body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
 a { color: var(--link); }
 header { max-width: 820px; margin: 0 auto; padding: 22px 20px; display: flex; align-items: center; justify-content: space-between; }
-.wordmark { font-weight: 700; font-size: 19px; letter-spacing: -.03em; display: flex; align-items: center; gap: 9px; color: var(--ink); text-decoration: none; }
+.wordmark { display: flex; align-items: center; color: var(--ink); text-decoration: none; }
+/* The Saga wordmark: a transparent image used as a mask, so it takes the colour of the text around it. */
+.logo-mark { display: inline-block; flex: none; aspect-ratio: 1363 / 340; height: 22px; background: currentColor;
+  -webkit-mask: url(/saga-logo.png) center / contain no-repeat; mask: url(/saga-logo.png) center / contain no-repeat; }
+
 .mark { width: 24px; height: 24px; border-radius: 7px; background: var(--charcoal); display: grid; place-items: center; }
 .mark i { width: 9px; height: 9px; border-radius: 50%; background: var(--mint); display: block; }
 main { max-width: 820px; margin: 0 auto; padding: 8px 20px 96px; }
@@ -38,7 +42,7 @@ li { margin: 6px 0; }
 </head>
 <body>
 <header>
-  <a class="wordmark" href="/"><span class="mark"><i></i></span>Saga</a>
+  <a class="wordmark" href="/" aria-label="Saga home"><span class="logo-mark"></span></a>
   <a href="/app">Open Saga</a>
 </header>
 <main>

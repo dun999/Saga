@@ -16,7 +16,7 @@ void log_err(const char* what, const std::exception& e) { std::fprintf(stderr, "
 
 json WriteRecord::to_json() const {
   return {{"namespace", ns}, {"kind", kind}, {"text", text.substr(0, 240)}, {"job_id", job_id},
-          {"blob_id", blob_id}, {"status", status}, {"error", error}, {"ts", ts}};
+          {"blob_id", blob_id}, {"status", status}, {"error", error}, {"ts", ts}, {"ref", ref}};
 }
 
 std::string encode_record(const std::string& kind, const json& payload) {
@@ -41,12 +41,13 @@ Store::~Store() {
   if (thread_.joinable()) thread_.join();
 }
 
-void Store::put(const std::string& ns, const std::string& kind, const std::string& text) {
+void Store::put(const std::string& ns, const std::string& kind, const std::string& text, const std::string& ref) {
   if (!enabled() || text.empty()) return;
   WriteRecord r;
   r.ns = ns;
   r.kind = kind;
   r.text = text;
+  r.ref = ref;
   r.ts = now_s();
   {
     std::lock_guard lk(mu_);
@@ -112,7 +113,7 @@ bool Store::retry_later(WriteRecord& r) {
                          r.error.find("timed out") != std::string::npos || r.error.find(" 50") != std::string::npos ||
                          r.error.find("onnection") != std::string::npos;
   if (!transient || r.attempts + 1 >= kMaxAttempts || r.kind == "analyze") return false;
-  WriteRecord again{.ns = r.ns, .kind = r.kind, .text = r.text, .ts = r.ts};
+  WriteRecord again{.ns = r.ns, .kind = r.kind, .text = r.text, .ref = r.ref, .ts = r.ts};
   again.attempts = r.attempts + 1;
   again.retry_at = std::time(nullptr) + (20L << r.attempts);  // 20s, 40s, 80s
   queue_.push_back(std::move(again));  // caller holds mu_

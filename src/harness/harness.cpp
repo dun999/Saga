@@ -216,6 +216,15 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
     if (!m.blob_id.empty()) note("lesson:" + m.blob_id, m.text);
 
   std::string c = pv.prompt + "\n\n";
+  // Identity: the base prompt speaks as Saga. Only the primary agent *is* Saga; a mentioned teammate
+  // answers as itself, so "@claude who are you?" gets Claude Code, not Saga.
+  if (&agent == reg_.primary())
+    c += "## Who you are\nYou are Saga, the assistant the user is talking to. If asked what model or company is "
+         "behind you, say you are Saga; don't name an underlying model or provider.\n\n";
+  else
+    c += "## Who you are\nYou are @" + agent.name() + " (" + agent.spec().description + "), one agent on the Saga "
+         "team. In the prompt above, \"Saga\" is the product you work inside, not you: if asked who you are, say you "
+         "are @" + agent.name() + " working in Saga.\n\n";
   c += "## Team\nYou are @" + agent.name() + " in a Saga team working for one user. Teammates:";
   for (auto& r : reg_.roster(t.uid))
     if (r["name"] != agent.name() && r["unavailable"].get<std::string>().empty())
@@ -401,7 +410,8 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
       store_.put(ns_user(uid, "checkpoints"), "checkpoint",
                  memwal::encode_record("checkpoint", {{"session", session}, {"turn", t->id}, {"step", idx},
                                                       {"agent", s.agent}, {"ts", std::time(nullptr)},
-                                                      {"instruction", clip(s.instruction, 300)}, {"files", files}}));
+                                                      {"instruction", clip(s.instruction, 300)}, {"files", files}}),
+                 t->id + ":" + std::to_string(idx));
       json names = json::array();
       for (auto& f : files) names.push_back({{"path", f["path"]}, {"bytes", f["bytes"]}, {"saved", f.contains("content")}});
       if (emit) emit({{"type", "checkpoint"}, {"step", idx}, {"agent", s.agent}, {"files", names}});
@@ -450,7 +460,8 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   store_.put(ns_user(uid, "chat"), "chat",
              memwal::encode_record("chat", {{"session", session}, {"turn", t->id}, {"ts", std::time(nullptr)},
                                             {"user", clip(message, 4000)}, {"steps", steps},
-                                            {"prompt_version", t->prompt_version}}));
+                                            {"prompt_version", t->prompt_version}}),
+             t->id);
 
   t->done = true;
   if (emit) emit({{"type", "done"}, {"turn_id", t->id}, {"final", clip(final_text, 20000)}});
@@ -946,7 +957,7 @@ json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
     if (e.day != today()) e = {today(), 0, 0};
     r["runs_today"] = e.runs;
     r["model_pick"] = model_pick(uid, name);
-    if (a) {
+    if (a && !a->spec().locked) {
       r["model_default"] = a->spec().model;
       r["model_options"] = model_options(a->spec().kind);
     }
@@ -1214,6 +1225,10 @@ json Harness::models_view(const std::string& uid) {
     const std::string name = r["name"];
     agents::Agent* a = reg_.find(name, uid);
     if (!a) continue;
+    if (a->spec().locked) {  // shown as just "Saga": no model name, nothing to pick
+      out.push_back({{"name", name}, {"primary", r.value("primary", false)}, {"locked", true}, {"options", json::array()}});
+      continue;
+    }
     out.push_back({{"name", name}, {"primary", r.value("primary", false)}, {"kind", a->spec().kind},
                    {"default", a->spec().model}, {"pick", model_pick(uid, name)},
                    {"options", model_options(a->spec().kind)}});
@@ -1232,7 +1247,9 @@ std::string Harness::model_pick(const std::string& uid, const std::string& agent
 // The user's model for one agent, kept on Walrus with their other settings (u:<uid>:settings).
 json Harness::set_model(const std::string& uid, const std::string& agent, const std::string& model) {
   seed_user(uid);
-  if (!reg_.find(agent, uid)) return {{"error", "no agent @" + agent}};
+  const agents::Agent* target = reg_.find(agent, uid);
+  if (!target) return {{"error", "no agent @" + agent}};
+  if (target->spec().locked) return {{"error", "@" + agent + "'s model can't be changed"}};
   // It becomes a CLI argument, so only the characters model ids actually use.
   if (model.size() > 80 || !std::all_of(model.begin(), model.end(), [](unsigned char c) {
         return std::isalnum(c) || c == '.' || c == '-' || c == '_' || c == ':' || c == '/' || c == '@';

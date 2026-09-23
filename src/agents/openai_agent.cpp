@@ -22,6 +22,7 @@ class OpenAIAgent : public Agent {
   json account(const sandbox::Sandbox*) override {
     const std::string k = key();
     const std::string shown = !spec_.key_hint.empty() ? spec_.key_hint : k.size() > 4 ? k.substr(k.size() - 4) : "";
+    if (spec_.locked) return {{"connected", unavailable_reason().empty()}, {"detail", "Built in, free for everyone"}, {"windows", json::array()}};
     return {{"connected", unavailable_reason().empty()},
             {"detail", shown.empty() ? "no API key" : "own API key ··" + shown},
             {"windows", json::array()}};

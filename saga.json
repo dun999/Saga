@@ -1,9 +1,12 @@
 {
   // "@name" handles users can mention. `primary` gets un-mentioned text; `brain` runs reflection/evolution.
+  // `locked`: the model is fixed and never shown to users (Saga's built-in assistant).
   // Users add their own OpenAI-compatible APIs from the UI ("+" in Agents), so they are not listed here.
-  "primary": "claude",
+  "primary": "saga",
   "brain": "claude-brain",
   "agents": [
+    {"name": "saga",   "kind": "openai", "base_url": "https://api.inference.boundless.network/v1", "model": "dsv4",
+     "api_key_env": "BOUNDLESS_API_KEY", "locked": true, "description": "Saga: the built-in assistant, ready for everyone"},
     {"name": "claude", "kind": "claude-code", "description": "Claude Code: generalist, frontend, refactors, writing"},
     {"name": "codex",  "kind": "codex", "model": "gpt-5.5", "description": "OpenAI Codex CLI: backend services, scripts, tests"},
     {"name": "grok",   "kind": "grok-cli", "description": "Grok Build CLI: fast iteration, reviews, research"},
