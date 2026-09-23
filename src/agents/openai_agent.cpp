@@ -32,7 +32,7 @@ class OpenAIAgent : public Agent {
     json messages = json::array();
     if (!task.system.empty()) messages.push_back({{"role", "system"}, {"content", task.system}});
     messages.push_back({{"role", "user"}, {"content", task.prompt}});
-    const json body = {{"model", spec_.model}, {"messages", messages}, {"stream", true}};
+    const json body = {{"model", model_for(task)}, {"messages", messages}, {"stream", true}};
 
     http::Headers h = {{"Content-Type", "application/json"}, {"Accept", "text/event-stream"}};
     if (const std::string k = task.api_key.empty() ? key() : task.api_key; !k.empty())

@@ -10,8 +10,18 @@
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+#include <string_view>
 
 namespace saga::proc {
+namespace {
+
+// Server credentials. Agents run untrusted instructions, so a child must not inherit these even
+// when the caller puts them in Options::env. `saga mem` reaches memory through the local socket.
+bool server_secret(std::string_view key) {
+  return key == "MEMWAL_PRIVATE_KEY" || key == "SAGA_SESSION_SECRET" || key == "SAGA_ACCESS_CODE";
+}
+
+}  // namespace
 
 bool on_path(const std::string& exe) {
   if (exe.find('/') != std::string::npos) return access(exe.c_str(), X_OK) == 0;
@@ -38,9 +48,14 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
   std::vector<std::string> env_store;
   for (char** e = environ; *e; ++e) {
     std::string kv(*e);
-    if (!opt.env.contains(kv.substr(0, kv.find('=')))) env_store.push_back(std::move(kv));
+    const auto eq = kv.find('=');
+    const std::string key = kv.substr(0, eq);
+    if (server_secret(key) || opt.env.contains(key)) continue;
+    env_store.push_back(std::move(kv));
   }
-  for (auto& [k, v] : opt.env) env_store.push_back(k + "=" + v);
+  for (auto& [k, v] : opt.env) {
+    if (!server_secret(k)) env_store.push_back(k + "=" + v);
+  }
   std::vector<char*> envp;
   for (auto& s : env_store) envp.push_back(s.data());
   envp.push_back(nullptr);

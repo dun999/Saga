@@ -106,17 +106,41 @@ void Store::flush(std::chrono::seconds timeout) {
   }
 }
 
+bool Store::retry_later(WriteRecord& r) {
+  static constexpr int kMaxAttempts = 4;
+  const bool transient = r.error.find("navailable") != std::string::npos || r.error.find("imeout") != std::string::npos ||
+                         r.error.find("timed out") != std::string::npos || r.error.find(" 50") != std::string::npos ||
+                         r.error.find("onnection") != std::string::npos;
+  if (!transient || r.attempts + 1 >= kMaxAttempts || r.kind == "analyze") return false;
+  WriteRecord again{.ns = r.ns, .kind = r.kind, .text = r.text, .ts = r.ts};
+  again.attempts = r.attempts + 1;
+  again.retry_at = std::time(nullptr) + (20L << r.attempts);  // 20s, 40s, 80s
+  queue_.push_back(std::move(again));  // caller holds mu_
+  return true;
+}
+
 void Store::worker() {
   while (!stop_) {
     // 1) Submit everything queued. Plain memories go through /api/remember/bulk (≤20 per call).
     std::vector<WriteRecord> batch;
     {
       std::unique_lock lk(mu_);
-      cv_.wait_for(lk, std::chrono::seconds(2), [&] { return stop_ || !queue_.empty(); });
+      cv_.wait_for(lk, std::chrono::seconds(2), [&] {
+        const int64_t now = std::time(nullptr);
+        return stop_ || std::any_of(queue_.begin(), queue_.end(), [&](auto& r) { return r.retry_at <= now; });
+      });
+      const int64_t now = std::time(nullptr);
+      std::deque<WriteRecord> later;
       while (!queue_.empty()) {
-        batch.push_back(std::move(queue_.front()));
+        if (queue_.front().retry_at <= now) batch.push_back(std::move(queue_.front()));
+        else later.push_back(std::move(queue_.front()));
         queue_.pop_front();
       }
+      queue_.swap(later);
+      // A retried write replaces its earlier entry in the log instead of showing twice.
+      for (auto& r : batch)
+        if (r.attempts > 0)
+          std::erase_if(log_, [&](const WriteRecord& o) { return o.status == "retrying" && o.ns == r.ns && o.text == r.text; });
     }
     std::vector<WriteRecord> plain, submitted;
     for (auto& r : batch) {
@@ -150,9 +174,10 @@ void Store::worker() {
         }
       } catch (const std::exception& e) {
         log_err("remember", e);
+        std::lock_guard lk(mu_);
         for (auto& r : plain) {
-          r.status = "failed";
           r.error = e.what();
+          r.status = retry_later(r) ? "retrying" : "failed";
           submitted.push_back(r);
         }
       }
@@ -189,6 +214,7 @@ void Store::worker() {
           r.status = s.status == "not_found" ? "failed" : s.status;
           r.blob_id = s.blob_id;
           r.error = s.error;
+          if (r.status == "failed" && retry_later(r)) r.status = "retrying";
           if (r.status == "done") ++blobs_written_;
           changed.push_back(r);
         }

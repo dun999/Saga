@@ -14,6 +14,7 @@
 #include "core/sandbox.h"
 #include "harness/harness.h"
 #include "memwal/client.h"
+#include "memwal/gate.h"
 #include "memwal/store.h"
 #include "web/server.h"
 
@@ -72,6 +73,7 @@ harness::Options harness_options(const Args& a) {
   o.keys_path = env::get("SAGA_KEYS_FILE", env::get("HOME", ".") + "/.config/saga/keys.json");
   o.homes_dir = std::filesystem::absolute(env::get("SAGA_HOMES", "agent-homes")).string();
   o.github_client_id = env::get("SAGA_GITHUB_CLIENT_ID");
+  o.github_client_secret = env::get("SAGA_GITHUB_CLIENT_SECRET");
   return o;
 }
 
@@ -138,7 +140,7 @@ int cmd_stats(const Args& a) {
     nss = {"harness:prompts", "harness:scores", "harness:skills", "harness:improvements", "saga:doctor"};
     for (auto* ag : reg.all()) nss.push_back("agent:" + ag->name() + ":lessons");
     for (auto& u : a.pos)
-      for (const char* k : {"facts", "episodes", "chat", "checkpoints"}) nss.push_back(harness::ns_user(u, k));
+      for (const char* k : {"facts", "episodes", "chat", "checkpoints", "cases"}) nss.push_back(harness::ns_user(u, k));
   }
   long total = 0, bytes = 0;
   std::printf("%-40s %8s %10s\n", "namespace", "memories", "bytes");
@@ -191,13 +193,24 @@ void print_event(const json& e) {
   std::fflush(stdout);
 }
 
+// Host-mode agents call `saga mem` through this socket. The delegate key stays in `mw`.
+std::unique_ptr<memwal::Gate> open_gate(memwal::Client* mw, harness::Options& o) {
+  if (!mw || o.user_accounts) return nullptr;
+  auto gate = std::make_unique<memwal::Gate>(*mw);
+  o.mem_sock = gate->path();
+  return gate;
+}
+
 int cmd_chat(const Args& a) {
   std::unique_ptr<memwal::Client> mw;
   if (!a.has("no-memory")) mw = std::make_unique<memwal::Client>(memwal_config());
+  harness::Options ho = harness_options(a);
+  auto gate = open_gate(mw.get(), ho);
   memwal::Store store(mw.get(), mw != nullptr);
   auto reg = agents::Registry::load(a.get("config", "saga.json"));
-  harness::Harness h(reg, store, harness_options(a));
+  harness::Harness h(reg, store, ho);
   h.boot(print_event);
+  (void)gate;
   const std::string uid = a.get("user", env::get("SAGA_USER", "cli"));
   const std::string session = uid + "-" + crypto::uuid4().substr(0, 6);
   std::printf("saga chat as '%s' (memory %s). /good, /bad <why>, /quit\n", uid.c_str(), mw ? "on" : "off");
@@ -237,8 +250,11 @@ int cmd_ab(const Args& a) {
   for (bool with_memory : {false, true}) {
     std::unique_ptr<memwal::Client> mw;
     if (with_memory) mw = std::make_unique<memwal::Client>(memwal_config());
+    harness::Options ho = harness_options(a);
+    auto gate = open_gate(mw.get(), ho);
     memwal::Store store(mw.get(), with_memory);
-    harness::Harness h(reg, store, harness_options(a));
+    harness::Harness h(reg, store, ho);
+    (void)gate;
     h.boot();
     const std::string uid = "ab-" + crypto::uuid4().substr(0, 8);
     const std::string label = with_memory ? "WITH Walrus Memory" : "WITHOUT memory";
@@ -277,18 +293,59 @@ int cmd_ab(const Args& a) {
   return 0;
 }
 
-// ---- mem: the memory API agents call from their shell ----------------------------------
-int cmd_mem(const Args& a) {
-  if (a.pos.size() < 2) {
-    std::puts("usage: saga mem recall \"<query>\" [--ns NS] [--limit N]\n       saga mem remember \"<text>\" [--ns NS]");
+// ---- evolve: one playbook evolution now, gated by replay on a user's rated turns ------
+int cmd_evolve(const Args& a) {
+  if (a.pos.empty()) {
+    std::puts("usage: saga evolve \"<critique>\" [\"<critique>\"…] [--user NAME]");
     return 2;
   }
   memwal::Client mw(memwal_config());
+  auto reg = agents::Registry::load(a.get("config", "saga.json"));
+  harness::Options ho = harness_options(a);
+  auto gate = open_gate(&mw, ho);
+  memwal::Store store(&mw, true);
+  harness::Harness h(reg, store, ho);
+  h.boot();
+  const json r = h.evolve_now(a.get("user", env::get("SAGA_USER", "cli")), a.pos);
+  std::printf("%s\n", r.dump(2).c_str());
+  store.flush(std::chrono::seconds(90));
+  return r.contains("error") ? 1 : 0;
+}
+
+// ---- mem: the memory API agents call from their shell ----------------------------------
+int cmd_mem(const Args& a) {
+  if (a.pos.size() < 2) {
+    std::puts("usage: saga mem recall \"<query>\" [--ns NS] [--limit N] [--recent]\n       saga mem remember \"<text>\" [--ns NS]");
+    return 2;
+  }
   const std::string uid = env::get("SAGA_UID", "cli");
   const std::string ns = a.get("ns", harness::ns_user(uid, "facts"));
   const std::string& op = a.pos[0];
+  if (const std::string sock = env::get("SAGA_MEM_SOCK"); !sock.empty()) {
+    const json res = memwal::gate_transact(sock, {{"op", op}, {"text", a.pos[1]}, {"ns", ns}, {"limit", std::stoi(a.get("limit", "8"))}});
+    if (!res.value("ok", false)) {
+      const std::string err = res.value("error", "failed");
+      std::fprintf(stderr, "saga mem: %s\n", err.c_str());
+      return err.find("harness:") != std::string::npos || (op != "recall" && op != "remember") ? 2 : 1;
+    }
+    if (op == "recall") {
+      auto hits = res.value("hits", json::array());
+      if (!hits.is_array() || hits.empty()) std::printf("(no memories in %s match)\n", ns.c_str());
+      for (auto& m : hits)
+        std::printf("- %s  [distance %.2f, blob %s]\n", m.value("text", "").c_str(), m.value("distance", 0.0),
+                    m.value("blob_id", "").c_str());
+      return 0;
+    }
+    if (op == "remember") {
+      std::printf("%s %s blob=%s\n", res.value("status", "").c_str(), ns.c_str(), res.value("blob_id", "").c_str());
+      return res.value("status", "") == "done" ? 0 : 1;
+    }
+    std::fprintf(stderr, "saga mem: unknown op %s\n", op.c_str());
+    return 2;
+  }
+  memwal::Client mw(memwal_config());
   if (op == "recall") {
-    auto hits = mw.recall(a.pos[1], ns, {.limit = std::stoi(a.get("limit", "8"))});
+    auto hits = mw.recall(a.pos[1], ns, {.limit = std::stoi(a.get("limit", "8")), .recent = a.has("recent")});
     if (hits.empty()) std::printf("(no memories in %s match)\n", ns.c_str());
     for (auto& m : hits) std::printf("- %s  [distance %.2f, blob %s]\n", m.text.c_str(), m.distance, m.blob_id.c_str());
     return 0;
@@ -331,9 +388,11 @@ int cmd_serve(const Args& a) {
 
   std::unique_ptr<memwal::Client> mw;
   if (!a.has("no-memory")) mw = std::make_unique<memwal::Client>(memwal_config());
+  auto gate = open_gate(mw.get(), ho);
   memwal::Store store(mw.get(), mw != nullptr);
   auto reg = agents::Registry::load(a.get("config", "saga.json"));
   harness::Harness h(reg, store, ho);
+  (void)gate;
   h.boot(print_event);
   o.port = std::stoi(a.get("port", env::get("SAGA_PORT", std::to_string(o.port))));
   o.access_code = env::get("SAGA_ACCESS_CODE");
@@ -367,6 +426,7 @@ void usage() {
       "  stats   [user…]                             memories/blobs per namespace\n"
       "  restore <namespace…> [--limit N]            rebuild relayer index from Walrus\n"
       "  ab      [--out FILE]                        before/after memory experiment\n"
+      "  evolve  \"critique\"… [--user NAME]          evolve the playbook now, replay-gated\n"
       "  mem     recall|remember \"text\" [--ns NS]    memory API used by agents from their shell\n\n"
       "common: --config saga.json  --workspaces DIR");
 }
@@ -383,6 +443,7 @@ int main(int argc, char** argv) {
     if (a.cmd == "stats") return cmd_stats(a);
     if (a.cmd == "restore") return cmd_restore(a);
     if (a.cmd == "ab") return cmd_ab(a);
+    if (a.cmd == "evolve") return cmd_evolve(a);
     if (a.cmd == "mem") return cmd_mem(a);
     usage();
     return a.cmd.empty() || a.cmd == "help" ? 0 : 2;

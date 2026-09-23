@@ -1,6 +1,6 @@
-# Saga: agents that remember, on Walrus
+# Saga: agents that remember, chat that improve, on Walrus
 
-Saga is a self-improving, multi-agent **harness** written in C++20. You plug in the coding agents you already
+Saga is a self-improving, multi-agent **harness** written in C++23. You plug in the coding agents you already
 use, **Claude Code, Codex and Grok**, plus any **OpenAI-compatible API** (xAI, OpenRouter, Groq, Ollama,
 llama.cpp). You then hand work between them with `@mentions`:
 
@@ -26,7 +26,8 @@ Built for the Walrus **"Chatbots That Remember"** hackathon. The design draws on
 | `task:<turn>` | after every agent step | **cross-agent blackboard**: `@codex` sees what `@claude` built, and why |
 | `agent:<name>:lessons` | reflection after 👍/👎 or an automatic failure | injected only into that agent's context (Reflexion) |
 | `harness:skills` | a 👍 on a successful multi-step turn | recalled for similar future requests (Voyager) |
-| `harness:prompts`, `harness:scores` | prompt mutation / every rating | the system prompt served each turn is Thompson-sampled from this population (GEPA) |
+| `harness:prompts`, `harness:scores` | prompt evolution / every rating and credit tag | the system prompt (base + playbook rules) served each turn is Thompson-sampled from the live versions |
+| `u:<you>:cases` | every rated turn, explicit or implicit | replayed to test a new prompt version before it goes live |
 
 At boot Saga calls `restore()` on the hot namespaces. The relayer's vector index is only a cache, and
 Walrus is the source of truth.
@@ -37,15 +38,27 @@ Walrus is the source of truth.
  user msg ─► recall facts / episodes / skills / lessons ─► assemble context (prompt vN) ─► @agents
     ▲                                                                                        │
     │        👍/👎 + comment                                                                  ▼
-    └── Thompson-sample prompt ◄── GEPA mutation ◄── critiques ◄── reflection (brain) ◄── trace
-                     (harness:prompts)           lessons → agent:*:lessons   skills → harness:skills
+    └── Thompson-sample ◄── replay gate ◄── playbook edit ◄── critiques ◄── reflection ◄── trace
+        live versions      (child vs parent,  (add/edit/remove              (brain)    + signals:
+                           blind judge)        rules, ACE)                               👍/👎, "no, …",
+                                                                                         "thanks", PR opened
 ```
 
-* **Reflexion**: a thumbs rating, or an agent failure, triggers a reflection pass. It writes lessons for
-  the specific agent involved.
-* **GEPA-style prompt evolution**: every `SAGA_EVOLVE_EVERY` critiques (default 3), the brain proposes a
-  child of the best-scoring system prompt. Serving uses Thompson sampling over 👍/👎 tallies, so a bad
-  mutation loses traffic on its own.
+* **Signals, not just thumbs**: a 👍/👎 counts, and so does what the user does next. A reply that
+  starts with "no, …" or "that's wrong" is an implicit 👎 on the previous answer, "thanks" or "perfect"
+  is an implicit 👍, and opening a pull request from a chat is a 👍 on its last turn. Every rated turn
+  is kept as a replay case in the user's own namespace.
+* **Reflexion**: each signal triggers a reflection pass. It writes lessons for the specific agent
+  involved and says which playbook rules and lessons in context helped or hurt. A rule or lesson that
+  hurts at least twice, and more often than it helps, stops being used.
+* **Playbook, not rewrites** (ACE): the system prompt is a fixed base plus short rules. Every
+  `SAGA_EVOLVE_EVERY` critiques (default 3), the brain proposes at most three add/edit/remove edits,
+  so rules that work can't be lost in a rewrite.
+* **Replay gate** (Darwin Gödel Machine, GEPA): before a new version serves anyone, it answers the
+  user's own rated past messages next to its parent, and a judge picks the better answer blind, in
+  shuffled order. A version that loses more than it wins is kept as `rejected` and never served.
+  Among live versions, Thompson sampling over 👍/👎 decides the traffic. `saga evolve "<critique>"
+  --user NAME` runs one evolution on demand.
 * **Skills**: a successful multi-agent procedure is distilled into a recallable skill.
 
 ## Quick start
@@ -182,6 +195,8 @@ compiled as DAIR.AI's [Harness Engineering collection](https://academy.dair.ai/p
 * Packer et al., *MemGPT* (2023): memory as managed, tiered context. [arXiv:2310.08560](https://arxiv.org/abs/2310.08560)
 * Talebirad & Nadiri, *Multi-Agent Collaboration* (2023): addressable agents with roles, here `@mentions`. [arXiv:2306.03314](https://arxiv.org/abs/2306.03314)
 * Khattab et al., *DSPy* (2023) and Agrawal et al., *GEPA* (2025): the system prompt as an optimised artifact, evolved from failed traces. [arXiv:2310.03714](https://arxiv.org/abs/2310.03714), [arXiv:2507.19457](https://arxiv.org/abs/2507.19457)
+* Zhang et al., *Agentic Context Engineering* (2025): an evolving playbook of rules with helpful/harmful counters, edited in small deltas to avoid context collapse. [arXiv:2510.04618](https://arxiv.org/abs/2510.04618)
+* Zhang et al., *Darwin Gödel Machine* (2025): a self-modification is kept only after it is validated on real tasks. [arXiv:2505.22954](https://arxiv.org/abs/2505.22954)
 * Lee et al., *Meta-Harness* (2026) and Karten et al., *Continual Harness* (2026): adapting the harness online around fixed weights. [arXiv:2603.28052](https://arxiv.org/abs/2603.28052), [arXiv:2605.09998](https://arxiv.org/abs/2605.09998)
 
 ## License

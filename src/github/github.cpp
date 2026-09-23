@@ -1,3 +1,4 @@
+#include <cctype>
 #include "github/github.h"
 
 #include "core/crypto.h"
@@ -88,6 +89,36 @@ json device_poll(const std::string& client_id, const std::string& device_code) {
                            json{{"client_id", client_id},
                                 {"device_code", device_code},
                                 {"grant_type", "urn:ietf:params:oauth:grant-type:device_code"}}
+                               .dump(),
+                           {{"Accept", "application/json"}});
+  auto j = json::parse(r.body, nullptr, false);
+  return j.is_object() ? j : json{{"error", "bad_response"}};
+}
+
+namespace {
+std::string url_escape(const std::string& s) {
+  static const char* hex = "0123456789ABCDEF";
+  std::string out;
+  for (unsigned char c : s) {
+    if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += static_cast<char>(c);
+    else out += {'%', hex[c >> 4], hex[c & 15]};
+  }
+  return out;
+}
+}  // namespace
+
+std::string authorize_url(const std::string& client_id, const std::string& redirect_uri, const std::string& state) {
+  return "https://github.com/login/oauth/authorize?client_id=" + url_escape(client_id) + "&redirect_uri=" +
+         url_escape(redirect_uri) + "&scope=repo&state=" + url_escape(state) + "&allow_signup=true";
+}
+
+json exchange_code(const std::string& client_id, const std::string& client_secret, const std::string& code,
+                   const std::string& redirect_uri) {
+  auto r = http::post_json("https://github.com/login/oauth/access_token",
+                           json{{"client_id", client_id},
+                                {"client_secret", client_secret},
+                                {"code", code},
+                                {"redirect_uri", redirect_uri}}
                                .dump(),
                            {{"Accept", "application/json"}});
   auto j = json::parse(r.body, nullptr, false);

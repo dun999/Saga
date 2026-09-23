@@ -19,6 +19,8 @@ namespace saga::memwal {
 struct WriteRecord {
   std::string ns, kind, text, job_id, blob_id, status = "queued", error;
   int64_t ts = 0;
+  int attempts = 0;        // transient relayer failures are retried with backoff
+  int64_t retry_at = 0;    // unix seconds; 0 = now
   json to_json() const;
 };
 
@@ -52,6 +54,9 @@ class Store {
 
  private:
   void worker();
+  // A transient failure (relayer or SEAL backend briefly down) goes back on the queue instead of
+  // being dropped. Returns false once the write has used its attempts or the error is permanent.
+  bool retry_later(WriteRecord& r);
   void notify(const WriteRecord& r);
 
   Client* client_;

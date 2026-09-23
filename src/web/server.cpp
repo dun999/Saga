@@ -3,6 +3,7 @@
 #include <httplib.h>
 
 #include <algorithm>
+#include <cctype>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
@@ -10,6 +11,7 @@
 #include <thread>
 
 #include "core/crypto.h"
+#include "core/env.h"
 #include "core/secrets.h"
 
 namespace saga::web {
@@ -192,6 +194,9 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     send_json(res, s);
   });
 
+  svr.Get("/api/memory/stats", [&](const httplib::Request& req, httplib::Response& res) {
+    send_json(res, h.memory_stats(uid_of(req, res)));
+  });
   svr.Get("/api/memory", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string uid = uid_of(req, res);
     send_json(res, h.memory_view(uid, req.get_param_value("q")));
@@ -251,6 +256,15 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     auto r = h.add_agent(uid_of(req, res), j, vault_of(req));
     send_json(res, r, r.contains("error") ? 400 : 200);
   });
+  svr.Get("/api/models", [&](const httplib::Request& req, httplib::Response& res) {
+    send_json(res, h.models_view(uid_of(req, res)));
+  });
+  svr.Post("/api/agents/model", [&](const httplib::Request& req, httplib::Response& res) {
+    auto j = json::parse(req.body, nullptr, false);
+    if (!j.is_object()) j = json::object();
+    const json r = h.set_model(uid_of(req, res), j.value("agent", ""), j.value("model", ""));
+    send_json(res, r, r.contains("error") ? 400 : 200);
+  });
   svr.Post("/api/agents/remove", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
     send_json(res, h.remove_agent(uid_of(req, res), j.is_object() ? j.value("name", "") : ""));
@@ -270,6 +284,34 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   });
   svr.Post("/api/github/device", [&](const httplib::Request& req, httplib::Response& res) {
     reply(res, h.github_device(uid_of(req, res), vault_of(req)));
+  });
+  // "Connect GitHub": off to github.com to authorize, back via the callback, then the app finishes the
+  // exchange in a same-site request, the only kind that carries the (SameSite=Strict) vault cookie.
+  auto site_of = [](const httplib::Request& req) {
+    if (auto u = env::get("SAGA_PUBLIC_URL"); !u.empty()) return u;
+    const std::string proto = req.get_header_value("X-Forwarded-Proto");
+    return (proto.empty() ? "http" : proto) + "://" + req.get_header_value("Host");
+  };
+  svr.Get("/api/github/login", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string state = crypto::uuid4();
+    const std::string url = h.github_authorize_url(site_of(req) + "/api/github/callback", state);
+    if (url.empty()) return res.set_redirect("/app?gh_error=not_configured");
+    res.set_header("Set-Cookie", "saga_gh_state=" + state + "; Path=/; Max-Age=600; HttpOnly; SameSite=Lax");
+    res.set_redirect(url);
+  });
+  svr.Get("/api/github/callback", [&](const httplib::Request& req, httplib::Response& res) {
+    // Only [A-Za-z0-9-] ever comes back from GitHub here; anything else is dropped rather than echoed.
+    auto clean = [](std::string s) { std::erase_if(s, [](char c) { return !std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_'; }); return s.substr(0, 200); };
+    if (req.has_param("error")) return res.set_redirect("/app?gh_error=" + clean(req.get_param_value("error")));
+    res.set_redirect("/app?gh_code=" + clean(req.get_param_value("code")) + "&gh_state=" + clean(req.get_param_value("state")));
+  });
+  svr.Post("/api/github/finish", [&](const httplib::Request& req, httplib::Response& res) {
+    const json j = body_of(req);
+    const std::string state = cookie(req, "saga_gh_state");
+    if (state.empty() || j.value("state", "") != state) return send_json(res, {{"error", "that GitHub sign-in expired — try Connect again"}}, 400);
+    const std::string uid = uid_of(req, res);
+    res.set_header("Set-Cookie", "saga_gh_state=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+    reply(res, h.github_oauth_finish(uid, j.value("code", ""), site_of(req) + "/api/github/callback", vault_of(req)));
   });
   svr.Post("/api/github/disconnect", [&](const httplib::Request& req, httplib::Response& res) {
     send_json(res, h.github_disconnect(uid_of(req, res)));

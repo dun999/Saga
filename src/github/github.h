@@ -30,4 +30,9 @@ std::map<std::string, std::string> git_env(const std::string& token);
 json device_start(const std::string& client_id);   // {device_code, user_code, verification_uri, interval}
 json device_poll(const std::string& client_id, const std::string& device_code);  // {access_token} | {error}
 
+// OAuth web flow: the user authorizes on github.com and is sent back with a code, traded here for a token.
+std::string authorize_url(const std::string& client_id, const std::string& redirect_uri, const std::string& state);
+json exchange_code(const std::string& client_id, const std::string& client_secret, const std::string& code,
+                   const std::string& redirect_uri);  // {access_token} | {error}
+
 }  // namespace saga::github

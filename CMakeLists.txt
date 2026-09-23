@@ -1,11 +1,19 @@
 cmake_minimum_required(VERSION 3.24)
 project(saga VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+# C++23: among other things, a range-for keeps its initializer's temporaries alive (P2718).
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
+
+# -DSAGA_SANITIZE=ON: AddressSanitizer + UndefinedBehaviorSanitizer for tests and smoke runs.
+option(SAGA_SANITIZE "Build with ASan and UBSan" OFF)
+if(SAGA_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined)
+  add_link_options(-fsanitize=address,undefined)
 endif()
 
 include(FetchContent)

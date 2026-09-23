@@ -33,6 +33,7 @@ struct Task {
   // `workspace` is the in-sandbox path.
   const sandbox::Sandbox* sandbox = nullptr;
   std::string api_key;  // a user's own API key, unsealed for this call only
+  std::string model;    // the user's pick for this agent; empty = the configured default
 };
 
 struct Result {
@@ -70,6 +71,7 @@ class Agent {
   virtual ~Agent() = default;
   const Spec& spec() const { return spec_; }
   const std::string& name() const { return spec_.name; }
+  const std::string& model_for(const Task& t) const { return t.model.empty() ? spec_.model : t.model; }
   virtual bool can_edit_files() const { return true; }
   // Empty string when usable, else the reason it is not.
   virtual std::string unavailable_reason() const = 0;

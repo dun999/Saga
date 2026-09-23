@@ -1,6 +1,8 @@
 #include "harness/harness.h"
+#include "memwal/redact.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -112,6 +114,7 @@ std::optional<json> parse_json_object(const std::string& text) {
 
 }  // namespace
 
+json model_options(const std::string& kind);
 std::string ns_user(const std::string& uid, const char* what) { return "u:" + uid + ":" + what; }
 std::string ns_lessons(const std::string& agent) { return "agent:" + agent + ":lessons"; }
 
@@ -131,6 +134,10 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
       "- harness:skills, harness:prompts, harness:improvements — how Saga improves itself\n"
       "- task:<turn> — the blackboard shared with teammates this turn\n"
       "Transcripts, checkpoints and episodes are saved automatically; you never need to save your own output.\n"
+      "Never put a secret in memory: no passwords, API keys, tokens, private keys, seed phrases or anything that "
+      "grants access. Memory is recalled into future conversations, possibly by someone else using this identity. "
+      "If the user shares one, use it only for the task at hand, don't repeat it back, don't #remember it, and "
+      "tell them it won't be kept. Saga also strips recognisable secrets before anything reaches Walrus.\n"
       "To save a NEW durable fact the user told you (preference, goal, constraint, name), write it on its own "
       "line as:\n#remember <one self-contained fact, third person, e.g. \"User deploys to Fly.io\">\n"
       "Use it sparingly, only for things worth knowing in a future conversation. Never store secrets, keys or "
@@ -148,13 +155,17 @@ Harness::Harness(agents::Registry& reg, memwal::Store& store, Options opt)
     : reg_(reg), store_(store), opt_(std::move(opt)), prompts_(store) {}
 
 Harness::~Harness() {
-  std::vector<std::thread> bg;
-  {
-    std::lock_guard lk(mu_);
-    bg.swap(background_);
+  // Background work can queue more of it (reflection → evolution), so drain until nothing is left.
+  for (;;) {
+    std::vector<std::thread> bg;
+    {
+      std::lock_guard lk(mu_);
+      bg.swap(background_);
+    }
+    if (bg.empty()) break;
+    for (auto& t : bg)
+      if (t.joinable()) t.join();
   }
-  for (auto& t : bg)
-    if (t.joinable()) t.join();
 }
 
 void Harness::boot(const Emit& log) {
@@ -184,15 +195,27 @@ void Harness::boot(const Emit& log) {
   say("prompt population: " + std::to_string(s["versions"].size()) + " version(s)");
 }
 
-std::string Harness::build_context(const Turn& t, const agents::Agent& agent, const std::string& instruction,
+std::string Harness::build_context(Turn& t, const agents::Agent& agent, const std::string& instruction,
                                    const std::vector<memwal::Memory>& facts,
                                    const std::vector<memwal::Memory>& episodes,
                                    const std::vector<memwal::Memory>& skills, const Emit& emit) {
-  auto lessons = store_.recall(instruction, ns_lessons(agent.name()), {.limit = 4, .max_distance = 0.7});
+  auto lessons = store_.recall(instruction, ns_lessons(agent.name()), {.limit = 6, .max_distance = 0.7});
+  // A lesson that keeps hurting stays on Walrus but stops being used.
+  std::erase_if(lessons, [&](const memwal::Memory& m) { return prompts_.credit_of("lesson:" + m.blob_id).muted(); });
+  if (lessons.size() > 4) lessons.resize(4);
   if (!lessons.empty() && emit)
     emit({{"type", "recall"}, {"ns", ns_lessons(agent.name())}, {"items", memories_json(lessons)}});
 
-  std::string c = prompts_.get(t.prompt_version).prompt + "\n\n";
+  const PromptVersion& pv = prompts_.get(t.prompt_version);
+  auto note = [&](const std::string& id, const std::string& text) {
+    if (std::none_of(t.in_context.begin(), t.in_context.end(), [&](auto& x) { return x.first == id; }))
+      t.in_context.push_back({id, text});
+  };
+  for (auto& r : pv.rules) note(r.id, r.text);
+  for (auto& m : lessons)
+    if (!m.blob_id.empty()) note("lesson:" + m.blob_id, m.text);
+
+  std::string c = pv.prompt + "\n\n";
   c += "## Team\nYou are @" + agent.name() + " in a Saga team working for one user. Teammates:";
   for (auto& r : reg_.roster(t.uid))
     if (r["name"] != agent.name() && r["unavailable"].get<std::string>().empty())
@@ -214,6 +237,7 @@ std::string Harness::build_context(const Turn& t, const agents::Agent& agent, co
   section("Relevant past episodes", episodes);
   section(("Lessons learned for @" + agent.name()).c_str(), lessons);
   section("Skills that worked before", skills);
+  c += t.history;
   c += repo_context(t);
   // Shell access to memory needs the Walrus delegate key, which never enters a user's sandbox.
   c += memory_protocol(t.uid, agent.name(), agent.can_edit_files() && !opt_.user_accounts, opt_.saga_bin);
@@ -237,7 +261,11 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
   auto run_on = [&](agents::Agent* a) {
     agents::Task task{s.instruction, context, sbp ? sandbox::kWork : t.workspace, t.cancel.get(),
                       opt_.agent_timeout_s, {}, sbp};
-    if (!sbp) task.env = {{"SAGA_UID", t.uid}, {"SAGA_BIN", opt_.saga_bin}};
+    if (!sbp) {
+      task.env = {{"SAGA_UID", t.uid}, {"SAGA_BIN", opt_.saga_bin}};
+      if (!opt_.mem_sock.empty()) task.env["SAGA_MEM_SOCK"] = opt_.mem_sock;
+    }
+    task.model = model_pick(t.uid, a->name());
     if (!a->spec().owner.empty())  // the user's own API agent: unseal its key for this call only
       task.api_key = open_slot(read_keys(opt_.keys_path).value(t.uid, json::object()).value(a->name(), json()), t.vault);
     return a->run(task, [&](const agents::Event& e) {
@@ -289,9 +317,19 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   t->workspace = workspace_for(uid, session);
   fs::create_directories(t->workspace);
   t->prompt_version = prompts_.choose().v;
+  // Implicit feedback: the next message often says how the last answer went ("no, that's wrong", "thanks").
+  if (auto prev = last_turn(uid, session); prev && prev->done)
+    if (const int sig = followup_signal(message); sig != 0)
+      rate_later(prev, sig, "(implicit: the user's next message was \"" + clip(message, 200) + "\")");
   {
     std::lock_guard lk(mu_);
     turns_[t->id] = t;
+  }
+  // Follow-ups ("make it shorter", "no, the other one") only make sense next to what came before.
+  t->history = session_history(uid, session);
+  {
+    std::lock_guard lk(mu_);
+    session_turns_[uid + "/" + session].push_back(t->id);
   }
   if (emit) emit({{"type", "turn"}, {"turn_id", t->id}, {"prompt_version", t->prompt_version}, {"workspace", t->workspace}});
 
@@ -414,6 +452,7 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
                                             {"user", clip(message, 4000)}, {"steps", steps},
                                             {"prompt_version", t->prompt_version}}));
 
+  t->done = true;
   if (emit) emit({{"type", "done"}, {"turn_id", t->id}, {"final", clip(final_text, 20000)}});
   return t->id;
 }
@@ -429,6 +468,12 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment) {
     trace += "@" + s.agent + " ← \"" + clip(s.instruction, 300) + "\" (" + std::to_string(int(s.seconds)) + "s" +
              (s.fallback ? ", fallback" : "") + ")\n" +
              (s.error.empty() ? clip(s.output, 1800) : "ERROR: " + clip(s.error, 400)) + "\n\n";
+  if (!t.in_context.empty()) {
+    trace += "RULES AND LESSONS IN THE AGENTS' CONTEXT:\n";
+    for (size_t i = 0; i < t.in_context.size(); ++i)
+      trace += "[r" + std::to_string(i + 1) + "] " + clip(t.in_context[i].second, 240) + "\n";
+    trace += "\n";
+  }
   trace += "USER RATING: " + std::string(rating > 0 ? "👍 good" : "👎 bad") + "\nUSER COMMENT: " +
            (comment.empty() ? "(none)" : comment) + "\n";
 
@@ -439,14 +484,24 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment) {
       "change future behaviour. Never restate the task; write reusable guidance. Reply with JSON only:\n"
       "{\"lessons\":[{\"agent\":\"<agent name>\",\"lesson\":\"...\"}],"
       "\"skill\":null or {\"name\":\"...\",\"when\":\"...\",\"how\":\"numbered steps incl. which @agents\"},"
-      "\"critique\":\"what the system prompt should do differently, or empty if the turn was good\"}\n"
+      "\"critique\":\"what the system prompt should do differently, or empty if the turn was good\","
+      "\"credit\":{\"r1\":\"helpful\" or \"harmful\"}}\n"
+      "In credit, name only listed rules and lessons that clearly helped or hurt this turn; omit the rest.\n"
       "Only emit a skill for a successful multi-step procedure worth reusing. At most 3 lessons.",
       trace, sb ? &*sb : nullptr);
   if (!r.ok) return {{"error", r.error}};
   auto j = parse_json_object(r.text);
   if (!j) return {{"error", "reflection was not JSON"}, {"raw", clip(r.text, 400)}};
 
-  json out = {{"lessons", json::array()}, {"skill", nullptr}, {"critique", ""}};
+  json out = {{"lessons", json::array()}, {"skill", nullptr}, {"critique", ""}, {"credit", json::array()}};
+  if (auto cr = j->value("credit", json::object()); cr.is_object())
+    for (auto& [label, verdict] : cr.items()) {
+      const size_t i = label.size() > 1 ? std::strtoul(label.c_str() + 1, nullptr, 10) : 0;
+      if (i == 0 || i > t.in_context.size() || !verdict.is_string()) continue;
+      const bool helpful = verdict.get<std::string>() == "helpful";
+      prompts_.credit(t.in_context[i - 1].first, helpful);
+      out["credit"].push_back({{"text", clip(t.in_context[i - 1].second, 160)}, {"helpful", helpful}});
+    }
   for (auto& l : j->value("lessons", json::array())) {
     std::string agent = l.value("agent", reg_.primary()->name());
     if (agent.starts_with("@")) agent.erase(0, 1);
@@ -468,9 +523,8 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment) {
     prompts_.add_critique(critique);
     out["critique"] = critique;
     if (static_cast<int>(prompts_.pending_critiques()) >= opt_.evolve_every) {
-      std::string why;
-      const int v = prompts_.evolve(*brain, &why, sb ? &*sb : nullptr);
-      out["evolved"] = {{"version", v}, {"why", why}};
+      evolve_in_background(t.uid, t.vault);
+      out["evolving"] = true;
     }
   }
   // The improvement itself is part of the record: what the harness learned, from which turn.
@@ -487,15 +541,117 @@ json Harness::feedback(const std::string& turn_id, int rating, const std::string
     auto it = turns_.find(turn_id);
     if (it == turns_.end()) return {{"error", "unknown turn (feedback is only accepted in the session that ran it)"}};
     t = it->second;
-    if (t->rating != 0) return {{"error", "already rated"}};
-    t->rating = rating;
+    if (t->user_rated) return {{"error", "already rated"}};
   }
-  prompts_.score(t->prompt_version, rating);
   // What users say about answers is itself a preference worth remembering ("shorter please").
   if (!comment.empty()) store_.analyze(ns_user(t->uid, "facts"), "Feedback from the user about an answer: " + comment);
+  return rate(t, rating, comment, false);
+}
+
+json Harness::rate(const std::shared_ptr<Turn>& t, int rating, const std::string& comment, bool implicit) {
+  {
+    std::lock_guard lk(mu_);
+    if (t->user_rated || (implicit && t->rating != 0)) return {{"error", "already rated"}};
+    t->rating = rating;
+    t->user_rated = !implicit;
+  }
+  prompts_.score(t->prompt_version, rating, implicit);
+  // Every rated turn becomes a replay case: a new prompt version has to handle it at least as well.
+  std::string memory, answer;
+  for (size_t i = 0; i < t->recalled.size() && i < 8; ++i) memory += "- " + clip(t->recalled[i], 300) + "\n";
+  if (!t->steps.empty() && t->steps.back().error.empty()) answer = t->steps.back().output;
+  store_.put(ns_user(t->uid, "cases"), "case",
+             memwal::encode_record("case", {{"ts", std::time(nullptr)}, {"message", clip(t->message, 1500)},
+                                            {"memory", memory}, {"answer", clip(answer, 2500)}, {"rating", rating},
+                                            {"comment", clip(comment, 300)}, {"prompt_version", t->prompt_version}}));
   json out = reflect(*t, rating, comment);
   out["prompt_version"] = t->prompt_version;
+  out["implicit"] = implicit;
   return out;
+}
+
+void Harness::rate_later(const std::shared_ptr<Turn>& t, int rating, const std::string& why) {
+  std::lock_guard lk(mu_);
+  background_.emplace_back([this, t, rating, why] { rate(t, rating, why, true); });
+}
+
+std::shared_ptr<Turn> Harness::last_turn(const std::string& uid, const std::string& session) {
+  std::lock_guard lk(mu_);
+  auto it = session_turns_.find(uid + "/" + session);
+  if (it == session_turns_.end() || it->second.empty()) return nullptr;
+  auto t = turns_.find(it->second.back());
+  return t == turns_.end() ? nullptr : t->second;
+}
+
+std::string Harness::session_history(const std::string& uid, const std::string& session) {
+  constexpr size_t kTurns = 4;
+  std::vector<std::pair<std::string, std::string>> ex;  // user message, final answer
+  {
+    std::lock_guard lk(mu_);
+    if (auto it = session_turns_.find(uid + "/" + session); it != session_turns_.end())
+      for (auto& id : it->second)
+        if (auto t = turns_.find(id); t != turns_.end() && t->second->done && !t->second->steps.empty())
+          ex.push_back({t->second->message, t->second->steps.back().agent + ": " +
+                                                (t->second->steps.back().error.empty() ? t->second->steps.back().output
+                                                                                       : "(failed)")});
+  }
+  if (ex.empty()) {  // a chat reopened after a restart: its transcript is on Walrus
+    for (auto& r : chat_transcript(uid, session)["turns"]) {
+      const json steps = r.value("steps", json::array());
+      if (!steps.empty()) ex.push_back({r.value("user", ""), steps.back().value("agent", "") + ": " + steps.back().value("output", "")});
+    }
+  }
+  if (ex.empty()) return "";
+  std::string h = "\n## This conversation so far\n";
+  for (size_t i = ex.size() > kTurns ? ex.size() - kTurns : 0; i < ex.size(); ++i)
+    h += "User: " + clip(ex[i].first, 600) + "\n@" + clip(ex[i].second, 1200) + "\n";
+  return h;
+}
+
+std::vector<ReplayCase> Harness::replay_cases(const std::string& uid) {
+  // Bad turns are what a new version should fix; good ones guard against breaking what worked.
+  std::vector<ReplayCase> bad, good;
+  for (auto& r : recall_records(ns_user(uid, "cases"), "case", "rated turn replay case", 20)) {
+    ReplayCase c{r.value("message", ""), r.value("memory", ""), r.value("answer", ""), r.value("comment", ""),
+                 r.value("rating", 0)};
+    if (c.message.empty()) continue;
+    (c.rating < 0 ? bad : good).push_back(std::move(c));
+  }
+  if (bad.size() > 3) bad.resize(3);
+  for (auto& c : good)
+    if (bad.size() < 5) bad.push_back(std::move(c));
+  return bad;
+}
+
+json Harness::evolve_now(const std::string& uid, const std::vector<std::string>& critiques) {
+  agents::Agent* brain = reg_.brain();
+  if (!brain) return {{"error", "no brain configured"}};
+  for (auto& c : critiques) prompts_.add_critique(c);
+  const auto cases = replay_cases(uid);
+  const auto sb = sandbox_for(uid, "", {});
+  json r = prompts_.evolve(*brain, cases, sb ? &*sb : nullptr);
+  if (!r.contains("error"))
+    store_.put(kImprovementsNs, "improvement",
+               memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"rating", 0}, {"result", {{"evolved", r}}}}));
+  r["replay_cases"] = cases.size();
+  return r;
+}
+
+void Harness::evolve_in_background(const std::string& uid, const secrets::Key& vault) {
+  if (evolving_.exchange(true)) return;  // one evolution at a time; critiques keep queueing
+  std::lock_guard lk(mu_);
+  background_.emplace_back([this, uid, vault] {
+    json r = {{"error", "no brain configured"}};
+    if (agents::Agent* brain = reg_.brain()) {
+      const auto sb = sandbox_for(uid, "", vault);
+      r = prompts_.evolve(*brain, replay_cases(uid), sb ? &*sb : nullptr);
+    }
+    if (!r.contains("error"))
+      store_.put(kImprovementsNs, "improvement",
+                 memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"rating", 0},
+                                                       {"result", {{"evolved", r}}}}));
+    evolving_ = false;
+  });
 }
 
 bool Harness::cancel(const std::string& turn_id) {
@@ -527,6 +683,20 @@ json Harness::memory_view(const std::string& uid, const std::string& query) {
   };
 }
 
+json Harness::memory_stats(const std::string& uid) {
+  long blobs = 0, bytes = 0;
+  if (auto* c = store_.enabled() ? store_.client() : nullptr)
+    for (const char* k : {"facts", "episodes", "chat", "checkpoints", "settings", "cases"}) {
+      try {
+        const json s = c->stats(ns_user(uid, k));
+        blobs += s.value("memory_count", 0L);
+        bytes += s.value("storage_bytes", 0L);
+      } catch (const std::exception&) {  // a namespace that was never written has no stats
+      }
+    }
+  return {{"blobs", blobs}, {"bytes", bytes}};
+}
+
 json Harness::state() const {
   json writes = json::array();
   for (auto& w : store_.recent(30)) writes.push_back(w.to_json());
@@ -553,6 +723,11 @@ void Harness::apply_directives(Turn& t, const Step& s, const Emit& emit) {
     fact.erase(0, fact.find_first_not_of(" :\t"));
     while (!fact.empty() && (fact.back() == '`' || fact.back() == ' ' || fact.back() == '\r')) fact.pop_back();
     if (fact.size() < 4) continue;
+    // A "fact" that carries a credential is dropped whole: "User's key is [redacted]" is worth nothing.
+    if (memwal::has_secret(fact)) {
+      if (emit) emit({{"type", "agent"}, {"step", -1}, {"agent", s.agent}, {"kind", "status"}, {"text", "skipped a #remember that contained a secret"}});
+      continue;
+    }
     store_.put(ns_user(t.uid, "facts"), "fact", clip(fact, 600));
     if (emit) emit({{"type", "remember"}, {"agent", s.agent}, {"text", clip(fact, 600)}});
   }
@@ -695,6 +870,14 @@ void Harness::seed_user(const std::string& uid) {
       }
     }
   }
+  // The user's model picks.
+  if (auto picks = recall_records(ns_user(uid, "settings"), "models", "user model picks settings", 5); !picks.empty()) {
+    // Name the object: before C++23 a range-for over a temporary's items() iterates freed memory.
+    const json models = picks.front().value("models", json::object());
+    std::lock_guard lk(mu_);
+    for (auto& [agent, model] : models.items())
+      if (model.is_string()) model_picks_[uid][agent] = model.get<std::string>();
+  }
   // The user's own API agents.
   auto recs = recall_records(ns_user(uid, "settings"), "agents", "user api agents settings", 5);
   if (recs.empty()) return;
@@ -762,6 +945,11 @@ json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
     }
     if (e.day != today()) e = {today(), 0, 0};
     r["runs_today"] = e.runs;
+    r["model_pick"] = model_pick(uid, name);
+    if (a) {
+      r["model_default"] = a->spec().model;
+      r["model_options"] = model_options(a->spec().kind);
+    }
     r["seconds_today"] = static_cast<int>(e.seconds);
     r["account"] = a ? a->account(r["custom"].get<bool>() ? nullptr : sbp) : json::object();
     // How this agent can be connected, in this deployment mode.
@@ -1012,6 +1200,56 @@ json Harness::remove_agent(const std::string& uid, const std::string& name) {
   return {{"ok", true}};
 }
 
+// Models worth suggesting per kind of agent; anything else can still be typed in.
+json model_options(const std::string& kind) {
+  if (kind == "claude-code") return {"opus", "sonnet", "haiku"};
+  if (kind == "codex") return {"gpt-5.5"};
+  return json::array();
+}
+
+json Harness::models_view(const std::string& uid) {
+  seed_user(uid);
+  json out = json::array();
+  for (auto& r : reg_.roster(uid)) {
+    const std::string name = r["name"];
+    agents::Agent* a = reg_.find(name, uid);
+    if (!a) continue;
+    out.push_back({{"name", name}, {"primary", r.value("primary", false)}, {"kind", a->spec().kind},
+                   {"default", a->spec().model}, {"pick", model_pick(uid, name)},
+                   {"options", model_options(a->spec().kind)}});
+  }
+  return out;
+}
+
+std::string Harness::model_pick(const std::string& uid, const std::string& agent) const {
+  std::lock_guard lk(mu_);
+  auto u = model_picks_.find(uid);
+  if (u == model_picks_.end()) return "";
+  auto it = u->second.find(agent);
+  return it == u->second.end() ? "" : it->second;
+}
+
+// The user's model for one agent, kept on Walrus with their other settings (u:<uid>:settings).
+json Harness::set_model(const std::string& uid, const std::string& agent, const std::string& model) {
+  seed_user(uid);
+  if (!reg_.find(agent, uid)) return {{"error", "no agent @" + agent}};
+  // It becomes a CLI argument, so only the characters model ids actually use.
+  if (model.size() > 80 || !std::all_of(model.begin(), model.end(), [](unsigned char c) {
+        return std::isalnum(c) || c == '.' || c == '-' || c == '_' || c == ':' || c == '/' || c == '@';
+      }))
+    return {{"error", "that isn't a model id"}};
+  json picks;
+  {
+    std::lock_guard lk(mu_);
+    if (model.empty()) model_picks_[uid].erase(agent);
+    else model_picks_[uid][agent] = model;
+    picks = model_picks_[uid];
+  }
+  store_.put(ns_user(uid, "settings"), "models",
+             memwal::encode_record("models", {{"ts", std::time(nullptr)}, {"models", picks}}));
+  return {{"ok", true}, {"agent", agent}, {"model", model}};
+}
+
 void Harness::persist_user_agents(const std::string& uid) {
   json list = json::array();
   for (auto* a : reg_.visible(uid)) {
@@ -1092,7 +1330,8 @@ json Harness::github_status(const std::string& uid, const secrets::Key& vault) {
   json out = {{"connected", !slot.empty()},
               {"login", slot.value("login", "")},
               {"unlocked", !github_token(uid, vault).empty()},
-              {"device_available", !opt_.github_client_id.empty()}};
+              {"device_available", !opt_.github_client_id.empty()},
+              {"oauth_available", !opt_.github_client_id.empty() && !opt_.github_client_secret.empty()}};
   std::lock_guard lk(mu_);
   if (auto it = gh_device_.find(uid); it != gh_device_.end()) {
     out["device"] = {{"status", it->second->status}, {"url", it->second->url}, {"code", it->second->code},
@@ -1117,6 +1356,25 @@ json Harness::github_set_token(const std::string& uid, const std::string& token,
                                  {"hint", hint(t)}};
   write_keys(opt_.keys_path, keys);
   return {{"ok", true}, {"login", me.value("login", "")}};
+}
+
+std::string Harness::github_authorize_url(const std::string& redirect_uri, const std::string& state) const {
+  if (opt_.github_client_id.empty() || opt_.github_client_secret.empty()) return "";
+  return github::authorize_url(opt_.github_client_id, redirect_uri, state);
+}
+
+json Harness::github_oauth_finish(const std::string& uid, const std::string& code, const std::string& redirect_uri,
+                                  const secrets::Key& vault) {
+  if (opt_.github_client_id.empty() || opt_.github_client_secret.empty())
+    return {{"error", "GitHub sign-in isn't set up on this Saga server"}};
+  json r;
+  try {
+    r = github::exchange_code(opt_.github_client_id, opt_.github_client_secret, code, redirect_uri);
+  } catch (const std::exception& e) {
+    return {{"error", std::string("couldn't reach GitHub: ") + e.what()}};
+  }
+  if (!r.contains("access_token")) return {{"error", "GitHub didn't approve the connection: " + r.value("error_description", r.value("error", "unknown error"))}};
+  return github_set_token(uid, r.value("access_token", ""), vault);
 }
 
 json Harness::github_device(const std::string& uid, const secrets::Key& vault) {
@@ -1265,6 +1523,9 @@ json Harness::github_open_pr(const std::string& uid, const std::string& session,
       pr = github::create_pr(token, full, branch, base, t, body);
       created = true;
     }
+    // Shipping the work is the clearest "this was good" a user gives.
+    if (auto last = last_turn(uid, session); created && last && last->done)
+      rate_later(last, 1, "(implicit: the user opened a pull request from this work)");
     return {{"ok", true}, {"url", pr.value("html_url", "")}, {"number", pr.value("number", 0)}, {"created", created}};
   } catch (const std::exception& e) {
     return {{"error", std::string("pushed, but the PR failed: ") + e.what()}};

@@ -274,7 +274,11 @@ class ClaudeCodeAgent : public CliAgent {
     std::vector<std::string> a = {"claude", "-p", t.prompt, "--output-format", "stream-json", "--verbose",
                                   "--permission-mode", spec_.permission_mode, "--no-session-persistence"};
     if (!t.system.empty()) a.insert(a.end(), {"--append-system-prompt", t.system});
-    if (!spec_.model.empty()) a.insert(a.end(), {"--model", spec_.model});
+    if (!model_for(t).empty()) a.insert(a.end(), {"--model", model_for(t)});
+    // acceptEdits still asks before any shell command, and nobody can answer in -p mode, so the
+    // memory command the prompt tells the agent to use has to be allowed up front.
+    if (auto bin = t.env.find("SAGA_BIN"); bin != t.env.end() && !bin->second.empty())
+      a.insert(a.end(), {"--allowedTools", "Bash(" + bin->second + " mem:*)"});
     a.insert(a.end(), spec_.extra_args.begin(), spec_.extra_args.end());
     return a;
   }
@@ -336,7 +340,7 @@ class GrokCliAgent : public CliAgent {
   std::vector<std::string> argv(const Task& t) const override {
     std::vector<std::string> a = {"grok", "-p", with_system(t), "--output-format", "streaming-messages-json"};
     if (!t.workspace.empty()) a.insert(a.end(), {"--cwd", t.workspace});
-    if (!spec_.model.empty()) a.insert(a.end(), {"--model", spec_.model});
+    if (!model_for(t).empty()) a.insert(a.end(), {"--model", model_for(t)});
     a.insert(a.end(), spec_.extra_args.begin(), spec_.extra_args.end());
     return a;
   }
@@ -428,7 +432,7 @@ class CodexAgent : public CliAgent {
   std::vector<std::string> argv(const Task& t) const override {
     std::vector<std::string> a = {"codex", "exec", "--json", "--skip-git-repo-check", "-s", "workspace-write"};
     if (!t.workspace.empty()) a.insert(a.end(), {"-C", t.workspace});
-    if (!spec_.model.empty()) a.insert(a.end(), {"-m", spec_.model});
+    if (!model_for(t).empty()) a.insert(a.end(), {"-m", model_for(t)});
     a.insert(a.end(), spec_.extra_args.begin(), spec_.extra_args.end());
     a.push_back(with_system(t));
     return a;
