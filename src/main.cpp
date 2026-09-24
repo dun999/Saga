@@ -220,7 +220,7 @@ int cmd_chat(const Args& a) {
     if (line == "/quit") break;
     if (line.starts_with("/good") || line.starts_with("/bad")) {
       const bool good = line.starts_with("/good");
-      auto r = h.feedback(last_turn, good ? 1 : -1, line.substr(good ? 5 : 4));
+      auto r = h.feedback(uid, last_turn, good ? 1 : -1, line.substr(good ? 5 : 4));
       std::printf("%s\n", r.dump(2).c_str());
       continue;
     }
@@ -396,6 +396,7 @@ int cmd_serve(const Args& a) {
   h.boot(print_event);
   o.port = std::stoi(a.get("port", env::get("SAGA_PORT", std::to_string(o.port))));
   o.access_code = env::get("SAGA_ACCESS_CODE");
+  o.threads = std::stoi(env::get("SAGA_THREADS", std::to_string(o.threads)));
   // Sign-in with Sui is on unless SAGA_AUTH=off (e.g. single-user local runs).
   o.auth.required = env::get("SAGA_AUTH", "on") != "off" && !a.has("no-auth");
   o.auth.secret = env::get("SAGA_SESSION_SECRET");
@@ -413,6 +414,11 @@ int cmd_serve(const Args& a) {
                  o.host.c_str());
     return 1;
   }
+  if (!local && !ho.user_accounts)
+    std::fprintf(stderr,
+                 "saga: warning: operator accounts on %s — every signed-in user's agents run as you, unsandboxed, "
+                 "and can read this host's files and each other's memory. Only let in people you trust.\n",
+                 o.host.c_str());
   return web::serve(h, o);
 }
 

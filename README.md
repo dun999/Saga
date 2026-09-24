@@ -102,7 +102,7 @@ every user connects their *own* providers in **Agents**, and nothing runs on the
 | `@claude` | paste a token from `claude setup-token` (Claude subscription) or an Anthropic API key |
 | `@codex` | **Sign in with ChatGPT** (device code, shown in the browser) or an OpenAI API key |
 | `@grok` | **Sign in with Grok** (device code) |
-| ＋ | any OpenAI-compatible API with their own key |
+| ＋ | any OpenAI-compatible API with their own key (public addresses only: on a shared server Saga won't connect to loopback, private or link-local addresses on a user's behalf) |
 
 **Credentials are sealed with the user's own vault key.** At sign-in the wallet signs a fixed "Unlock your
 Saga vault" message; the browser hashes that signature into a 32-byte key and keeps it in a cookie. Tokens,
@@ -115,7 +115,9 @@ mismatch and asks the user to reconnect. **Disconnect deletes** the credential o
 Each user's agents run inside a **bubblewrap sandbox**. The host filesystem is visible read-only, but the
 operator's home, Saga's data, other users' homes and every key file are hidden. The user's own agent home
 and chat workspace are the only writable places, and the environment is cleared, so the Walrus delegate key
-never reaches an agent. Provider logins live in the user's own home (mode 0700), sealed except while one of
+never reaches an agent. Provider tokens reach the sandbox through its environment and prompts through stdin
+or a 0600 file, never on a command line (which every local user can read with `ps`). Restoring checkpoints
+never follows a link an agent left in the workspace. Provider logins live in the user's own home (mode 0700), sealed except while one of
 that user's calls is running; none of them are written to Walrus memory. Reflection and prompt evolution
 run on the user's own Claude account too. `bwrap` is required in this mode.
 
@@ -123,13 +125,19 @@ run on the user's own Claude account too. `bwrap` is required in this mode.
 `SAGA_GITHUB_CLIENT_ID` points at an OAuth App with device flow), then pick a repo from the GitHub button
 in the chat bar. Saga clones it into that chat's workspace — inside your sandbox — on branch
 `saga/<chat>`, and every agent is told where it is and to commit there. **Open pull request** commits any
-leftovers, pushes the branch and opens (or updates) the PR. The token is sealed in your vault and given
-to git per command through `GIT_CONFIG_*` env, never written into `.git/config`, so agents can commit but
-cannot push on their own.
+leftovers, pushes the branch and opens (or updates) the PR. The token is sealed in your vault and never
+enters the agents' clone: everything in it (config, hooks, filters) is theirs to change, so the push runs
+from a fresh blob-less clone of GitHub that fetches only the branch's new commits from the workspace, with
+the token unset while it does. Agents can commit but cannot push, or see the token.
 
 To deploy publicly, pass `--host 0.0.0.0` (per-user accounts are then the default). With operator
 accounts (`SAGA_ACCOUNTS=host`), also set `SAGA_ACCESS_CODE` or `SAGA_ALLOWED_ADDRESSES`. Saga refuses to bind a public
 interface without an access code, because the agents can edit files and run tools inside `workspaces/`.
+Operator accounts are for people you trust: their agents run as you, **without a sandbox**, so they can read
+the host's files (including `.env`) and each other's memory. Use per-user accounts for anyone else.
+
+Each user can have up to 4 live tabs and 3 running chats at once; `SAGA_THREADS` (default 256) sets the
+server's worker threads.
 
 ## Agents and LLMs
 

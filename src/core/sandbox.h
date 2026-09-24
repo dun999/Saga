@@ -7,6 +7,8 @@
 // places. The environment is cleared; only PATH/HOME/locale and that user's provider credentials
 // are set. Network stays on (agents need their providers).
 #include <cstdint>
+
+#include "core/proc.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -50,5 +52,10 @@ bool available();  // bubblewrap is installed
 void set_hidden(std::vector<std::string> paths);
 // Wrap `argv` (argv[0] is a command on PATH) so it runs inside `sb`.
 std::vector<std::string> wrap(const Sandbox& sb, const std::vector<std::string>& argv);
+// The sandbox's whole environment. It is given to bwrap as its own environment, not as --setenv
+// arguments: a command line is visible to every local user (ps), an environment only to this one.
+std::map<std::string, std::string> environment(const Sandbox& sb);
+// Run `argv` inside `sb` (cwd and env in `o` are replaced by the sandbox's).
+proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::Options o);
 
 }  // namespace saga::sandbox

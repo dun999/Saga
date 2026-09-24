@@ -18,8 +18,15 @@ using Headers = std::map<std::string, std::string>;
 // Called with each chunk of body as it arrives; return false to abort.
 using ChunkFn = std::function<bool(std::string_view)>;
 
+// public_only: refuse to connect to loopback, private, link-local or other non-routable addresses. It
+// is checked on each address curl is about to connect to, so DNS tricks can't get around it, and
+// redirects aren't followed.
 Response request(const std::string& method, const std::string& url, const Headers& headers = {},
-                 const std::string& body = "", long timeout_s = 60, const ChunkFn& on_chunk = nullptr);
+                 const std::string& body = "", long timeout_s = 60, const ChunkFn& on_chunk = nullptr,
+                 bool public_only = false);
+
+// A globally routable unicast IPv4/IPv6 address (text form)?
+bool is_public_address(const std::string& ip);
 
 inline Response get(const std::string& url, const Headers& h = {}, long timeout_s = 30) {
   return request("GET", url, h, "", timeout_s);

@@ -41,13 +41,15 @@ Store::~Store() {
   if (thread_.joinable()) thread_.join();
 }
 
-void Store::put(const std::string& ns, const std::string& kind, const std::string& text, const std::string& ref) {
+void Store::put(const std::string& ns, const std::string& kind, const std::string& text, const std::string& ref,
+                const std::string& owner) {
   if (!enabled() || text.empty()) return;
   WriteRecord r;
   r.ns = ns;
   r.kind = kind;
   r.text = text;
   r.ref = ref;
+  r.owner = owner;
   r.ts = now_s();
   {
     std::lock_guard lk(mu_);
@@ -62,12 +64,14 @@ void Store::analyze(const std::string& ns, const std::string& text) {
   put(ns, "analyze", text);  // worker routes kind=analyze to /api/analyze
 }
 
-std::vector<Memory> Store::recall(const std::string& query, const std::string& ns, const RecallOptions& opt) {
+std::vector<Memory> Store::recall(const std::string& query, const std::string& ns, const RecallOptions& opt,
+                                  bool* failed) {
   if (!enabled() || query.empty()) return {};
   try {
     return client_->recall(query, ns, opt);
   } catch (const std::exception& e) {
     log_err(("recall " + ns).c_str(), e);
+    if (failed) *failed = true;
     return {};
   }
 }
@@ -113,7 +117,7 @@ bool Store::retry_later(WriteRecord& r) {
                          r.error.find("timed out") != std::string::npos || r.error.find(" 50") != std::string::npos ||
                          r.error.find("onnection") != std::string::npos;
   if (!transient || r.attempts + 1 >= kMaxAttempts || r.kind == "analyze") return false;
-  WriteRecord again{.ns = r.ns, .kind = r.kind, .text = r.text, .ref = r.ref, .ts = r.ts};
+  WriteRecord again{.ns = r.ns, .kind = r.kind, .text = r.text, .ref = r.ref, .owner = r.owner, .ts = r.ts};
   again.attempts = r.attempts + 1;
   again.retry_at = std::time(nullptr) + (20L << r.attempts);  // 20s, 40s, 80s
   queue_.push_back(std::move(again));  // caller holds mu_
@@ -222,6 +226,23 @@ void Store::worker() {
       }
     }
     for (auto& r : changed) notify(r);
+
+    // The log is only this session's view for the UI: keep every write still in flight, and the
+    // most recent settled ones.
+    {
+      std::lock_guard lk(mu_);
+      constexpr size_t kKeepSettled = 500;
+      size_t settled = 0;
+      for (auto it = log_.rbegin(); it != log_.rend(); ++it) settled += it->status == "done" || it->status == "failed";
+      for (auto it = log_.begin(); settled > kKeepSettled && it != log_.end();) {
+        if (it->status == "done" || it->status == "failed") {
+          it = log_.erase(it);
+          --settled;
+        } else {
+          ++it;
+        }
+      }
+    }
   }
 }
 

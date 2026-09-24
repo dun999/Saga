@@ -73,6 +73,8 @@ int followup_signal(const std::string& next_message) {
     // Whole-word prefix: "no," is a correction, "now" is not.
     return m.starts_with(s) && (m.size() == s.size() || !std::isalnum(static_cast<unsigned char>(m[s.size()])));
   };
+  for (const char* p : {"no worries", "no problem", "no rush", "no need"})  // polite, not a correction
+    if (starts(p)) return 0;
   for (const char* p : {"no", "nope", "wrong", "that's wrong", "thats wrong", "that is wrong", "that's not",
                         "not what i", "not quite", "doesn't work", "does not work", "didn't work", "it doesn't",
                         "still broken", "still not", "still doesn't", "you forgot", "you missed", "incorrect",
@@ -268,15 +270,18 @@ json PromptPool::evolve(agents::Agent& brain, const std::vector<ReplayCase>& cas
   child.prompt = render_prompt(child.base, child.rules);
   if (child.prompt == parent.prompt) return {{"error", "no change proposed"}};
 
-  // The gate: replay the user's own rated turns under both versions; the child must not lose.
-  if (!cases.empty()) {
-    child.eval = replay(brain, parent, child, cases, sb);
-    if (!child.eval.value("judged", false)) {  // couldn't verify: try again after the next critique
-      requeue();
-      return {{"error", "replay judge failed"}};
-    }
-    if (child.eval.value("losses", 0) > child.eval.value("wins", 0)) child.status = "rejected";
+  // The gate: replay rated turns under both versions; the child must not lose. The playbook is shared
+  // by every user, so an edit nobody could test never goes live.
+  if (cases.empty()) {
+    requeue();
+    return {{"error", "no rated turns to replay yet"}};
   }
+  child.eval = replay(brain, parent, child, cases, sb);
+  if (!child.eval.value("judged", false)) {  // couldn't verify: try again after the next critique
+    requeue();
+    return {{"error", "replay judge failed"}};
+  }
+  if (child.eval.value("losses", 0) > child.eval.value("wins", 0)) child.status = "rejected";
   {
     std::lock_guard lk(mu_);
     versions_[child.v] = child;

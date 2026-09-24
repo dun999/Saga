@@ -59,6 +59,7 @@ struct Turn {
   int rating = 0;            // last signal: +1 / -1, from the user or implicit
   bool user_rated = false;
   bool done = false;
+  std::time_t started = 0;
   // Playbook rules and lessons that were in the agents' context, as credit ids ("b3", "lesson:<blob>")
   // with their text, so reflection can say which ones helped or hurt.
   std::vector<std::pair<std::string, std::string>> in_context;
@@ -69,6 +70,8 @@ struct Turn {
 // Namespace scheme, shared with `saga mem` and the web API.
 std::string ns_user(const std::string& uid, const char* what);
 std::string ns_lessons(const std::string& agent);
+// Write one restored checkpoint file under `root` without following links; false = refused.
+bool write_in_workspace(const std::string& root, const std::string& rel, const std::string& content);
 std::string memory_protocol(const std::string& uid, const std::string& agent, bool can_run_shell,
                             const std::string& saga_bin);
 
@@ -80,8 +83,9 @@ class Harness {
   void boot(const Emit& log = nullptr);  // restore hot namespaces + load prompt population
   std::string chat(const std::string& uid, const std::string& session, const std::string& message,
                    const Emit& emit, const secrets::Key& vault = {});       // returns turn id
-  json feedback(const std::string& turn_id, int rating, const std::string& comment);
-  bool cancel(const std::string& turn_id);
+  // Only the user who ran a turn can rate or cancel it.
+  json feedback(const std::string& uid, const std::string& turn_id, int rating, const std::string& comment);
+  bool cancel(const std::string& uid, const std::string& turn_id);
   // Queue critiques and run one evolution now, replayed on this user's rated turns (`saga evolve`).
   json evolve_now(const std::string& uid, const std::vector<std::string>& critiques);
 
@@ -152,6 +156,8 @@ class Harness {
   // Run git for this user's chat workspace: in their sandbox (user accounts) or on the host.
   proc::Result git(const std::string& uid, const std::string& workspace, const secrets::Key& vault,
                    const std::vector<std::string>& args, const std::string& token = "", int timeout_s = 120);
+  proc::Result git_argv(const std::string& uid, const std::string& workspace, const secrets::Key& vault,
+                        const std::vector<std::string>& argv, const std::string& token, int timeout_s);
   std::string repo_context(const Turn& t);
   // The user's sandbox when running on their own accounts; nullopt = operator mode.
   std::optional<sandbox::Sandbox> sandbox_for(const std::string& uid, const std::string& workspace,
@@ -159,7 +165,7 @@ class Harness {
   void persist_user_agents(const std::string& uid);
   void record_usage(const std::string& uid, const std::string& agent, const agents::Result& r);
   std::vector<json> recall_records(const std::string& ns, const std::string& kind, const std::string& query,
-                                   int limit);
+                                   int limit, bool* failed = nullptr);
 
   agents::Registry& reg_;
   memwal::Store& store_;
@@ -167,9 +173,11 @@ class Harness {
   PromptPool prompts_;
   mutable std::mutex mu_;
   std::map<std::string, std::shared_ptr<Turn>> turns_;  // this process only; Walrus is the record
+  void prune_turns();  // caller holds mu_
   std::vector<std::thread> background_;
   std::map<std::string, std::vector<std::string>> session_turns_;  // "<uid>/<session>" → turn ids, in order
   std::atomic<bool> evolving_{false};
+  std::set<std::string> critics_;  // users whose critiques are waiting for the next evolution
 
   struct Usage {
     std::string day;

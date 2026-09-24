@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -77,6 +78,22 @@ struct Hub {
   }
 };
 
+// Per-user counts of long-lived requests (live feeds, running chats).
+struct Slots {
+  std::mutex mu;
+  std::map<std::string, int> used;
+  bool take(const std::string& uid, int max) {
+    std::lock_guard lk(mu);
+    if (used[uid] >= max) return false;
+    ++used[uid];
+    return true;
+  }
+  void give(const std::string& uid) {
+    std::lock_guard lk(mu);
+    if (--used[uid] <= 0) used.erase(uid);
+  }
+};
+
 // The user's vault key: 32 bytes their browser derived from a wallet signature (base64url cookie).
 // It lives in this request only; the server never stores it.
 secrets::Key vault_of(const httplib::Request& req) {
@@ -90,16 +107,21 @@ secrets::Key vault_of(const httplib::Request& req) {
   }
 }
 
-bool visible_to(const std::string& ns, const std::string& uid) {
-  return ns.starts_with("u:" + uid + ":") || !ns.starts_with("u:");
+// A write is shown to the user it belongs to: their own namespaces, or shared-namespace writes their
+// turns produced (blackboard, lessons, skills, improvements). Only content-free harness writes
+// (prompt versions, scores) are public.
+bool visible_to(const memwal::WriteRecord& r, const std::string& uid) {
+  if (r.ns.starts_with("u:")) return r.ns.starts_with("u:" + uid + ":");
+  return r.owner.empty() ? !r.ns.starts_with("task:") : r.owner == uid;
 }
 
 }  // namespace
 
 int serve(harness::Harness& h, const ServerOptions& opt) {
   httplib::Server svr;
-  svr.new_task_queue = [] { return new httplib::ThreadPool(48); };
+  svr.new_task_queue = [n = std::max(opt.threads, 8)] { return new httplib::ThreadPool(n); };
   auto hub = std::make_shared<Hub>();
+  auto feeds = std::make_shared<Slots>(), chats = std::make_shared<Slots>();
   Auth auth(opt.auth);
   h.store().add_listener([hub](const memwal::WriteRecord& r) { hub->push(r); });
 
@@ -117,6 +139,19 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
       return httplib::Server::HandlerResponse::Handled;
     }
     return httplib::Server::HandlerResponse::Unhandled;
+  });
+  // A field of the wrong JSON type ({"rating": "1"}) is the client's mistake, not a server error.
+  svr.set_exception_handler([](const httplib::Request&, httplib::Response& res, std::exception_ptr ep) {
+    try {
+      std::rethrow_exception(ep);
+    } catch (const nlohmann::json::exception&) {
+      send_json(res, {{"error", "bad request: a field has the wrong type"}}, 400);
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "saga: request failed: %s\n", e.what());
+      send_json(res, {{"error", "internal error"}}, 500);
+    } catch (...) {
+      send_json(res, {{"error", "internal error"}}, 500);
+    }
   });
   auto uid_of = [&auth](const httplib::Request& req, httplib::Response& res) {
     // Signed in with a wallet (required, or chosen on the sign-in screen): the Sui address is the identity,
@@ -211,8 +246,8 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     json s = h.state();
     const std::string uid = uid_of(req, res);
     json filtered = json::array();
-    for (auto& w : s["recent_writes"])
-      if (visible_to(w.value("namespace", ""), uid)) filtered.push_back(w);
+    for (auto& w : h.store().recent(30))
+      if (visible_to(w, uid)) filtered.push_back(w.to_json());
     s["recent_writes"] = filtered;
     s["uid"] = uid;
     s["agents"] = h.roster(uid);
@@ -378,6 +413,9 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     const std::string uid = uid_of(req, res);
     std::string session = sanitize_uid(j.value("session", ""));
     if (session.empty()) session = uid;
+    if (!chats->take(uid, opt.chats_per_user))
+      return send_json(res, {{"error", "you already have " + std::to_string(opt.chats_per_user) +
+                                           " chats running — wait for one to finish"}}, 429);
 
     struct Stream {
       std::mutex mu;
@@ -388,7 +426,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     };
     auto st = std::make_shared<Stream>();
     const secrets::Key vault = vault_of(req);
-    std::thread([&h, st, uid, session, msg, vault] {
+    std::thread([&h, st, uid, session, msg, vault, chats] {
       auto emit = [st](const json& e) {
         std::lock_guard lk(st->mu);
         if (e.value("type", "") == "turn") st->turn_id = e.value("turn_id", "");
@@ -400,6 +438,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
       } catch (const std::exception& ex) {
         emit({{"type", "error"}, {"text", ex.what()}});
       }
+      chats->give(uid);  // the turn itself is over, even if the browser left earlier
       std::lock_guard lk(st->mu);
       st->done = true;
       st->cv.notify_all();
@@ -407,13 +446,13 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
 
     res.set_header("Cache-Control", "no-cache");
     res.set_header("X-Accel-Buffering", "no");
-    res.set_chunked_content_provider("application/x-ndjson", [&h, st](size_t, httplib::DataSink& sink) {
+    res.set_chunked_content_provider("application/x-ndjson", [&h, st, uid](size_t, httplib::DataSink& sink) {
       std::unique_lock lk(st->mu);
       st->cv.wait_for(lk, std::chrono::seconds(15), [&] { return st->done || !st->lines.empty(); });
       if (st->lines.empty() && !st->done) {
         lk.unlock();
         const std::string ping = "{\"type\":\"ping\"}\n";
-        if (!sink.write(ping.data(), ping.size()) && !st->turn_id.empty()) h.cancel(st->turn_id);
+        if (!sink.write(ping.data(), ping.size()) && !st->turn_id.empty()) h.cancel(uid, st->turn_id);
         return true;
       }
       while (!st->lines.empty()) {
@@ -421,7 +460,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
         st->lines.pop_front();
         lk.unlock();
         if (!sink.write(line.data(), line.size())) {  // browser went away → stop the agents
-          if (!st->turn_id.empty()) h.cancel(st->turn_id);
+          if (!st->turn_id.empty()) h.cancel(uid, st->turn_id);
           return false;
         }
         lk.lock();
@@ -436,17 +475,19 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     if (!j.is_object()) return send_json(res, {{"error", "bad json"}}, 400);
     const int rating = j.value("rating", 0);
     if (rating != 1 && rating != -1) return send_json(res, {{"error", "rating must be 1 or -1"}}, 400);
-    send_json(res, h.feedback(j.value("turn_id", ""), rating, j.value("comment", "")));
+    send_json(res, h.feedback(uid_of(req, res), j.value("turn_id", ""), rating, j.value("comment", "")));
   });
 
   svr.Post("/api/cancel", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
-    send_json(res, {{"ok", j.is_object() && h.cancel(j.value("turn_id", ""))}});
+    send_json(res, {{"ok", j.is_object() && h.cancel(uid_of(req, res), j.value("turn_id", ""))}});
   });
 
   // Live feed of Walrus writes (Server-Sent Events).
   svr.Get("/api/writes", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string uid = uid_of(req, res);
+    if (!feeds->take(uid, opt.feeds_per_user))
+      return send_json(res, {{"error", "too many open Saga tabs"}}, 429);
     auto cursor = std::make_shared<uint64_t>(0);
     {
       std::lock_guard lk(hub->mu);
@@ -459,13 +500,13 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
         std::unique_lock lk(hub->mu);
         hub->cv.wait_for(lk, std::chrono::seconds(15), [&] { return hub->seq > *cursor; });
         for (auto& [s, r] : hub->events)
-          if (s > *cursor && visible_to(r.ns, uid)) out.push_back(r);
+          if (s > *cursor && visible_to(r, uid)) out.push_back(r);
         *cursor = hub->seq;
       }
       std::string payload = out.empty() ? ": keepalive\n\n" : "";
       for (auto& r : out) payload += "data: " + r.to_json().dump() + "\n\n";
       return sink.write(payload.data(), payload.size());
-    });
+    }, [feeds, uid](bool) { feeds->give(uid); });
   });
 
   std::printf("saga: listening on http://%s:%d%s\n", opt.host.c_str(), opt.port,

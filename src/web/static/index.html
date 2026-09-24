@@ -1137,7 +1137,7 @@ async function refreshCheckpoints() {
     : `<div class="empty">No checkpoints in this chat yet. Files agents change are snapshotted to Walrus.</div>`;
   $("#restoreBtn")?.addEventListener("click", async () => {
     const r = await api("/api/checkpoints/restore", {session});
-    $("#restoreBtn").outerHTML = `<div class="empty">restored ${r.restored?.length ?? 0} file(s) into ${esc(r.workspace || "")}</div>`;
+    $("#restoreBtn").outerHTML = `<div class="empty">restored ${r.restored?.length ?? 0} file(s) into ${esc(r.workspace || "")}${r.skipped?.length ? ` · skipped ${r.skipped.length} behind a link` : ""}</div>`;
   });
 }
 const writes = new Map();

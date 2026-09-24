@@ -93,7 +93,7 @@ std::vector<std::string> wrap(const Sandbox& sb, const std::vector<std::string>&
   if (argv.empty()) return argv;
   const std::string bin = resolve(argv[0]);
   const std::string name = fs::path(argv[0]).filename().string();
-  std::vector<std::string> a = {"bwrap",      "--ro-bind", "/",      "/",      "--dev",  "/dev", "--proc",
+  std::vector<std::string> a = {resolve("bwrap"), "--ro-bind", "/",      "/",      "--dev",  "/dev", "--proc",
                                 "/proc",      "--tmpfs",   "/tmp",   "--tmpfs", "/run/user", "--die-with-parent",
                                 "--unshare-pid", "--unshare-ipc", "--new-session"};
   {
@@ -104,17 +104,28 @@ std::vector<std::string> wrap(const Sandbox& sb, const std::vector<std::string>&
   if (!bin.empty()) a.insert(a.end(), {"--ro-bind", bin, "/mnt/bin/" + name});
   a.insert(a.end(), {"--bind", sb.home, kHome});
   if (!sb.workspace.empty()) a.insert(a.end(), {"--bind", sb.workspace, kWork});
-  a.insert(a.end(), {"--chdir", sb.workspace.empty() ? kHome : kWork, "--clearenv",
-                     "--setenv", "PATH", "/mnt/bin:/usr/local/bin:/usr/bin:/bin",
-                     "--setenv", "HOME", kHome,
-                     "--setenv", "CODEX_HOME", std::string(kHome) + "/.codex",
-                     "--setenv", "LANG", "C.UTF-8",
-                     "--setenv", "TERM", "dumb"});
-  for (auto& [k, v] : sb.env) a.insert(a.end(), {"--setenv", k, v});
+  a.insert(a.end(), {"--chdir", sb.workspace.empty() ? kHome : kWork});
   a.push_back("--");
   a.push_back("/mnt/bin/" + name);
   a.insert(a.end(), argv.begin() + 1, argv.end());
   return a;
+}
+
+std::map<std::string, std::string> environment(const Sandbox& sb) {
+  std::map<std::string, std::string> env = {{"PATH", "/mnt/bin:/usr/local/bin:/usr/bin:/bin"},
+                                            {"HOME", kHome},
+                                            {"CODEX_HOME", std::string(kHome) + "/.codex"},
+                                            {"LANG", "C.UTF-8"},
+                                            {"TERM", "dumb"}};
+  for (auto& [k, v] : sb.env) env[k] = v;
+  return env;
+}
+
+proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::Options o) {
+  o.cwd.clear();  // bwrap --chdir sets it
+  o.env = environment(sb);
+  o.inherit_env = false;  // bwrap passes exactly this on; nothing of the server's
+  return proc::run(wrap(sb, argv), o);
 }
 
 }  // namespace saga::sandbox

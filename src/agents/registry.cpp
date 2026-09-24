@@ -26,8 +26,8 @@ std::string lower(std::string s) {
 }  // namespace
 
 Registry::Registry(Registry&& o) noexcept
-    : agents_(std::move(o.agents_)), order_(std::move(o.order_)), primary_(std::move(o.primary_)),
-      brain_(std::move(o.brain_)) {}
+    : agents_(std::move(o.agents_)), retired_(std::move(o.retired_)), order_(std::move(o.order_)),
+      primary_(std::move(o.primary_)), brain_(std::move(o.brain_)) {}
 
 Registry Registry::load(const std::string& path) {
   json cfg;
@@ -109,13 +109,19 @@ std::string Registry::add(const Spec& spec) {
     return "name must be 1–24 letters, digits, - or _";
   std::unique_lock lk(mu_);
   if (agents_.contains(s.name)) return "@" + s.name + " is a built-in agent";
-  agents_[key(s.name, s.owner)] = make_agent(s);
+  auto& slot = agents_[key(s.name, s.owner)];
+  if (slot) retired_.push_back(std::move(slot));
+  slot = make_agent(s);
   return "";
 }
 
 bool Registry::remove(const std::string& name, const std::string& uid) {
   std::unique_lock lk(mu_);
-  return agents_.erase(key(lower(name), uid)) > 0;
+  auto it = agents_.find(key(lower(name), uid));
+  if (it == agents_.end()) return false;
+  retired_.push_back(std::move(it->second));
+  agents_.erase(it);
+  return true;
 }
 
 }  // namespace saga::agents

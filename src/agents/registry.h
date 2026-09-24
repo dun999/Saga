@@ -36,6 +36,9 @@ class Registry {
   }
   mutable std::shared_mutex mu_;
   std::map<std::string, std::unique_ptr<Agent>> agents_;
+  // Removed or replaced agents. find() hands out raw pointers that a running turn may still hold, so
+  // an agent is never destroyed while the process lives (a few bytes per removal).
+  std::vector<std::unique_ptr<Agent>> retired_;
   std::vector<std::string> order_;  // shared agents, config order
   std::string primary_, brain_;
 };

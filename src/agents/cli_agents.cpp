@@ -13,6 +13,7 @@
 #include <mutex>
 
 #include "agents/agent.h"
+#include "core/crypto.h"
 #include "core/proc.h"
 
 namespace saga::agents {
@@ -68,10 +69,38 @@ std::string home_of(const sandbox::Sandbox* sb) {
 proc::Result exec(const std::vector<std::string>& argv, proc::Options o, const sandbox::Sandbox* sb) {
   if (!sb) return proc::run(argv, o);
   sandbox::Lease lease(sb);  // the user's login files are plaintext only while this call runs
-  o.cwd.clear();  // bwrap --chdir sets it
-  o.env.clear();  // bwrap --clearenv; the sandbox carries its own environment
-  return proc::run(sandbox::wrap(*sb, argv), o);
+  return sandbox::run(*sb, argv, std::move(o));
 }
+
+// Context for one CLI call, kept off the command line: argv is visible to every local user (ps), and
+// the context carries the user's memories. The file is 0600, in the user's own agent home when
+// sandboxed (so the CLI can read it), and deleted when the call ends.
+class ContextFile {
+ public:
+  ContextFile(const std::string& text, const sandbox::Sandbox* sb) {
+    if (text.empty()) return;
+    const fs::path dir = sb ? fs::path(sb->home) / ".saga" : fs::temp_directory_path();
+    const std::string name = "ctx-" + crypto::random_hex(8) + ".md";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    host_ = dir / name;
+    { std::ofstream(host_, std::ios::trunc); }
+    fs::permissions(host_, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ec);
+    std::ofstream(host_, std::ios::binary | std::ios::trunc) << text;
+    path_ = sb ? std::string(sandbox::kHome) + "/.saga/" + name : host_.string();
+  }
+  ~ContextFile() {
+    std::error_code ec;
+    if (!host_.empty()) fs::remove(host_, ec);
+  }
+  ContextFile(const ContextFile&) = delete;
+  ContextFile& operator=(const ContextFile&) = delete;
+  const std::string& path() const { return path_; }  // as the CLI sees it; "" = no context
+
+ private:
+  fs::path host_;
+  std::string path_;
+};
 
 // Small TTL cache so account() can be polled by the UI without re-running CLIs each time.
 struct Cached {
@@ -150,9 +179,15 @@ class CliAgent : public Agent {
     o.on_stdout_line = [&](const std::string& line) {
       if (line.empty() || line[0] != '{') return;
       auto j = json::parse(line, nullptr, false);
-      if (!j.is_discarded()) parse(j, r, emit);
+      if (j.is_discarded()) return;
+      try {
+        parse(j, r, emit);
+      } catch (const json::exception&) {  // an event shaped unlike we expect: skip it, keep the run
+      }
     };
-    auto p = exec(argv(task), o, task.sandbox);
+    o.stdin_data = stdin_for(task);
+    const ContextFile ctx(system_in_file() ? task.system : "", task.sandbox);
+    auto p = exec(argv(task, ctx.path()), o, task.sandbox);
     r.seconds = since(t0);
     if (p.timed_out) r.error = "timed out after " + std::to_string(task.timeout_s) + "s";
     else if (p.cancelled) r.error = "cancelled";
@@ -166,7 +201,10 @@ class CliAgent : public Agent {
 
  protected:
   virtual std::string exe() const = 0;
-  virtual std::vector<std::string> argv(const Task& t) const = 0;
+  // system_file: the task's context as a file path, when system_in_file(); else "".
+  virtual std::vector<std::string> argv(const Task& t, const std::string& system_file) const = 0;
+  virtual bool system_in_file() const { return false; }
+  virtual std::string stdin_for(const Task&) const { return ""; }  // e.g. the prompt, off argv
   virtual void parse(const json& j, Result& r, const std::function<void(Event)>& emit) = 0;
 
   static std::string with_system(const Task& t) {
@@ -202,11 +240,13 @@ class ClaudeCodeAgent : public CliAgent {
 
   Result complete(const std::string& system, const std::string& prompt, const sandbox::Sandbox* sb) override {
     const auto t0 = std::chrono::steady_clock::now();
-    std::vector<std::string> a = {"claude", "-p", prompt, "--output-format", "json", "--tools", "",
-                                  "--no-session-persistence", "--system-prompt", system};
+    const ContextFile sys(system, sb);
+    std::vector<std::string> a = {"claude", "-p", "--output-format", "json", "--tools", "", "--no-session-persistence"};
+    if (!sys.path().empty()) a.insert(a.end(), {"--system-prompt-file", sys.path()});
     if (!spec_.model.empty()) a.insert(a.end(), {"--model", spec_.model});
     proc::Options o;
     o.timeout_s = 300;
+    o.stdin_data = prompt;  // reflection traces quote the user; keep them off argv
     auto p = exec(a, o, sb);
     Result r;
     r.seconds = since(t0);
@@ -260,7 +300,11 @@ class ClaudeCodeAgent : public CliAgent {
     tl_account = key_of(sb);
     o.on_stdout_line = [&](const std::string& line) {
       auto j = json::parse(line, nullptr, false);
-      if (!j.is_discarded()) parse(j, r, [](Event) {});
+      if (j.is_discarded()) return;
+      try {
+        parse(j, r, [](Event) {});
+      } catch (const json::exception&) {
+      }
     };
     exec({"claude", "-p", "Reply with: ok", "--model", "haiku", "--output-format", "stream-json", "--verbose",
           "--tools", "", "--no-session-persistence"},
@@ -270,10 +314,12 @@ class ClaudeCodeAgent : public CliAgent {
 
  protected:
   std::string exe() const override { return "claude"; }
-  std::vector<std::string> argv(const Task& t) const override {
-    std::vector<std::string> a = {"claude", "-p", t.prompt, "--output-format", "stream-json", "--verbose",
+  bool system_in_file() const override { return true; }
+  std::string stdin_for(const Task& t) const override { return t.prompt; }
+  std::vector<std::string> argv(const Task& t, const std::string& system_file) const override {
+    std::vector<std::string> a = {"claude", "-p", "--output-format", "stream-json", "--verbose",
                                   "--permission-mode", spec_.permission_mode, "--no-session-persistence"};
-    if (!t.system.empty()) a.insert(a.end(), {"--append-system-prompt", t.system});
+    if (!system_file.empty()) a.insert(a.end(), {"--append-system-prompt-file", system_file});
     if (!model_for(t).empty()) a.insert(a.end(), {"--model", model_for(t)});
     // acceptEdits still asks before any shell command, and nobody can answer in -p mode, so the
     // memory command the prompt tells the agent to use has to be allowed up front.
@@ -337,7 +383,8 @@ class GrokCliAgent : public CliAgent {
 
  protected:
   std::string exe() const override { return "grok"; }
-  std::vector<std::string> argv(const Task& t) const override {
+  // Grok Build only takes the prompt as an argument.
+  std::vector<std::string> argv(const Task& t, const std::string&) const override {
     std::vector<std::string> a = {"grok", "-p", with_system(t), "--output-format", "streaming-messages-json"};
     if (!t.workspace.empty()) a.insert(a.end(), {"--cwd", t.workspace});
     if (!model_for(t).empty()) a.insert(a.end(), {"--model", model_for(t)});
@@ -347,7 +394,7 @@ class GrokCliAgent : public CliAgent {
   void parse(const json& j, Result& r, const std::function<void(Event)>& emit) override {
     parse_anthropic_stream(j, r, emit);
     // Grok's result line has no `result` text; keep the last assistant text as the answer.
-    if (j.value("type", "") == "assistant" && r.error.empty())
+    if (j.value("type", "") == "assistant" && r.error.empty() && j.contains("message") && j["message"].is_object())
       for (auto& c : j["message"].value("content", json::array()))
         if (c.value("type", "") == "text") r.text = c.value("text", "");
   }
@@ -429,12 +476,13 @@ class CodexAgent : public CliAgent {
 
  protected:
   std::string exe() const override { return "codex"; }
-  std::vector<std::string> argv(const Task& t) const override {
+  std::string stdin_for(const Task& t) const override { return with_system(t); }
+  std::vector<std::string> argv(const Task& t, const std::string&) const override {
     std::vector<std::string> a = {"codex", "exec", "--json", "--skip-git-repo-check", "-s", "workspace-write"};
     if (!t.workspace.empty()) a.insert(a.end(), {"-C", t.workspace});
     if (!model_for(t).empty()) a.insert(a.end(), {"-m", model_for(t)});
     a.insert(a.end(), spec_.extra_args.begin(), spec_.extra_args.end());
-    a.push_back(with_system(t));
+    a.push_back("-");  // the prompt comes on stdin
     return a;
   }
   void parse(const json& j, Result& r, const std::function<void(Event)>& emit) override {
@@ -456,7 +504,8 @@ class CodexAgent : public CliAgent {
       }
       // `error` items are non-fatal warnings (e.g. metadata fallbacks); ignore.
     } else if (type == "turn.failed") {
-      r.error = j["error"].value("message", "codex turn failed");
+      const json err = j.value("error", json::object());
+      r.error = err.is_object() ? err.value("message", "codex turn failed") : "codex turn failed";
     }
   }
 };

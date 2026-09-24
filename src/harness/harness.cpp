@@ -1,9 +1,14 @@
 #include "harness/harness.h"
 #include "memwal/redact.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -23,7 +28,7 @@ namespace fs = std::filesystem;
 
 namespace {  // keys-file helpers (defined with the agent-account code below)
 json read_keys(const std::string& path);
-void write_keys(const std::string& path, const json& j);
+bool update_keys(const std::string& path, const std::function<void(json&)>& edit);
 json make_slot(const std::string& value, const secrets::Key& vault);
 std::string open_slot(const json& slot, const secrets::Key& vault);
 }  // namespace
@@ -66,11 +71,12 @@ Snapshot snapshot(const std::string& root) {
       it.disable_recursion_pending();
       continue;
     }
-    if (!it->is_regular_file() || it->file_size(ec) > 1'000'000) continue;
+    // A symlink is never followed: an agent could point one at a host file its sandbox can't see.
+    if (it->is_symlink() || !it->is_regular_file() || it->file_size(ec) > 1'000'000) continue;
     std::ifstream in(it->path(), std::ios::binary);
     std::stringstream ss;
     ss << in.rdbuf();
-    snap[fs::relative(it->path(), root).string()] = crypto::sha256_hex(ss.str());
+    snap[it->path().lexically_relative(root).string()] = crypto::sha256_hex(ss.str());
   }
   return snap;
 }
@@ -97,6 +103,19 @@ json memories_json(const std::vector<memwal::Memory>& ms) {
 }
 
 // Quota / auth failures mean "this backend can't serve right now", not "the task is bad".
+// Background work runs on raw threads, where an escaped exception (e.g. a type error while parsing
+// the brain's JSON) would std::terminate the whole server. Log it instead.
+template <class F>
+auto guarded(F fn) {
+  return [fn = std::move(fn)]() mutable {
+    try {
+      fn();
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "[background] %s\n", e.what());
+    }
+  };
+}
+
 bool is_capacity_error(const std::string& e) {
   static const std::regex re("usage limit|balance exhausted|402|429|rate.?limit|quota|not supported|"
                              "not found on PATH|not set|unauthori[sz]ed|401|connect to server|resolve host|limit reached|not connected",
@@ -115,6 +134,41 @@ std::optional<json> parse_json_object(const std::string& text) {
 }  // namespace
 
 json model_options(const std::string& kind);
+
+// Restore runs on the host, outside the sandbox, into a directory agents control. Every step is
+// opened relative to its parent with O_NOFOLLOW, so a symlink an agent planted (or swaps in mid-way)
+// can't redirect the write, and a hard-linked file is refused rather than truncated.
+bool write_in_workspace(const std::string& root, const std::string& rel, const std::string& content) {
+  if (!safe_relative(rel)) return false;
+  std::vector<std::string> parts;
+  for (auto& part : fs::path(rel))
+    if (!part.empty() && part != ".") parts.push_back(part.string());
+  if (parts.empty()) return false;
+  int dir = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  for (size_t i = 0; dir >= 0 && i + 1 < parts.size(); ++i) {
+    ::mkdirat(dir, parts[i].c_str(), 0755);  // EEXIST is fine; openat decides
+    const int next = ::openat(dir, parts[i].c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    ::close(dir);
+    dir = next;
+  }
+  if (dir < 0) return false;
+  bool ok = false;
+  const int fd = ::openat(dir, parts.back().c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0644);
+  ::close(dir);
+  if (fd < 0) return false;
+  struct stat st{};
+  if (::fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_nlink == 1 && ::ftruncate(fd, 0) == 0) {
+    ok = true;
+    for (size_t off = 0; ok && off < content.size();) {
+      const ssize_t n = ::write(fd, content.data() + off, content.size() - off);
+      if (n <= 0) ok = false;
+      else off += static_cast<size_t>(n);
+    }
+  }
+  ::close(fd);
+  return ok;
+}
+
 std::string ns_user(const std::string& uid, const char* what) { return "u:" + uid + ":" + what; }
 std::string ns_lessons(const std::string& agent) { return "agent:" + agent + ":lessons"; }
 
@@ -326,12 +380,14 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   t->workspace = workspace_for(uid, session);
   fs::create_directories(t->workspace);
   t->prompt_version = prompts_.choose().v;
+  t->started = std::time(nullptr);
   // Implicit feedback: the next message often says how the last answer went ("no, that's wrong", "thanks").
   if (auto prev = last_turn(uid, session); prev && prev->done)
     if (const int sig = followup_signal(message); sig != 0)
       rate_later(prev, sig, "(implicit: the user's next message was \"" + clip(message, 200) + "\")");
   {
     std::lock_guard lk(mu_);
+    prune_turns();
     turns_[t->id] = t;
   }
   // Follow-ups ("make it shorter", "no, the other one") only make sense next to what came before.
@@ -424,7 +480,8 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     // Shared blackboard on Walrus: any teammate (now or in a later session) can recall it.
     store_.put("task:" + t->id, "blackboard",
                "@" + s.agent + " (" + (s.error.empty() ? "done" : "failed") + ") " + clip(s.instruction, 200) +
-                   " → " + clip(s.error.empty() ? s.output : s.error, 800));
+                   " → " + clip(s.error.empty() ? s.output : s.error, 800),
+               t->id, uid);
 
     for (auto& h : router::find_handoffs(s.output, names)) {
       const bool dup = std::any_of(queue.begin(), queue.end(), [&](auto& q) {
@@ -446,7 +503,7 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
                                   [](auto& s) { return !s.error.empty() && !is_capacity_error(s.error); });
   if (failed && !t->cancel->load()) {
     std::lock_guard lk(mu_);
-    background_.emplace_back([this, t] { reflect(*t, -1, "(automatic: an agent step failed)"); });
+    background_.emplace_back(guarded([this, t] { reflect(*t, -1, "(automatic: an agent step failed)"); }));
   }
 
   const std::string final_text = t->steps.empty() ? "" : t->steps.back().output;
@@ -519,19 +576,23 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment) {
     if (!reg_.find(agent, t.uid)) agent = reg_.primary()->name();
     const std::string lesson = l.value("lesson", "");
     if (lesson.empty()) continue;
-    store_.put(ns_lessons(agent), "lesson", "Lesson for @" + agent + " (" + today() + "): " + lesson);
+    store_.put(ns_lessons(agent), "lesson", "Lesson for @" + agent + " (" + today() + "): " + lesson, t.id, t.uid);
     out["lessons"].push_back({{"agent", agent}, {"lesson", lesson}});
   }
   if (rating > 0 && j->contains("skill") && (*j)["skill"].is_object()) {
     const json& sk = (*j)["skill"];
     const std::string text = "Skill \"" + sk.value("name", "unnamed") + "\" — use when: " + sk.value("when", "") +
                              ". How: " + sk.value("how", "");
-    store_.put(kSkillsNs, "skill", text);
+    store_.put(kSkillsNs, "skill", text, t.id, t.uid);
     out["skill"] = sk;
   }
   const std::string critique = j->value("critique", "");
   if (rating < 0 && !critique.empty()) {
     prompts_.add_critique(critique);
+    {
+      std::lock_guard lk(mu_);
+      critics_.insert(t.uid);
+    }
     out["critique"] = critique;
     if (static_cast<int>(prompts_.pending_critiques()) >= opt_.evolve_every) {
       evolve_in_background(t.uid, t.vault);
@@ -540,17 +601,18 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment) {
   }
   // The improvement itself is part of the record: what the harness learned, from which turn.
   store_.put(kImprovementsNs, "improvement",
-             memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"turn", t.id}, {"rating", rating},
-                                                   {"comment", clip(comment, 300)}, {"result", out}}));
+             memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"uid", t.uid}, {"turn", t.id},
+                                                   {"rating", rating}, {"comment", clip(comment, 300)}, {"result", out}}),
+             t.id, t.uid);
   return out;
 }
 
-json Harness::feedback(const std::string& turn_id, int rating, const std::string& comment) {
+json Harness::feedback(const std::string& uid, const std::string& turn_id, int rating, const std::string& comment) {
   std::shared_ptr<Turn> t;
   {
     std::lock_guard lk(mu_);
     auto it = turns_.find(turn_id);
-    if (it == turns_.end()) return {{"error", "unknown turn (feedback is only accepted in the session that ran it)"}};
+    if (it == turns_.end() || it->second->uid != uid) return {{"error", "unknown turn (feedback is only accepted in the session that ran it)"}};
     t = it->second;
     if (t->user_rated) return {{"error", "already rated"}};
   }
@@ -583,7 +645,19 @@ json Harness::rate(const std::shared_ptr<Turn>& t, int rating, const std::string
 
 void Harness::rate_later(const std::shared_ptr<Turn>& t, int rating, const std::string& why) {
   std::lock_guard lk(mu_);
-  background_.emplace_back([this, t, rating, why] { rate(t, rating, why, true); });
+  background_.emplace_back(guarded([this, t, rating, why] { rate(t, rating, why, true); }));
+}
+
+// Finished turns stay in memory for a while so they can be rated and followed up; after that the
+// transcript on Walrus is the only copy (session_history falls back to it).
+void Harness::prune_turns() {
+  constexpr std::time_t kKeep = 12 * 3600;
+  const std::time_t cutoff = std::time(nullptr) - kKeep;
+  std::erase_if(turns_, [&](const auto& kv) { return kv.second->done && kv.second->started < cutoff; });
+  for (auto it = session_turns_.begin(); it != session_turns_.end();) {
+    std::erase_if(it->second, [&](const std::string& id) { return !turns_.contains(id); });
+    it = it->second.empty() ? session_turns_.erase(it) : std::next(it);
+  }
 }
 
 std::shared_ptr<Turn> Harness::last_turn(const std::string& uid, const std::string& session) {
@@ -643,7 +717,9 @@ json Harness::evolve_now(const std::string& uid, const std::vector<std::string>&
   json r = prompts_.evolve(*brain, cases, sb ? &*sb : nullptr);
   if (!r.contains("error"))
     store_.put(kImprovementsNs, "improvement",
-               memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"rating", 0}, {"result", {{"evolved", r}}}}));
+               memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"uid", uid}, {"rating", 0},
+                                                     {"result", {{"evolved", r}}}}),
+               "", uid);
   r["replay_cases"] = cases.size();
   return r;
 }
@@ -651,24 +727,46 @@ json Harness::evolve_now(const std::string& uid, const std::vector<std::string>&
 void Harness::evolve_in_background(const std::string& uid, const secrets::Key& vault) {
   if (evolving_.exchange(true)) return;  // one evolution at a time; critiques keep queueing
   std::lock_guard lk(mu_);
-  background_.emplace_back([this, uid, vault] {
+  background_.emplace_back(guarded([this, uid, vault] {
+    struct Done {
+      std::atomic<bool>& flag;
+      ~Done() { flag = false; }
+    } done{evolving_};  // even if evolution throws, the next one may run
+    // The edit is tested on the rated turns of everyone whose critique it answers, so one user's
+    // complaints can't reshape the shared playbook against their own turns alone.
+    std::set<std::string> critics;
+    {
+      std::lock_guard lk(mu_);
+      critics.swap(critics_);
+    }
+    critics.insert(uid);
+    std::vector<ReplayCase> cases;
+    const size_t each = critics.size() > 1 ? 3 : 5;
+    for (auto& c : critics) {
+      auto mine = replay_cases(c);
+      for (size_t i = 0; i < mine.size() && i < each && cases.size() < 8; ++i) cases.push_back(std::move(mine[i]));
+    }
     json r = {{"error", "no brain configured"}};
     if (agents::Agent* brain = reg_.brain()) {
       const auto sb = sandbox_for(uid, "", vault);
-      r = prompts_.evolve(*brain, replay_cases(uid), sb ? &*sb : nullptr);
+      r = prompts_.evolve(*brain, cases, sb ? &*sb : nullptr);
+    }
+    if (r.contains("error")) {  // critiques were requeued; so are their authors
+      std::lock_guard lk(mu_);
+      critics_.insert(critics.begin(), critics.end());
     }
     if (!r.contains("error"))
       store_.put(kImprovementsNs, "improvement",
-                 memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"rating", 0},
-                                                       {"result", {{"evolved", r}}}}));
-    evolving_ = false;
-  });
+                 memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"uid", uid}, {"rating", 0},
+                                                       {"result", {{"evolved", r}}}}),
+                 "", uid);
+  }));
 }
 
-bool Harness::cancel(const std::string& turn_id) {
+bool Harness::cancel(const std::string& uid, const std::string& turn_id) {
   std::lock_guard lk(mu_);
   auto it = turns_.find(turn_id);
-  if (it == turns_.end()) return false;
+  if (it == turns_.end() || it->second->uid != uid) return false;
   it->second->cancel->store(true);
   return true;
 }
@@ -686,8 +784,9 @@ json Harness::memory_view(const std::string& uid, const std::string& query) {
       {"skills", memories_json(store_.recall(q, kSkillsNs, {.limit = 8}))},
       {"improvements", [&] {
          json arr = json::array();
-         for (auto& r : recall_records(kImprovementsNs, "improvement", "harness improvement lesson critique", 15))
-           arr.push_back(r);
+         // Improvements quote the user's own comments, so each user sees only the ones their turns caused.
+         for (auto& r : recall_records(kImprovementsNs, "improvement", "harness improvement lesson critique", 30))
+           if (r.value("uid", "") == uid && arr.size() < 15) arr.push_back(r);
          return arr;
        }()},
       {"prompts", prompts_.summary()},
@@ -745,9 +844,9 @@ void Harness::apply_directives(Turn& t, const Step& s, const Emit& emit) {
 }
 
 std::vector<json> Harness::recall_records(const std::string& ns, const std::string& kind, const std::string& query,
-                                          int limit) {
+                                          int limit, bool* failed) {
   std::vector<json> out;
-  for (auto& m : store_.recall(query, ns, {.limit = limit, .recent = true})) {
+  for (auto& m : store_.recall(query, ns, {.limit = limit, .recent = true}, failed)) {
     if (auto j = memwal::decode_record(m.text, kind)) {
       (*j)["blob_id"] = m.blob_id;
       out.push_back(std::move(*j));
@@ -811,14 +910,10 @@ json Harness::restore_checkpoints(const std::string& uid, const std::string& ses
       if (f.contains("content") && safe_relative(f.value("path", ""))) latest[f["path"]] = f["content"];
   }
   const fs::path root = workspace_for(uid, session);
-  json restored = json::array();
-  for (auto& [path, content] : latest) {
-    const fs::path dst = root / path;
-    fs::create_directories(dst.parent_path());
-    std::ofstream(dst, std::ios::binary) << content;
-    restored.push_back(path);
-  }
-  return {{"session", session}, {"workspace", root.string()}, {"restored", restored}};
+  json restored = json::array(), skipped = json::array();
+  for (auto& [path, content] : latest)
+    (write_in_workspace(root.string(), path, content) ? restored : skipped).push_back(path);
+  return {{"session", session}, {"workspace", root.string()}, {"restored", restored}, {"skipped", skipped}};
 }
 
 // ---- agents per user: provider accounts, usage, own API keys --------------------------
@@ -830,12 +925,25 @@ json read_keys(const std::string& path) {
   auto j = json::parse(in, nullptr, false);
   return j.is_object() ? j : json::object();
 }
-void write_keys(const std::string& path, const json& j) {
-  fs::create_directories(fs::path(path).parent_path());
-  const std::string tmp = path + ".tmp";
-  { std::ofstream(tmp) << j.dump(2); }
-  fs::permissions(tmp, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
-  fs::rename(tmp, path);
+// Every change is read-modify-write of the whole file, so changes are serialized: two requests
+// saving at once would otherwise drop one user's credentials, or race on the temp file.
+bool update_keys(const std::string& path, const std::function<void(json&)>& edit) {
+  static std::mutex mu;
+  std::lock_guard lk(mu);
+  try {
+    json j = read_keys(path);
+    edit(j);
+    fs::create_directories(fs::path(path).parent_path());
+    const std::string tmp = path + ".tmp";
+    { std::ofstream(tmp, std::ios::trunc); }  // 0600 before any secret is written
+    fs::permissions(tmp, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
+    { std::ofstream(tmp, std::ios::trunc) << j.dump(2); }
+    fs::rename(tmp, path);
+    return true;
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "[keys] could not save %s: %s\n", path.c_str(), e.what());
+    return false;
+  }
 }
 // A secret slot in the keys file: {"sealed": …} under the user's vault key, or {"plain": …} only
 // for local single-user runs without wallet sign-in (no vault key exists there).
@@ -862,27 +970,42 @@ void Harness::seed_user(const std::string& uid) {
     if (seeded_.contains(uid)) return;
     seeded_.insert(uid);
   }
-  // Today's runs per agent, rebuilt from the Walrus transcripts.
-  auto chats = recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100);
+  // If the relayer can't be reached, try again on the user's next request instead of leaving them
+  // without their agents and model picks until a restart.
+  bool failed = false;
+  struct Retry {
+    Harness* h;
+    const std::string& uid;
+    bool& failed;
+    ~Retry() {
+      if (!failed) return;
+      std::lock_guard lk(h->mu_);
+      h->seeded_.erase(uid);
+    }
+  } retry{this, uid, failed};
+  // Today's runs per agent, rebuilt from the Walrus transcripts (idempotent, since seeding can repeat).
+  auto chats = recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100, &failed);
   const std::time_t now = std::time(nullptr);
   std::tm tm{};
   gmtime_r(&now, &tm);
   tm.tm_hour = tm.tm_min = tm.tm_sec = 0;
   const long midnight = static_cast<long>(timegm(&tm));
+  std::map<std::string, int> runs;
+  for (auto& c : chats) {
+    if (c.value("ts", 0L) < midnight) continue;
+    for (auto& st : c.value("steps", json::array())) runs[st.value("agent", "")]++;
+  }
   {
     std::lock_guard lk(mu_);
-    auto& u = usage_[uid];
-    for (auto& c : chats) {
-      if (c.value("ts", 0L) < midnight) continue;
-      for (auto& st : c.value("steps", json::array())) {
-        auto& e = u[st.value("agent", "")];
-        e.day = today();
-        e.runs++;
-      }
+    for (auto& [agent, n] : runs) {
+      auto& e = usage_[uid][agent];
+      if (e.day != today()) e = {today(), 0, 0};
+      e.runs = std::max(e.runs, n);
     }
   }
   // The user's model picks.
-  if (auto picks = recall_records(ns_user(uid, "settings"), "models", "user model picks settings", 5); !picks.empty()) {
+  if (auto picks = recall_records(ns_user(uid, "settings"), "models", "user model picks settings", 5, &failed);
+      !picks.empty()) {
     // Name the object: before C++23 a range-for over a temporary's items() iterates freed memory.
     const json models = picks.front().value("models", json::object());
     std::lock_guard lk(mu_);
@@ -890,13 +1013,15 @@ void Harness::seed_user(const std::string& uid) {
       if (model.is_string()) model_picks_[uid][agent] = model.get<std::string>();
   }
   // The user's own API agents.
-  auto recs = recall_records(ns_user(uid, "settings"), "agents", "user api agents settings", 5);
+  auto recs = recall_records(ns_user(uid, "settings"), "agents", "user api agents settings", 5, &failed);
   if (recs.empty()) return;
   const json keys = read_keys(opt_.keys_path).value(uid, json::object());
   for (auto& a : recs.front().value("agents", json::array())) {
+    if (!a.is_object() || !a.contains("name") || !a["name"].is_string()) continue;
     agents::Spec spec = agents::spec_from_json(a);
     spec.kind = "openai";
     spec.owner = uid;
+    spec.public_only = opt_.user_accounts;
     const json slot = keys.value(spec.name, json());
     spec.key_hint = slot.is_object() ? slot.value("hint", "") : "";
     reg_.add(spec);
@@ -1000,14 +1125,14 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
     std::lock_guard lk(mu_);
     if (connecting_.contains(a->name())) return {{"ok", true}, {"command", cmd}, {"already", true}};
     connecting_.insert(a->name());
-    background_.emplace_back([this, a] {
+    background_.emplace_back(guarded([this, a] {
       proc::Options o;
       o.timeout_s = 600;
       proc::run(a->login_argv(), o);
       a->invalidate(nullptr);
       std::lock_guard lk2(mu_);
       connecting_.erase(a->name());
-    });
+    }));
     return {{"ok", true}, {"command", cmd}};
   }
 
@@ -1026,7 +1151,7 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
   auto fut = ready->get_future();
   {
     std::lock_guard lk(mu_);
-    background_.emplace_back([this, a, st, sb = *sb, ready] {
+    background_.emplace_back(guarded([this, a, st, sb = *sb, ready] {
       static const std::regex url_re(R"(https://[^\s]+)"), code_re(R"(\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b)");
       bool signalled = false;
       proc::Options o;
@@ -1047,14 +1172,14 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
       proc::Result p;
       {
         sandbox::Lease lease(&sb);  // the login the CLI writes is sealed with the user's key on release
-        p = proc::run(sandbox::wrap(sb, a->device_login_argv()), o);
+        p = sandbox::run(sb, a->device_login_argv(), o);
       }
       a->invalidate(&sb);
       std::lock_guard lk2(mu_);
       st->status = p.exit_code == 0 ? "done" : "failed";
       if (p.exit_code != 0) st->error = p.timed_out ? "sign-in timed out" : strip_ansi(p.out).substr(0, 240);
       if (!signalled) ready->set_value();
-    });
+    }));
   }
   // Hand the URL + code to the browser as soon as the CLI prints them; the CLI keeps waiting.
   fut.wait_for(std::chrono::seconds(25));
@@ -1083,9 +1208,9 @@ json Harness::set_credential(const std::string& uid, const std::string& name, co
     if (kind == "oauth_token" && !v.starts_with("sk-ant-oat")) return {{"error", "that doesn't look like a token from `claude setup-token` (sk-ant-oat…)"}};
     if (kind == "api_key" && !v.starts_with("sk-ant-")) return {{"error", "that doesn't look like an Anthropic API key (sk-ant-…)"}};
     if (kind != "oauth_token" && kind != "api_key") return {{"error", "unknown credential type"}};
-    json keys = read_keys(opt_.keys_path);
-    keys[kCreds][uid]["claude"] = {{"kind", kind}, {"secret", make_slot(v, vault)}, {"hint", hint(v)}};
-    write_keys(opt_.keys_path, keys);
+    const json slot = {{"kind", kind}, {"secret", make_slot(v, vault)}, {"hint", hint(v)}};
+    if (!update_keys(opt_.keys_path, [&](json& keys) { keys[kCreds][uid]["claude"] = slot; }))
+      return {{"error", "couldn't save the credential on the Saga host"}};
     a->invalidate(sb ? &*sb : nullptr);
     return {{"ok", true}};
   }
@@ -1098,7 +1223,7 @@ json Harness::set_credential(const std::string& uid, const std::string& name, co
     proc::Result p;
     {
       sandbox::Lease lease(&*sb);
-      p = proc::run(sandbox::wrap(*sb, {"codex", "login", "--with-api-key"}), o);
+      p = sandbox::run(*sb, {"codex", "login", "--with-api-key"}, o);
     }
     a->invalidate(&*sb);
     if (p.exit_code != 0) return {{"error", "codex rejected the key: " + strip_ansi(p.out).substr(0, 200)}};
@@ -1115,12 +1240,12 @@ json Harness::disconnect_agent(const std::string& uid, const std::string& name) 
   // Disconnect deletes the credential outright (sealed or not); nothing needs the vault key for that.
   json deleted = json::array();
   if (a->spec().kind == "claude-code") {
-    json keys = read_keys(opt_.keys_path);
-    if (keys.contains(kCreds) && keys[kCreds].contains(uid) && keys[kCreds][uid].contains("claude")) {
-      keys[kCreds][uid].erase("claude");
-      deleted.push_back("claude token / API key");
-    }
-    write_keys(opt_.keys_path, keys);
+    update_keys(opt_.keys_path, [&](json& keys) {
+      if (keys.contains(kCreds) && keys[kCreds].contains(uid) && keys[kCreds][uid].contains("claude")) {
+        keys[kCreds][uid].erase("claude");
+        deleted.push_back("claude token / API key");
+      }
+    });
   } else {
     const std::string rel = a->spec().kind == "codex" ? ".codex/auth.json" : ".grok/auth.json";
     if (secrets::erase_file((fs::path(sb->home) / rel).string())) deleted.push_back(rel);
@@ -1138,26 +1263,26 @@ json Harness::disconnect_agent(const std::string& uid, const std::string& name) 
 
 json Harness::vault_status(const std::string& uid, const secrets::Key& vault) {
   if (vault.size() != 32) return {{"state", "missing"}};
-  json keys = read_keys(opt_.keys_path);
-  const std::string id = secrets::key_id(vault), known = keys.value("#vault", json::object()).value(uid, "");
-  if (known.empty()) {  // first key for this user becomes their vault
-    keys["#vault"][uid] = id;
-    write_keys(opt_.keys_path, keys);
-    return {{"state", "ok"}};
-  }
+  const std::string id = secrets::key_id(vault);
+  std::string known;
+  update_keys(opt_.keys_path, [&](json& keys) {
+    known = keys.value("#vault", json::object()).value(uid, "");
+    if (known.empty()) keys["#vault"][uid] = known = id;  // first key for this user becomes their vault
+  });
   return {{"state", known == id ? "ok" : "mismatch"}};
 }
 
 // The user's secrets were sealed under a key this browser can't reproduce: drop them and adopt this key.
 json Harness::vault_reset(const std::string& uid, const secrets::Key& vault) {
   if (vault.size() != 32) return {{"error", "no vault key"}};
-  json keys = read_keys(opt_.keys_path);
-  if (keys.contains(kCreds)) keys[kCreds].erase(uid);
-  if (keys.contains(uid))
-    for (auto& [name, slot] : keys[uid].items())
-      if (slot.is_object() && slot.contains("sealed")) slot = json{{"hint", slot.value("hint", "")}};
-  keys["#vault"][uid] = secrets::key_id(vault);
-  write_keys(opt_.keys_path, keys);
+  if (!update_keys(opt_.keys_path, [&](json& keys) {
+        if (keys.contains(kCreds)) keys[kCreds].erase(uid);
+        if (keys.contains(uid))
+          for (auto& [name, slot] : keys[uid].items())
+            if (slot.is_object() && slot.contains("sealed")) slot = json{{"hint", slot.value("hint", "")}};
+        keys["#vault"][uid] = secrets::key_id(vault);
+      }))
+    return {{"error", "couldn't update the vault on the Saga host"}};
   if (const auto sb = sandbox_for(uid, "", vault))
     for (auto& rel : sandbox::kLoginFiles) secrets::erase_file((fs::path(sb->home) / rel).string());
   for (auto* a : reg_.visible(uid)) a->invalidate(nullptr);
@@ -1178,6 +1303,7 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
   agents::Spec spec;
   spec.kind = "openai";
   spec.owner = uid;
+  spec.public_only = opt_.user_accounts;
   spec.name = body.value("name", "");
   spec.base_url = body.value("base_url", "");
   while (!spec.base_url.empty() && spec.base_url.back() == '/') spec.base_url.pop_back();
@@ -1191,22 +1317,23 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
   if (spec.model.empty()) return {{"error", "model is required"}};
   if (auto err = reg_.add(spec); !err.empty()) return {{"error", err}};
 
-  json keys = read_keys(opt_.keys_path);
   if (!key.empty()) {
     json slot = make_slot(key, vault);
     slot["hint"] = spec.key_hint;
-    keys[uid][spec.name] = slot;
+    if (!update_keys(opt_.keys_path, [&](json& keys) { keys[uid][spec.name] = slot; })) {
+      reg_.remove(spec.name, uid);
+      return {{"error", "couldn't save the API key on the Saga host"}};
+    }
   }
-  write_keys(opt_.keys_path, keys);
   persist_user_agents(uid);
   return {{"ok", true}, {"name", spec.name}};
 }
 
 json Harness::remove_agent(const std::string& uid, const std::string& name) {
   if (!reg_.remove(name, uid)) return {{"error", "not one of your agents"}};
-  json keys = read_keys(opt_.keys_path);
-  if (keys.contains(uid)) keys[uid].erase(name);
-  write_keys(opt_.keys_path, keys);
+  update_keys(opt_.keys_path, [&](json& keys) {
+    if (keys.contains(uid)) keys[uid].erase(name);
+  });
   persist_user_agents(uid);
   return {{"ok", true}};
 }
@@ -1250,8 +1377,8 @@ json Harness::set_model(const std::string& uid, const std::string& agent, const 
   const agents::Agent* target = reg_.find(agent, uid);
   if (!target) return {{"error", "no agent @" + agent}};
   if (target->spec().locked) return {{"error", "@" + agent + "'s model can't be changed"}};
-  // It becomes a CLI argument, so only the characters model ids actually use.
-  if (model.size() > 80 || !std::all_of(model.begin(), model.end(), [](unsigned char c) {
+  // It becomes a CLI argument, so only the characters model ids actually use, and never a flag.
+  if (model.size() > 80 || model.starts_with("-") || !std::all_of(model.begin(), model.end(), [](unsigned char c) {
         return std::isalnum(c) || c == '.' || c == '-' || c == '_' || c == ':' || c == '/' || c == '@';
       }))
     return {{"error", "that isn't a model id"}};
@@ -1280,18 +1407,11 @@ void Harness::persist_user_agents(const std::string& uid) {
 
 // ---- GitHub: the user's own repos, worked on in their chat workspace --------------------------
 // The token is sealed with the user's vault key like every other credential. A chat's repo is a
-// normal clone inside that chat's workspace on branch saga/<chat>; `.saga-repo.json` beside it says
-// which repo it is. Git gets the token per command via GIT_CONFIG_* env — never in .git/config, so
-// the agents working in the repo can commit but cannot push.
+// normal clone inside that chat's workspace on branch saga/<chat>. Everything inside the workspace
+// is the agents' to change — files, .git/config, hooks — so nothing Saga trusts lives there: the
+// record of which repo a chat works on sits next to the workspace, out of the sandbox's view, and
+// the token only ever meets git in a fresh repository (see github_open_pr).
 namespace {
-constexpr const char* kRepoMarker = ".saga-repo.json";
-
-json read_marker(const std::string& workspace) {
-  std::ifstream in(fs::path(workspace) / kRepoMarker);
-  auto j = json::parse(in, nullptr, false);
-  return j.is_object() ? j : json();
-}
-
 std::string repo_dir_name(const std::string& full_name) {
   std::string n = full_name.substr(full_name.find('/') + 1), out;
   for (char c : n)
@@ -1302,6 +1422,29 @@ std::string repo_dir_name(const std::string& full_name) {
 bool valid_full_name(const std::string& s) {
   static const std::regex re(R"(^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$)");
   return std::regex_match(s, re);
+}
+
+bool valid_branch(const std::string& s) {
+  static const std::regex re(R"(^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$)");
+  return std::regex_match(s, re) && s.find("..") == std::string::npos;
+}
+
+// workspaces/<uid>/<session> → workspaces/<uid>/.repo-<session>.json (only the session dir is mounted).
+fs::path marker_path(const std::string& workspace) {
+  const fs::path ws(workspace);
+  return ws.parent_path() / (".repo-" + ws.filename().string() + ".json");
+}
+
+json read_marker(const std::string& workspace) {
+  std::ifstream in(marker_path(workspace));
+  auto j = json::parse(in, nullptr, false);
+  if (!j.is_object()) return json();
+  const std::string full = j.value("full_name", "");
+  const std::string session = fs::path(workspace).filename().string();
+  if (!valid_full_name(full) || j.value("dir", "") != repo_dir_name(full) || j.value("branch", "") != "saga/" + session ||
+      !valid_branch(j.value("base", "")))
+    return json();
+  return j;
 }
 }  // namespace
 
@@ -1315,19 +1458,24 @@ proc::Result Harness::git(const std::string& uid, const std::string& workspace, 
                           const std::vector<std::string>& args, const std::string& token, int timeout_s) {
   std::vector<std::string> argv = {"git"};
   argv.insert(argv.end(), args.begin(), args.end());
+  return git_argv(uid, workspace, vault, argv, token, timeout_s);
+}
+
+proc::Result Harness::git_argv(const std::string& uid, const std::string& workspace, const secrets::Key& vault,
+                               const std::vector<std::string>& argv, const std::string& token, int timeout_s) {
   proc::Options o;
   o.timeout_s = timeout_s;
   o.merge_stderr = true;
-  const std::map<std::string, std::string> auth = token.empty() ? std::map<std::string, std::string>{}
-                                                                : github::git_env(token);
+  std::map<std::string, std::string> env = token.empty() ? std::map<std::string, std::string>{}
+                                                        : github::git_env(token);
+  env["GIT_TERMINAL_PROMPT"] = "0";
+  env["GIT_CONFIG_GLOBAL"] = "/dev/null";  // in a sandbox, ~/.gitconfig is the agents' to write
   if (auto sb = sandbox_for(uid, workspace, vault)) {
-    for (auto& [k, v] : auth) sb->env[k] = v;
-    sb->env["GIT_TERMINAL_PROMPT"] = "0";
-    return proc::run(sandbox::wrap(*sb, argv), o);
+    for (auto& [k, v] : env) sb->env[k] = v;
+    return sandbox::run(*sb, argv, o);
   }
   o.cwd = workspace;
-  o.env = auth;
-  o.env["GIT_TERMINAL_PROMPT"] = "0";
+  o.env = env;
   return proc::run(argv, o);
 }
 
@@ -1366,12 +1514,9 @@ json Harness::github_set_token(const std::string& uid, const std::string& token,
   } catch (const std::exception& e) {
     return {{"error", std::string("GitHub rejected the token: ") + e.what()}};
   }
-  json keys = read_keys(opt_.keys_path);
-  keys[kCreds][uid]["github"] = {{"secret", make_slot(t, vault)},
-                                 {"login", me.value("login", "")},
-                                 {"id", me.value("id", 0)},
-                                 {"hint", hint(t)}};
-  write_keys(opt_.keys_path, keys);
+  const json slot = {{"secret", make_slot(t, vault)}, {"login", me.value("login", "")}, {"id", me.value("id", 0)}, {"hint", hint(t)}};
+  if (!update_keys(opt_.keys_path, [&](json& keys) { keys[kCreds][uid]["github"] = slot; }))
+    return {{"error", "couldn't save the GitHub token on the Saga host"}};
   return {{"ok", true}, {"login", me.value("login", "")}};
 }
 
@@ -1410,7 +1555,7 @@ json Harness::github_device(const std::string& uid, const secrets::Key& vault) {
     std::lock_guard lk(mu_);
     gh_device_[uid] = st;
     // Poll until the user approves; the vault key lives only in this thread's memory meanwhile.
-    background_.emplace_back([this, uid, st, vault, device = start.value("device_code", ""),
+    background_.emplace_back(guarded([this, uid, st, vault, device = start.value("device_code", ""),
                               interval = start.value("interval", 5), expires = start.value("expires_in", 900)] {
       int wait = std::max(5, interval);
       for (int elapsed = 0; elapsed < expires; elapsed += wait) {
@@ -1432,16 +1577,17 @@ json Harness::github_device(const std::string& uid, const secrets::Key& vault) {
       std::lock_guard lk2(mu_);
       st->status = "failed";
       st->error = "the code expired";
-    });
+    }));
   }
   return {{"ok", true}, {"url", st->url}, {"code", st->code}};
 }
 
 json Harness::github_disconnect(const std::string& uid) {
-  json keys = read_keys(opt_.keys_path);
-  bool had = keys.contains(kCreds) && keys[kCreds].contains(uid) && keys[kCreds][uid].contains("github");
-  if (had) keys[kCreds][uid].erase("github");
-  write_keys(opt_.keys_path, keys);
+  bool had = false;
+  update_keys(opt_.keys_path, [&](json& keys) {
+    had = keys.contains(kCreds) && keys[kCreds].contains(uid) && keys[kCreds][uid].contains("github");
+    if (had) keys[kCreds][uid].erase("github");
+  });
   {
     std::lock_guard lk(mu_);
     gh_device_.erase(uid);
@@ -1479,16 +1625,22 @@ json Harness::github_attach(const std::string& uid, const std::string& session, 
   auto run = [&](std::vector<std::string> args, bool auth, int timeout = 120) {
     return git(uid, ws, vault, args, auth ? token : "", timeout);
   };
-  auto p = run({"clone", "--filter=blob:none", "https://github.com/" + full_name + ".git", dir}, true, 600);
-  if (p.exit_code != 0) return {{"error", "clone failed: " + p.out.substr(0, 240)}};
-  run({"-C", dir, "checkout", "-b", branch}, false);
+  std::error_code ec;
+  if (fs::exists(fs::path(ws) / dir / ".git", ec)) {
+    // Already cloned here (chats attached before the repo record moved out of the workspace).
+    if (run({"-C", dir, "checkout", branch}, false).exit_code != 0) run({"-C", dir, "checkout", "-b", branch}, false);
+  } else {
+    auto p = run({"clone", "--filter=blob:none", "https://github.com/" + full_name + ".git", dir}, true, 600);
+    if (p.exit_code != 0) return {{"error", "clone failed: " + p.out.substr(0, 240)}};
+    run({"-C", dir, "checkout", "-b", branch}, false);
+  }
   run({"-C", dir, "config", "user.name", me.value("login", "saga")}, false);
   run({"-C", dir, "config", "user.email",
        std::to_string(me.value("id", 0)) + "+" + me.value("login", "saga") + "@users.noreply.github.com"},
       false);
   const json marker = {{"full_name", full_name}, {"dir", dir}, {"branch", branch}, {"base", base},
                        {"private", meta.value("private", false)}};
-  std::ofstream(fs::path(ws) / kRepoMarker) << marker.dump(2);
+  std::ofstream(marker_path(ws)) << marker.dump(2);
   return {{"ok", true}, {"repo", marker}};
 }
 
@@ -1526,9 +1678,35 @@ json Harness::github_open_pr(const std::string& uid, const std::string& session,
     git(uid, ws, vault, {"-C", dir, "add", "-A"});
     git(uid, ws, vault, {"-C", dir, "commit", "-m", "Saga: " + t});
   }
-  const auto log = git(uid, ws, vault, {"-C", dir, "log", "--oneline", "origin/" + base + "..HEAD"});
+  const auto log = git(uid, ws, vault, {"-C", dir, "log", "--oneline", "origin/" + base + "..refs/heads/" + branch});
   if (log.out.empty()) return {{"error", "no commits yet — ask an agent to make a change first"}};
-  const auto push = git(uid, ws, vault, {"-C", dir, "push", "-u", "origin", branch}, token, 300);
+
+  // The agents' clone is theirs: its config, hooks, filters or fsmonitor could run code, point git at
+  // a proxy, or rewrite the remote while the token is in git's environment. So the push happens from
+  // a fresh blob-less clone of GitHub, which fetches only the branch's new commits from the agents'
+  // clone (with the token unset) and never reads its config.
+  const bool sandboxed = opt_.user_accounts;
+  fs::path scratch;
+  if (!sandboxed) {
+    std::string tmpl = (fs::temp_directory_path() / "saga-push-XXXXXX").string();
+    if (!::mkdtemp(tmpl.data())) return {{"error", "push failed: no temporary directory"}};
+    scratch = tmpl;
+  }
+  const std::string clean = sandboxed ? "/tmp/saga-push" : (scratch / "repo.git").string();
+  const std::string src = (sandboxed ? std::string(sandbox::kWork) : ws) + "/" + dir;
+  const char* script =
+      "set -e\n"
+      "git clone -q --bare --filter=blob:none \"$1\" \"$4\"\n"
+      "env -u GIT_CONFIG_COUNT -u GIT_CONFIG_KEY_0 -u GIT_CONFIG_VALUE_0 \\\n"
+      "  git -C \"$4\" fetch -q --no-tags \"$3\" \"+refs/heads/$2:refs/heads/$2\"\n"
+      "git -C \"$4\" -c core.hooksPath=/dev/null push -q \"$1\" \"refs/heads/$2:refs/heads/$2\"\n";
+  const auto push = git_argv(uid, ws, vault,
+                             {"sh", "-c", script, "saga-push", "https://github.com/" + full + ".git", branch, src, clean},
+                             token, 300);
+  if (!scratch.empty()) {
+    std::error_code ec;
+    fs::remove_all(scratch, ec);
+  }
   if (push.exit_code != 0) return {{"error", "push failed: " + push.out.substr(0, 240)}};
   try {
     json pr = github::find_pr(token, full, owner, branch);

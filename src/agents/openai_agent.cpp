@@ -62,7 +62,8 @@ class OpenAIAgent : public Agent {
             }
           }
           return true;
-        });
+        },
+        spec_.public_only);
     r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!resp.ok() && r.text.empty()) {
       r.error = resp.error.empty() ? "HTTP " + std::to_string(resp.status) + ": " + resp.body.substr(0, 300)

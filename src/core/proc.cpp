@@ -18,7 +18,8 @@ namespace {
 // Server credentials. Agents run untrusted instructions, so a child must not inherit these even
 // when the caller puts them in Options::env. `saga mem` reaches memory through the local socket.
 bool server_secret(std::string_view key) {
-  return key == "MEMWAL_PRIVATE_KEY" || key == "SAGA_SESSION_SECRET" || key == "SAGA_ACCESS_CODE";
+  return key == "MEMWAL_PRIVATE_KEY" || key == "SAGA_SESSION_SECRET" || key == "SAGA_ACCESS_CODE" ||
+         key == "SAGA_GITHUB_CLIENT_SECRET" || key == "BOUNDLESS_API_KEY";
 }
 
 }  // namespace
@@ -46,7 +47,7 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
   for (auto& a : argv) args.push_back(const_cast<char*>(a.c_str()));
   args.push_back(nullptr);
   std::vector<std::string> env_store;
-  for (char** e = environ; *e; ++e) {
+  for (char** e = environ; opt.inherit_env && *e; ++e) {
     std::string kv(*e);
     const auto eq = kv.find('=');
     const std::string key = kv.substr(0, eq);

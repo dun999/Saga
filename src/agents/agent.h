@@ -57,6 +57,7 @@ struct Spec {
   std::string api_key;  // operator-configured key (host mode); never serialised to memory
   std::string key_hint; // last 4 chars of a user's own key, for display
   bool locked = false;  // model fixed by the operator and hidden from users
+  bool public_only = false;  // a user's own API on a shared server: never reach the host's network
 };
 
 // Provider-side account state: sign-in and the provider's own usage windows (e.g. 5-hour, weekly).

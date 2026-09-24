@@ -11,6 +11,7 @@ namespace saga::proc {
 struct Options {
   std::string cwd;
   std::map<std::string, std::string> env;  // added to / overriding the parent env
+  bool inherit_env = true;                 // false: the child sees only `env`
   std::string stdin_data;                  // written then closed; empty => /dev/null
   int timeout_s = 900;
   const std::atomic<bool>* cancel = nullptr;

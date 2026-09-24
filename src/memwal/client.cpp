@@ -108,8 +108,15 @@ json Client::signed_request(const std::string& method, const std::string& path, 
     if (include_seal_session) h["x-seal-session"] = seal_session();
 
     auto r = http::request(method, cfg_.server_url + path, h, body_str, timeout_s);
-    // 503 (Sui upstream / rate limiter) and 429 are retryable with backoff.
-    if ((r.status == 503 || r.status == 429 || !r.error.empty()) && attempt < 3) {
+    // 503 (Sui upstream / rate limiter) and 429 are retryable with backoff. So is a transport error,
+    // except for a write that may already have landed (a timeout after sending): retrying that
+    // would store the memory twice.
+    const bool write = path.starts_with("/api/remember") && path.find("/status") == std::string::npos &&
+                       method == "POST";
+    const bool not_sent = r.error.find("connect to server") != std::string::npos ||
+                          r.error.find("resolve") != std::string::npos;
+    const bool transport = !r.error.empty() && (!(write || path == "/api/analyze") || not_sent);
+    if ((r.status == 503 || r.status == 429 || transport) && attempt < 3) {
       int wait_s = 2 << attempt;
       if (auto it = r.headers.find("retry-after"); it != r.headers.end()) {
         try { wait_s = std::max(1, std::stoi(it->second)); } catch (...) {}
