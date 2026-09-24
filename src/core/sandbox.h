@@ -30,8 +30,9 @@ constexpr const char* kWork = "/mnt/work";
 // Lease on that home is held — i.e. while one of that user's own requests is running.
 extern const std::vector<std::string> kLoginFiles;
 
-// RAII: unseal the user's login files for the duration of a CLI call; the last lease out re-seals
-// them (CLIs refresh tokens during a run, so what gets sealed is the latest version).
+// RAII around every sandboxed call: unseal the user's login files for the call; the last lease out
+// re-seals them (CLIs refresh tokens during a run, so what gets sealed is the latest version) and
+// scrubs the home of everything else the CLIs wrote.
 class Lease {
  public:
   explicit Lease(const Sandbox* sb);
@@ -43,6 +44,9 @@ class Lease {
   std::string home_;
   std::vector<uint8_t> key_;
 };
+
+// Delete everything in an agent home except its sealed logins and Saga's own .saga files.
+void scrub_home(const std::string& home);
 
 // Does the user have this login file, sealed or not?
 bool has_login(const Sandbox& sb, const std::string& rel);

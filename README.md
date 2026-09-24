@@ -212,7 +212,11 @@ and chat workspace are the only writable places, and the environment is cleared,
 never reaches an agent. Provider tokens reach the sandbox through its environment and prompts through stdin
 or a 0600 file, never on a command line (which every local user can read with `ps`). Restoring checkpoints
 never follows a link an agent left in the workspace. Provider logins live in the user's own home (mode 0700), sealed except while one of
-that user's calls is running; none of them are written to Walrus memory. Reflection and prompt evolution
+that user's calls is running; none of them are written to Walrus memory. The home is scratch space:
+when the last call ends, everything the CLIs wrote (session transcripts with the prompt and recalled
+memories, their own memory files, logs, caches) is deleted, leaving only the sealed logins and Codex's
+plan-usage numbers. The keys file holds only ciphertext and a vault-key fingerprint: key hints and the
+GitHub username are sealed with the key they describe. Reflection and prompt evolution
 run on the user's own Claude account too. `bwrap` is required in this mode.
 
 **Work on your GitHub repos.** Connect GitHub (fine-grained token, or "Sign in with GitHub" when

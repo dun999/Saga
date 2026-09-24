@@ -226,6 +226,22 @@ void Harness::boot(const Emit& log) {
   auto say = [&](const std::string& m) {
     if (log) log({{"type", "log"}, {"text", m}});
   };
+  // Keep as little about connections as possible. Older versions left key hints in the keys file and
+  // CLI transcripts in agent homes; nothing runs yet, so both can go now.
+  if (fs::exists(opt_.keys_path))
+    update_keys(opt_.keys_path, [](json& keys) {
+      std::function<void(json&)> drop = [&](json& j) {
+        if (!j.is_object()) return;
+        j.erase("hint");
+        for (auto& [k, v] : j.items()) drop(v);
+      };
+      drop(keys);
+    });
+  if (opt_.user_accounts) {
+    std::error_code ec;
+    for (auto it = fs::directory_iterator(opt_.homes_dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+      if (fs::is_directory(fs::symlink_status(it->path(), ec))) sandbox::scrub_home(it->path().string());
+  }
   if (store_.enabled()) {
     // The relayer's vector index is a cache; Walrus is the source of truth. Rebuild anything missing
     // for the namespaces every turn depends on.
@@ -1169,9 +1185,8 @@ json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
     r["account"] = a ? a->account(r["custom"].get<bool>() ? nullptr : sbp) : json::object();
     // An own-API-key agent's settings travel with memory; its key only with the wallet's keyring.
     if (a && r["custom"].get<bool>() && !a->spec().locked) {
-      const json slot = api_keys.value(name, json());
-      const bool mine = slot.is_object() && !open_slot(slot, vault).empty();
-      r["account"]["detail"] = mine ? "own API key ··" + slot.value("hint", "") : "no API key from you";
+      const std::string key = open_slot(api_keys.value(name, json()), vault);
+      r["account"]["detail"] = key.empty() ? "no API key from you" : "own API key ··" + hint(key);
     }
     // How this agent can be connected, in this deployment mode.
     json how = json::array();
@@ -1298,7 +1313,7 @@ json Harness::set_credential(const std::string& uid, const std::string& name, co
     if (kind == "oauth_token" && !v.starts_with("sk-ant-oat")) return {{"error", "that doesn't look like a token from `claude setup-token` (sk-ant-oat…)"}};
     if (kind == "api_key" && !v.starts_with("sk-ant-")) return {{"error", "that doesn't look like an Anthropic API key (sk-ant-…)"}};
     if (kind != "oauth_token" && kind != "api_key") return {{"error", "unknown credential type"}};
-    const json slot = {{"kind", kind}, {"secret", make_slot(v, vault)}, {"hint", hint(v)}};
+    const json slot = {{"kind", kind}, {"secret", make_slot(v, vault)}};
     if (!update_keys(opt_.keys_path, [&](json& keys) { keys[kCreds][keyring(uid, vault)]["claude"] = slot; }))
       return {{"error", "couldn't save the credential on the Saga host"}};
     a->invalidate(sb ? &*sb : nullptr);
@@ -1375,9 +1390,9 @@ json Harness::vault_reset(const std::string& uid, const secrets::Key& vault) {
   if (!is_wallet(uid)) return {{"error", "only a wallet's vault can be reset"}};
   if (!update_keys(opt_.keys_path, [&](json& keys) {
         if (keys.contains(kCreds)) keys[kCreds].erase(uid);
-        if (keys.contains(uid))
-          for (auto& [name, slot] : keys[uid].items())
-            if (slot.is_object() && slot.contains("sealed")) slot = json{{"hint", slot.value("hint", "")}};
+        if (keys.contains(uid) && keys[uid].is_object())
+          for (auto it = keys[uid].begin(); it != keys[uid].end();)
+            it = it->is_object() && it->contains("sealed") ? keys[uid].erase(it) : std::next(it);
         keys["#vault"][uid] = secrets::key_id(vault);
       }))
     return {{"error", "couldn't update the vault on the Saga host"}};
@@ -1435,8 +1450,7 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
   if (auto err = reg_.add(spec); !err.empty()) return {{"error", err}};
 
   if (!key.empty()) {
-    json slot = make_slot(key, vault);
-    slot["hint"] = spec.key_hint;
+    const json slot = make_slot(key, vault);  // sealed only: its last 4 characters are shown from the opened key
     if (!update_keys(opt_.keys_path, [&](json& keys) { keys[keyring(uid, vault)][spec.name] = slot; })) {
       reg_.remove(spec.name, uid);
       return {{"error", "couldn't save the API key on the Saga host"}};
@@ -1620,8 +1634,19 @@ json Harness::github_status(const std::string& uid, const secrets::Key& vault) {
   const std::string ring = keyring(uid, vault);
   const json slot = read_keys(opt_.keys_path).value(kCreds, json::object()).value(ring, json::object())
                         .value("github", json::object());
+  auto who = json::parse(open_slot(slot.value("who", json()), vault), nullptr, false);
+  if (slot.contains("login") && vault.size() == 32 && !github_token(uid, vault).empty()) {
+    // An older slot kept the GitHub username in the clear: seal it now that the key is here.
+    who = {{"login", slot.value("login", "")}, {"id", slot.value("id", 0)}};
+    update_keys(opt_.keys_path, [&](json& keys) {
+      json& g = keys[kCreds][ring]["github"];
+      g["who"] = make_slot(who.dump(), vault);
+      g.erase("login");
+      g.erase("id");
+    });
+  }
   json out = {{"connected", !slot.empty()},
-              {"login", slot.value("login", "")},
+              {"login", who.is_object() ? who.value("login", "") : slot.value("login", "")},  // older slots kept it plain
               {"unlocked", !github_token(uid, vault).empty()},
               {"device_available", !opt_.github_client_id.empty()},
               {"oauth_available", !opt_.github_client_id.empty() && !opt_.github_client_secret.empty()}};
@@ -1643,7 +1668,9 @@ json Harness::github_set_token(const std::string& uid, const std::string& token,
   } catch (const std::exception& e) {
     return {{"error", std::string("GitHub rejected the token: ") + e.what()}};
   }
-  const json slot = {{"secret", make_slot(t, vault)}, {"login", me.value("login", "")}, {"id", me.value("id", 0)}, {"hint", hint(t)}};
+  // Who the token belongs to is sealed with it: nothing about the account sits on disk in the clear.
+  const json who = {{"login", me.value("login", "")}, {"id", me.value("id", 0)}};
+  const json slot = {{"secret", make_slot(t, vault)}, {"who", make_slot(who.dump(), vault)}};
   if (!update_keys(opt_.keys_path, [&](json& keys) { keys[kCreds][keyring(uid, vault)]["github"] = slot; }))
     return {{"error", "couldn't save the GitHub token on the Saga host"}};
   return {{"ok", true}, {"login", me.value("login", "")}};

@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -37,19 +38,55 @@ const std::vector<std::string> kLoginFiles = {".codex/auth.json", ".grok/auth.js
 
 namespace {
 std::mutex lease_mu;
-std::map<std::string, int> leases;  // home -> active leases
+struct HomeUse {
+  int count = 0;
+  secrets::Key key;  // the key its logins were unsealed with, if any
+};
+std::map<std::string, HomeUse> leases;  // home -> calls running in it
 }  // namespace
 
-// Without the user's key nothing is unsealed: their CLIs simply see no login.
+// The agent home is scratch space. Between calls it keeps only the user's sealed provider logins and
+// Saga's own small files (.saga: a call's context while it runs, cached usage numbers); everything a
+// CLI leaves behind (session transcripts with the prompt and recalled memories, its own memory
+// databases, logs, caches) is deleted. Nothing in it is followed: links are removed, not traversed.
+void scrub_home(const std::string& home) {
+  std::error_code ec;
+  const fs::path root(home);
+  auto keep_only = [&](const fs::path& dir, auto&& keep) {
+    for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+      if (!keep(it->path().filename().string(), fs::symlink_status(it->path(), ec))) fs::remove_all(it->path(), ec);
+  };
+  keep_only(root, [&](const std::string& name, fs::file_status st) {
+    if (!fs::is_directory(st)) return false;
+    if (name == ".codex" || name == ".grok") {
+      keep_only(root / name, [](const std::string& n, fs::file_status s) { return n == "auth.json.sealed" && fs::is_regular_file(s); });
+      return true;
+    }
+    if (name == ".saga") {  // a context file older than any call is one a crash left behind
+      const auto stale = fs::file_time_type::clock::now() - std::chrono::hours(2);
+      keep_only(root / name, [&](const std::string& n, fs::file_status s) {
+        std::error_code e2;
+        return fs::is_regular_file(s) && (!n.starts_with("ctx-") || fs::last_write_time(root / name / n, e2) > stale);
+      });
+      return true;
+    }
+    return false;
+  });
+}
+
+// Every sandboxed call holds a lease on its home. With the user's key the logins are unsealed for the
+// calls; when the last call ends they are sealed again and the home is scrubbed.
 Lease::Lease(const Sandbox* sb) {
-  if (!sb || sb->vault.size() != 32) return;
+  if (!sb || sb->home.empty()) return;
   home_ = sb->home;
-  key_ = sb->vault;
   std::lock_guard lk(lease_mu);
-  if (leases[home_]++ == 0) {
+  HomeUse& use = leases[home_];
+  ++use.count;
+  if (use.key.empty() && sb->vault.size() == 32) {
+    use.key = sb->vault;
     for (auto& rel : kLoginFiles) {
       try {
-        secrets::unseal_file(key_, home_, rel);
+        secrets::unseal_file(use.key, home_, rel);
       } catch (...) {  // sealed under another key (vault mismatch): leave it sealed
       }
     }
@@ -59,15 +96,16 @@ Lease::Lease(const Sandbox* sb) {
 Lease::~Lease() {
   if (home_.empty()) return;
   std::lock_guard lk(lease_mu);
-  if (--leases[home_] == 0) {
-    for (auto& rel : kLoginFiles) {
-      try {
-        secrets::seal_file(key_, home_, rel);
-      } catch (...) {
-      }
+  HomeUse& use = leases[home_];
+  if (--use.count > 0) return;
+  for (auto& rel : kLoginFiles) {
+    try {
+      if (!use.key.empty()) secrets::seal_file(use.key, home_, rel);
+    } catch (...) {
     }
-    leases.erase(home_);
   }
+  scrub_home(home_);
+  leases.erase(home_);
 }
 
 bool has_login(const Sandbox& sb, const std::string& rel) {

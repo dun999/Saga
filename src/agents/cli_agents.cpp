@@ -65,11 +65,16 @@ std::string home_of(const sandbox::Sandbox* sb) {
   return h ? h : "";
 }
 
+json codex_windows(const std::string& home);
+void keep_codex_usage(const std::string& home);
+
 // Run a CLI on the host, or inside the user's sandbox.
 proc::Result exec(const std::vector<std::string>& argv, proc::Options o, const sandbox::Sandbox* sb) {
   if (!sb) return proc::run(argv, o);
-  sandbox::Lease lease(sb);  // the user's login files are plaintext only while this call runs
-  return sandbox::run(*sb, argv, std::move(o));
+  sandbox::Lease lease(sb);  // logins are plaintext only while calls run; the home is scrubbed after
+  auto r = sandbox::run(*sb, argv, std::move(o));
+  keep_codex_usage(sb->home);  // before the scrub takes the session files it was read from
+  return r;
 }
 
 // Context for one CLI call, kept off the command line: argv is visible to every local user (ps), and
@@ -413,7 +418,29 @@ const json* find_key(const json& j, const std::string& key) {
   return nullptr;
 }
 
+// Only the plan's usage numbers survive a sandboxed run, in <home>/.saga (the session files they come
+// from hold the whole conversation, and are scrubbed).
+fs::path codex_usage_file(const std::string& home) { return fs::path(home) / ".saga" / "codex-usage.json"; }
+
+json codex_windows_from_sessions(const std::string& home);
+
 json codex_windows(const std::string& home) {
+  json w = codex_windows_from_sessions(home);
+  if (!w["windows"].empty()) return w;
+  std::ifstream in(codex_usage_file(home));
+  auto cached = json::parse(in, nullptr, false);
+  return cached.is_object() && cached.contains("windows") ? cached : w;
+}
+
+void keep_codex_usage(const std::string& home) {
+  const json w = codex_windows_from_sessions(home);
+  if (w["windows"].empty()) return;
+  std::error_code ec;
+  fs::create_directories(codex_usage_file(home).parent_path(), ec);
+  std::ofstream(codex_usage_file(home), std::ios::trunc) << w.dump();
+}
+
+json codex_windows_from_sessions(const std::string& home) {
   std::error_code ec;
   const fs::path root = fs::path(home) / ".codex" / "sessions";
   std::vector<std::pair<fs::file_time_type, fs::path>> files;
