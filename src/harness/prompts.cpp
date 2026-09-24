@@ -328,14 +328,17 @@ json PromptPool::replay(agents::Agent& brain, const PromptVersion& parent, const
       prompt, sb);
   int wins = 0, losses = 0, ties = 0;
   auto j = r.ok ? json_in(r.text) : std::nullopt;
-  const json verdicts = j ? j->value("verdicts", json::array()) : json::array();
-  for (size_t i = 0; i < cases.size(); ++i) {
-    const std::string v = i < verdicts.size() && verdicts[i].is_string() ? verdicts[i].get<std::string>() : "tie";
+  const json verdicts = j && j->is_object() ? j->value("verdicts", json::array()) : json::array();
+  // Only a verdict for every case counts as judged: `{}` or a short list must not wave a prompt through as ties.
+  bool judged = verdicts.is_array() && verdicts.size() == cases.size();
+  for (size_t i = 0; judged && i < cases.size(); ++i) {
+    const std::string v = verdicts[i].is_string() ? verdicts[i].get<std::string>() : "";
     if (v == "tie") ++ties;
-    else if ((v == "1") == child_first[i]) ++wins;
-    else ++losses;
+    else if (v == "1" || v == "2") ((v == "1") == child_first[i] ? wins : losses)++;
+    else judged = false;
   }
-  return {{"wins", wins}, {"losses", losses}, {"ties", ties}, {"cases", cases.size()}, {"judged", j.has_value()}};
+  if (!judged) wins = losses = ties = 0;
+  return {{"wins", wins}, {"losses", losses}, {"ties", ties}, {"cases", cases.size()}, {"judged", judged}};
 }
 
 json PromptPool::summary() const {

@@ -21,10 +21,11 @@ std::string seal(const Key& k, const std::string& plaintext);
 std::string open(const Key& k, const std::string& sealed);  // throws on a wrong key or tampering
 bool is_sealed(const std::string& text);
 
-// Seal/unseal a file in place: `path` ⇄ `path + ".sealed"`. Plaintext is shredded after sealing.
-void seal_file(const Key& k, const std::string& path);
-void unseal_file(const Key& k, const std::string& path);
+// Seal/unseal a file in place: `root/rel` ⇄ `root/rel.sealed`. Plaintext is shredded after sealing.
+// `root` is trusted; nothing under it is: a symlink anywhere in `rel` is never followed.
+void seal_file(const Key& k, const std::string& root, const std::string& rel);
+void unseal_file(const Key& k, const std::string& root, const std::string& rel);
 // Remove a secret file in either form. True if anything was deleted.
-bool erase_file(const std::string& path);
+bool erase_file(const std::string& root, const std::string& rel);
 
 }  // namespace saga::secrets

@@ -49,6 +49,7 @@ saga_embed(kIndexHtml ${CMAKE_SOURCE_DIR}/src/web/static/index.html)
 saga_embed(kLandingHtml ${CMAKE_SOURCE_DIR}/src/web/static/landing.html)
 saga_embed(kPrivacyHtml ${CMAKE_SOURCE_DIR}/src/web/static/privacy.html)
 saga_embed(kMascotJs ${CMAKE_SOURCE_DIR}/src/web/static/mascot.js)
+saga_embed(kBrandJs ${CMAKE_SOURCE_DIR}/src/web/static/brand.js)
 saga_embed(kLogoPng ${CMAKE_SOURCE_DIR}/src/web/static/saga-logo.png)
 
 file(GLOB_RECURSE SAGA_LIB_SOURCES CONFIGURE_DEPENDS src/*.cpp)

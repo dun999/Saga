@@ -61,6 +61,29 @@ bool greeting(const std::string& s) {
                     "hi everyone", "hello everyone"});
 }
 
+// A mention right after one of these is who the sentence is about ("say hi to @saga", "review what
+// @claude wrote"), not an agent being handed a task.
+bool refers(const std::string& word) {
+  return one_of(word, {"to", "with", "for", "from", "about", "at", "by", "of", "on", "than", "like", "as", "ask",
+                       "tell", "thank", "thanks", "greet", "what", "whether", "did", "does", "is", "was", "and/or",
+                       "vs", "versus", "between", "via", "behind", "unlike", "into", "onto", "toward", "towards"});
+}
+
+// Is a mention addressed to the agent (a handoff), given the text since the previous addressed mention
+// (or the message start) and whether anything follows it?
+bool addressed(const std::string& before, bool first, bool trailing) {
+  const auto last = before.find_last_not_of(" \t");
+  if (last == std::string::npos) return true;                        // message start, or right after a handoff
+  if (std::string(".!?;:,&\n").find(before[last]) != std::string::npos) return true;
+  size_t w = last + 1;
+  while (w > 0 && !std::isspace(static_cast<unsigned char>(before[w - 1]))) --w;
+  const std::string word = lower(before.substr(w, last + 1 - w));
+  if (refers(word)) return false;
+  if (one_of(word, {"then", "and", "also", "plus", "please", "now", "next"})) return true;
+  if (first && greeting(tidy(before))) return true;                  // "hey @saga …"
+  return trailing;                                                   // "fix the flaky test @codex"
+}
+
 }  // namespace
 
 std::vector<Segment> split_mentions(const std::string& text, const std::vector<std::string>& known) {
@@ -72,7 +95,12 @@ std::vector<Segment> split_mentions(const std::string& text, const std::vector<s
     size_t j = i + 1;
     while (j < text.size() && is_handle_char(text[j])) ++j;
     const std::string name = lower(text.substr(i + 1, j - i - 1));
-    if (std::find(known.begin(), known.end(), name) != known.end()) hits.push_back({i, j, name});
+    if (std::find(known.begin(), known.end(), name) == known.end()) continue;
+    // Only an addressed mention starts a segment; one inside a sentence stays part of its text.
+    const size_t from = hits.empty() ? 0 : hits.back().end;
+    const std::string rest = text.substr(j, text.find('\n', j) == std::string::npos ? std::string::npos : text.find('\n', j) - j);
+    const bool trailing = tidy(rest).empty() && text.find('@', j) == std::string::npos;
+    if (addressed(text.substr(from, i - from), hits.empty(), trailing)) hits.push_back({i, j, name});
   }
 
   std::vector<Segment> out;

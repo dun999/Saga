@@ -32,6 +32,26 @@ Built for the Walrus **"Chatbots That Remember"** hackathon. The design draws on
 At boot Saga calls `restore()` on the hot namespaces. The relayer's vector index is only a cache, and
 Walrus is the source of truth.
 
+### Every answer waits for its memory
+
+Saga never answers without recalling first. That is the point of it, so a turn is only as fast as the
+relayer's reads:
+
+* A turn starts its facts, episodes and skills recalls together, and fetches each agent's lessons as soon
+  as that agent is in the plan. A handoff's lessons load while the previous agent is still working.
+* Writes (transcripts, checkpoints, facts) never block anything. They queue on a background thread, and
+  the "saving to Walrus…" line under a reply only turns into a blob id once Walrus confirms, usually
+  20–30 s later.
+* Recalls normally take 1–2 s. Sometimes the hosted relayer stalls for minutes: we measured a single
+  recall at 302 s, and a server start that waited about 4½ minutes on its boot reads. When that happens,
+  the reply waits too, because an answer without its memory would defeat the point.
+* A slow model looks the same from the chat. The built-in `@saga` (`dsv4`) often takes 20–30 s, about as
+  long as a Walrus write, so a reply can land right as the previous blob id appears without one waiting
+  for the other.
+
+To see where a turn spends its time, run the server with `SAGA_TRACE=1`. It prints each phase to
+stderr: recalls started, recalled, each agent running and finished.
+
 ## Two kinds of self-improvement: the agent's, and the harness's
 
 Most "self-improving" setups make the **agent** learn. Saga makes the **harness** learn: the layer
@@ -262,6 +282,8 @@ src/web/       cpp-httplib server (NDJSON chat stream, SSE write feed) + embedde
   MemWal default mode. The manual (client-side SEAL) mode isn't implemented yet.
 * All users of one deployment share one MemWal account and are isolated by namespace. Per-user
   accounts are future work.
+* Replies wait for their recalls, so when the hosted relayer stalls, the chat stalls with it (see
+  [Every answer waits for its memory](#every-answer-waits-for-its-memory)).
 
 ## Research lineage
 

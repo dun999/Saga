@@ -252,8 +252,9 @@ void Harness::boot(const Emit& log) {
 std::string Harness::build_context(Turn& t, const agents::Agent& agent, const std::string& instruction,
                                    const std::vector<memwal::Memory>& facts,
                                    const std::vector<memwal::Memory>& episodes,
-                                   const std::vector<memwal::Memory>& skills, const Emit& emit) {
-  auto lessons = store_.recall(instruction, ns_lessons(agent.name()), {.limit = 6, .max_distance = 0.7});
+                                   const std::vector<memwal::Memory>& skills, std::vector<memwal::Memory> lessons,
+                                   const Emit& emit) {
+  (void)instruction;
   // A lesson that keeps hurting stays on Walrus but stops being used.
   std::erase_if(lessons, [&](const memwal::Memory& m) { return prompts_.credit_of("lesson:" + m.blob_id).muted(); });
   if (lessons.size() > 4) lessons.resize(4);
@@ -330,7 +331,7 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
     }
     task.model = model_pick(t.uid, a->name());
     if (!a->spec().owner.empty())  // the user's own API agent: unseal its key for this call only
-      task.api_key = open_slot(read_keys(opt_.keys_path).value(t.uid, json::object()).value(a->name(), json()), t.vault);
+      task.api_key = api_key_for(t.uid, a->name(), t.vault);
     return a->run(task, [&](const agents::Event& e) {
       if (emit) emit({{"type", "agent"}, {"step", idx}, {"agent", a->name()}, {"kind", e.type}, {"text", clip(e.text, 4000)}});
     });
@@ -369,8 +370,43 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
   s.tools = r.tools_used;
 }
 
+struct Harness::PendingRecall {
+  std::mutex mu;
+  std::condition_variable cv;
+  bool done = false;
+  std::vector<memwal::Memory> hits;
+};
+
+std::shared_ptr<Harness::PendingRecall> Harness::recall_async(std::string query, std::string ns,
+                                                             memwal::RecallOptions opt) {
+  auto r = std::make_shared<PendingRecall>();
+  auto f = std::async(std::launch::async, [this, r, query = std::move(query), ns = std::move(ns), opt] {
+    std::vector<memwal::Memory> hits;
+    try {
+      hits = store_.recall(query, ns, opt);
+    } catch (...) {
+    }
+    std::lock_guard lk(r->mu);
+    r->hits = std::move(hits);
+    r->done = true;
+    r->cv.notify_all();
+  });
+  std::lock_guard lk(mu_);
+  std::erase_if(recalls_, [](auto& x) { return x.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+  recalls_.push_back(std::move(f));
+  return r;
+}
+
 std::string Harness::chat(const std::string& uid, const std::string& session, const std::string& message,
                           const Emit& emit, const secrets::Key& vault) {
+  // SAGA_TRACE=1 prints where each turn spends its time (stderr).
+  static const bool tracing = std::getenv("SAGA_TRACE") != nullptr;
+  const auto t0 = std::chrono::steady_clock::now();
+  auto trace = [&](const std::string& what) {
+    if (tracing)
+      std::fprintf(stderr, "[trace %s] %6.2fs %s\n", session.c_str(),
+                   std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), what.c_str());
+  };
   auto t = std::make_shared<Turn>();
   t->vault = vault;
   t->id = crypto::uuid4();
@@ -397,31 +433,31 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     session_turns_[uid + "/" + session].push_back(t->id);
   }
   if (emit) emit({{"type", "turn"}, {"turn_id", t->id}, {"prompt_version", t->prompt_version}, {"workspace", t->workspace}});
+  trace("turn started");
 
-  // Recall (parallel) — this is where memory does its work.
-  auto facts_f = std::async(std::launch::async, [&] {
-    return store_.recall(message, ns_user(uid, "facts"), {.limit = 10, .max_distance = 0.75, .recency_weight = 0.2});
-  });
-  auto episodes_f = std::async(std::launch::async, [&] {
-    return store_.recall(message, ns_user(uid, "episodes"), {.limit = 3, .max_distance = 0.7});
-  });
-  auto skills_f = std::async(std::launch::async, [&] {
-    return store_.recall(message, kSkillsNs, {.limit = 2, .max_distance = 0.55});
-  });
-  const auto facts = facts_f.get(), episodes = episodes_f.get(), skills = skills_f.get();
-  for (auto* ms : {&facts, &episodes, &skills})
-    for (auto& m : *ms) t->recalled.push_back(m.text);
-  if (emit) {
-    if (!facts.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "facts")}, {"items", memories_json(facts)}});
-    if (!episodes.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "episodes")}, {"items", memories_json(episodes)}});
-    if (!skills.empty()) emit({{"type", "recall"}, {"ns", kSkillsNs}, {"items", memories_json(skills)}});
-  }
-
+  // Recall (parallel) — this is where memory does its work, and every answer waits for it. The reads
+  // start together, and each agent's lessons are fetched as soon as it is known to be needed (a handoff's
+  // while the previous agent is still working), so they overlap instead of queueing one after another.
+  auto facts_r = recall_async(message, ns_user(uid, "facts"), {.limit = 10, .max_distance = 0.75, .recency_weight = 0.2});
+  auto episodes_r = recall_async(message, ns_user(uid, "episodes"), {.limit = 3, .max_distance = 0.7});
+  auto skills_r = recall_async(message, kSkillsNs, {.limit = 2, .max_distance = 0.55});
+  std::map<std::string, std::shared_ptr<PendingRecall>> lessons_r;
+  auto want_lessons = [&](const std::string& agent, const std::string& instruction) {
+    if (!lessons_r.contains(agent))
+      lessons_r[agent] = recall_async(instruction, ns_lessons(agent), {.limit = 6, .max_distance = 0.7});
+  };
+  auto await = [](const std::shared_ptr<PendingRecall>& r) {
+    std::unique_lock lk(r->mu);
+    r->cv.wait(lk, [&] { return r->done; });
+    return r->hits;
+  };
   // Learn from what the user just said (relayer-side fact extraction → one blob per fact).
   store_.analyze(ns_user(uid, "facts"), message);
 
   // Route: split @mentions into an ordered plan; agents can extend it with their own @handoffs.
+  trace("recalls started");
   seed_user(uid);
+  trace("user settings ready");
   const auto names = reg_.names(uid);
   std::vector<router::Segment> plan = router::split_mentions(message, names);
   if (plan.empty()) plan.push_back({"", message});
@@ -432,6 +468,17 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
       return q.first.agent == seg.agent && q.first.instruction == seg.instruction;
     });
     if (!dup) queue.push_back({seg, "user"});  // "@saga @saga hi" runs once
+  }
+
+  for (auto& [seg, by] : queue) want_lessons(seg.agent, seg.instruction);
+  const auto facts = await(facts_r), episodes = await(episodes_r), skills = await(skills_r);
+  trace("facts/episodes/skills recalled");
+  for (auto* ms : {&facts, &episodes, &skills})
+    for (auto& m : *ms) t->recalled.push_back(m.text);
+  if (emit) {
+    if (!facts.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "facts")}, {"items", memories_json(facts)}});
+    if (!episodes.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "episodes")}, {"items", memories_json(episodes)}});
+    if (!skills.empty()) emit({{"type", "recall"}, {"ns", kSkillsNs}, {"items", memories_json(skills)}});
   }
 
   t->steps.reserve(opt_.max_steps);
@@ -447,9 +494,15 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
       emit({{"type", "step"}, {"step", idx}, {"agent", s.agent}, {"instruction", s.instruction}, {"requested_by", by}});
 
     agents::Agent* a = reg_.find(s.agent, uid);
-    const std::string ctx = build_context(*t, a ? *a : *reg_.primary(), s.instruction, facts, episodes, skills, emit);
+    want_lessons(s.agent, s.instruction);
+    auto lessons = await(lessons_r[s.agent]);  // usually already fetched while the previous agent worked
+    trace("@" + s.agent + " lessons recalled");
+    const std::string ctx = build_context(*t, a ? *a : *reg_.primary(), s.instruction, facts, episodes, skills,
+                                          std::move(lessons), emit);
     const Snapshot before = snapshot(t->workspace);
+    trace("@" + s.agent + " running");
     run_step(*t, s, ctx, emit);
+    trace("@" + s.agent + " finished");
 
     // Checkpoint: every file this step created or changed goes to Walrus, restorable later.
     const Snapshot after = snapshot(t->workspace);
@@ -493,7 +546,10 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
       const bool dup = std::any_of(queue.begin(), queue.end(), [&](auto& q) {
         return q.first.agent == h.agent && q.first.instruction == h.instruction;
       });
-      if (!dup && h.agent != s.agent) queue.push_back({h, s.agent});
+      if (!dup && h.agent != s.agent) {
+        queue.push_back({h, s.agent});
+        want_lessons(h.agent, h.instruction);
+      }
     }
   }
 
@@ -1021,15 +1077,12 @@ void Harness::seed_user(const std::string& uid) {
   // The user's own API agents.
   auto recs = recall_records(ns_user(uid, "settings"), "agents", "user api agents settings", 5, &failed);
   if (recs.empty()) return;
-  const json keys = read_keys(opt_.keys_path).value(uid, json::object());
   for (auto& a : recs.front().value("agents", json::array())) {
     if (!a.is_object() || !a.contains("name") || !a["name"].is_string()) continue;
     agents::Spec spec = agents::spec_from_json(a);
     spec.kind = "openai";
     spec.owner = uid;
     spec.public_only = opt_.user_accounts;
-    const json slot = keys.value(spec.name, json());
-    spec.key_hint = slot.is_object() ? slot.value("hint", "") : "";
     reg_.add(spec);
   }
 }
@@ -1049,22 +1102,40 @@ void Harness::record_usage(const std::string& uid, const std::string& agent, con
 namespace {
 constexpr const char* kCreds = "#creds";  // '#' can't appear in a uid, so no clash with API-agent keys
 
+bool is_wallet(const std::string& uid) {
+  return uid.size() > 2 && uid.starts_with("0x") &&
+         std::all_of(uid.begin() + 2, uid.end(), [](unsigned char c) { return std::isxdigit(c); });
+}
+
 std::string strip_ansi(const std::string& s) {
   static const std::regex ansi("\x1B\\[[0-9;?]*[A-Za-z]");
   return std::regex_replace(s, ansi, "");
 }
 }  // namespace
 
+// Where a user's connections (provider logins, API keys, GitHub) live. Only a wallet can hold them:
+// its session proves the owner and its signature derives the vault key, which stays in the browser, so
+// the server only ever keeps sealed copies. A username is guest mode — anyone can type it — so it
+// gets an empty keyring nothing is ever saved to. '~' never appears in a uid.
+std::string Harness::keyring(const std::string& uid, const secrets::Key&) const {
+  return is_wallet(uid) ? uid : uid + "~guest";
+}
+
+namespace {
+const json kWalletOnly = {{"error", "Sign in with a wallet to connect accounts. Guest usernames can't keep credentials."}};
+}
+
 std::optional<sandbox::Sandbox> Harness::sandbox_for(const std::string& uid, const std::string& workspace,
                                                      const secrets::Key& vault) {
   if (!opt_.user_accounts || uid.empty()) return std::nullopt;
+  const std::string ring = keyring(uid, vault);
   sandbox::Sandbox sb;
-  sb.home = fs::absolute(fs::path(opt_.homes_dir) / uid).string();
+  sb.home = fs::absolute(fs::path(opt_.homes_dir) / ring).string();
   fs::create_directories(fs::path(sb.home) / ".codex");
   fs::permissions(sb.home, fs::perms::owner_all, fs::perm_options::replace);
   sb.workspace = workspace;
   sb.vault = vault;
-  const json cred = read_keys(opt_.keys_path).value(kCreds, json::object()).value(uid, json::object())
+  const json cred = read_keys(opt_.keys_path).value(kCreds, json::object()).value(ring, json::object())
                         .value("claude", json::object());
   const std::string value = open_slot(cred.value("secret", json()), vault);
   if (!value.empty() && cred.value("kind", "") == "oauth_token") sb.env["CLAUDE_CODE_OAUTH_TOKEN"] = value;
@@ -1074,6 +1145,8 @@ std::optional<sandbox::Sandbox> Harness::sandbox_for(const std::string& uid, con
 
 json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
   seed_user(uid);
+  const std::string ring = keyring(uid, vault);
+  const json api_keys = read_keys(opt_.keys_path).value(ring, json::object());
   const auto sb = sandbox_for(uid, "", vault);
   const sandbox::Sandbox* sbp = sb ? &*sb : nullptr;
   json out = json::array();
@@ -1094,6 +1167,12 @@ json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
     }
     r["seconds_today"] = static_cast<int>(e.seconds);
     r["account"] = a ? a->account(r["custom"].get<bool>() ? nullptr : sbp) : json::object();
+    // An own-API-key agent's settings travel with memory; its key only with the wallet's keyring.
+    if (a && r["custom"].get<bool>() && !a->spec().locked) {
+      const json slot = api_keys.value(name, json());
+      const bool mine = slot.is_object() && !open_slot(slot, vault).empty();
+      r["account"]["detail"] = mine ? "own API key ··" + slot.value("hint", "") : "no API key from you";
+    }
     // How this agent can be connected, in this deployment mode.
     json how = json::array();
     if (a && !r["custom"].get<bool>()) {
@@ -1110,7 +1189,7 @@ json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
     r["can_connect"] = !how.empty();
     {
       std::lock_guard lk(mu_);
-      if (auto d = device_.find(uid + "/" + name); d != device_.end() && d->second->status == "waiting")
+      if (auto d = device_.find(ring + "/" + name); d != device_.end() && d->second->status == "waiting")
         r["device"] = {{"url", d->second->url}, {"code", d->second->code}};
     }
     out.push_back(r);
@@ -1121,6 +1200,7 @@ json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
 json Harness::connect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault) {
   agents::Agent* a = reg_.find(name);
   if (!a) return {{"error", "unknown agent"}};
+  if (opt_.user_accounts && !is_wallet(uid)) return kWalletOnly;
   if (opt_.user_accounts && vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
 
   if (!opt_.user_accounts) {
@@ -1144,12 +1224,13 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
 
   // User mode: device-code sign-in inside the user's sandbox, so the login lands in their home.
   if (a->device_login_argv().empty()) return {{"error", "@" + name + " connects with a token or API key"}};
-  const std::string key = uid + "/" + a->name();
+  const std::string key = keyring(uid, vault) + "/" + a->name();
   auto st = std::make_shared<DeviceLogin>();
   {
     std::lock_guard lk(mu_);
-    if (auto it = device_.find(key); it != device_.end() && it->second->status == "waiting")
-      return {{"ok", true}, {"url", it->second->url}, {"code", it->second->code}};
+    // Every Connect starts a fresh code: the old one may have been refused (e.g. ChatGPT's device-code
+    // setting was off) and the user fixed that since. Its CLI is stopped.
+    if (auto it = device_.find(key); it != device_.end()) it->second->cancel = true;
     device_[key] = st;
   }
   const auto sb = sandbox_for(uid, "", vault);
@@ -1163,6 +1244,7 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
       proc::Options o;
       o.timeout_s = 900;  // device codes expire in 15 minutes
       o.merge_stderr = true;
+      o.cancel = &st->cancel;
       o.on_stdout_line = [&](const std::string& raw) {
         const std::string line = strip_ansi(raw);
         std::smatch m;
@@ -1194,9 +1276,10 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
   return {{"error", st->error.empty() ? "@" + name + " did not start a sign-in" : st->error}};
 }
 
-json Harness::connect_status(const std::string& uid, const std::string& name) {
+json Harness::connect_status(const std::string& uid, const std::string& name, const secrets::Key& vault) {
+  const std::string ring = keyring(uid, vault);
   std::lock_guard lk(mu_);
-  auto it = device_.find(uid + "/" + name);
+  auto it = device_.find(ring + "/" + name);
   if (it == device_.end()) return {{"status", "none"}};
   return {{"status", it->second->status}, {"error", it->second->error}};
 }
@@ -1204,6 +1287,7 @@ json Harness::connect_status(const std::string& uid, const std::string& name) {
 json Harness::set_credential(const std::string& uid, const std::string& name, const std::string& kind,
                              const std::string& value, const secrets::Key& vault) {
   if (!opt_.user_accounts) return {{"error", "this Saga runs agents on the operator's own accounts"}};
+  if (!is_wallet(uid)) return kWalletOnly;
   if (vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
   agents::Agent* a = reg_.find(name);
   if (!a) return {{"error", "unknown agent"}};
@@ -1215,7 +1299,7 @@ json Harness::set_credential(const std::string& uid, const std::string& name, co
     if (kind == "api_key" && !v.starts_with("sk-ant-")) return {{"error", "that doesn't look like an Anthropic API key (sk-ant-…)"}};
     if (kind != "oauth_token" && kind != "api_key") return {{"error", "unknown credential type"}};
     const json slot = {{"kind", kind}, {"secret", make_slot(v, vault)}, {"hint", hint(v)}};
-    if (!update_keys(opt_.keys_path, [&](json& keys) { keys[kCreds][uid]["claude"] = slot; }))
+    if (!update_keys(opt_.keys_path, [&](json& keys) { keys[kCreds][keyring(uid, vault)]["claude"] = slot; }))
       return {{"error", "couldn't save the credential on the Saga host"}};
     a->invalidate(sb ? &*sb : nullptr);
     return {{"ok", true}};
@@ -1238,37 +1322,43 @@ json Harness::set_credential(const std::string& uid, const std::string& name, co
   return {{"error", "@" + name + " doesn't take a " + kind}};
 }
 
-json Harness::disconnect_agent(const std::string& uid, const std::string& name) {
+json Harness::disconnect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault) {
   if (!opt_.user_accounts) return {{"error", "operator accounts are managed on the Saga host"}};
   agents::Agent* a = reg_.find(name);
   if (!a) return {{"error", "unknown agent"}};
-  const auto sb = sandbox_for(uid, "", {});
-  // Disconnect deletes the credential outright (sealed or not); nothing needs the vault key for that.
+  // Only provider CLIs have a login to delete. Anything else (the built-in @saga) would fall through to
+  // erasing the Grok login below.
+  const std::string& kind = a->spec().kind;
+  if (kind != "claude-code" && kind != "codex" && kind != "grok-cli") return {{"error", "@" + name + " has nothing to disconnect"}};
+  // Disconnect deletes the credential outright (sealed or not).
+  const std::string ring = keyring(uid, vault);
+  const auto sb = sandbox_for(uid, "", vault);
   json deleted = json::array();
   if (a->spec().kind == "claude-code") {
     update_keys(opt_.keys_path, [&](json& keys) {
-      if (keys.contains(kCreds) && keys[kCreds].contains(uid) && keys[kCreds][uid].contains("claude")) {
-        keys[kCreds][uid].erase("claude");
+      if (keys.contains(kCreds) && keys[kCreds].contains(ring) && keys[kCreds][ring].contains("claude")) {
+        keys[kCreds][ring].erase("claude");
         deleted.push_back("claude token / API key");
       }
     });
   } else {
     const std::string rel = a->spec().kind == "codex" ? ".codex/auth.json" : ".grok/auth.json";
-    if (secrets::erase_file((fs::path(sb->home) / rel).string())) deleted.push_back(rel);
+    if (secrets::erase_file(sb->home, rel)) deleted.push_back(rel);
   }
   a->invalidate(&*sb);
   {
     std::lock_guard lk(mu_);
-    device_.erase(uid + "/" + a->name());
+    device_.erase(ring + "/" + a->name());
   }
   const bool gone = a->spec().kind == "claude-code"
-                        ? !read_keys(opt_.keys_path).value(kCreds, json::object()).value(uid, json::object()).contains("claude")
+                        ? !read_keys(opt_.keys_path).value(kCreds, json::object()).value(ring, json::object()).contains("claude")
                         : !sandbox::has_login(*sb, a->spec().kind == "codex" ? ".codex/auth.json" : ".grok/auth.json");
   return {{"ok", gone}, {"deleted", deleted}};
 }
 
 json Harness::vault_status(const std::string& uid, const secrets::Key& vault) {
   if (vault.size() != 32) return {{"state", "missing"}};
+  if (!is_wallet(uid)) return {{"state", "guest"}};  // guests keep no credentials
   const std::string id = secrets::key_id(vault);
   std::string known;
   update_keys(opt_.keys_path, [&](json& keys) {
@@ -1279,8 +1369,10 @@ json Harness::vault_status(const std::string& uid, const secrets::Key& vault) {
 }
 
 // The user's secrets were sealed under a key this browser can't reproduce: drop them and adopt this key.
+// Only a wallet can do this: its session proves the owner. A guest username has nothing to reset.
 json Harness::vault_reset(const std::string& uid, const secrets::Key& vault) {
   if (vault.size() != 32) return {{"error", "no vault key"}};
+  if (!is_wallet(uid)) return {{"error", "only a wallet's vault can be reset"}};
   if (!update_keys(opt_.keys_path, [&](json& keys) {
         if (keys.contains(kCreds)) keys[kCreds].erase(uid);
         if (keys.contains(uid))
@@ -1290,9 +1382,21 @@ json Harness::vault_reset(const std::string& uid, const secrets::Key& vault) {
       }))
     return {{"error", "couldn't update the vault on the Saga host"}};
   if (const auto sb = sandbox_for(uid, "", vault))
-    for (auto& rel : sandbox::kLoginFiles) secrets::erase_file((fs::path(sb->home) / rel).string());
+    for (auto& rel : sandbox::kLoginFiles) secrets::erase_file(sb->home, rel);
   for (auto* a : reg_.visible(uid)) a->invalidate(nullptr);
   return {{"ok", true}};
+}
+
+// The key for one of the user's own API agents, from their keyring. A local operator-mode Saga used
+// to keep these under the bare uid in the clear; that spelling still works there.
+std::string Harness::api_key_for(const std::string& uid, const std::string& agent, const secrets::Key& vault) {
+  const json keys = read_keys(opt_.keys_path);
+  std::string k = open_slot(keys.value(keyring(uid, vault), json::object()).value(agent, json()), vault);
+  if (k.empty() && !opt_.user_accounts) {
+    const json legacy = keys.value(uid, json::object()).value(agent, json());
+    if (legacy.is_object() && legacy.contains("plain")) k = legacy.value("plain", "");
+  }
+  return k;
 }
 
 json Harness::probe_agent(const std::string& uid, const std::string& name, const secrets::Key& vault) {
@@ -1311,6 +1415,9 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
   spec.owner = uid;
   spec.public_only = opt_.user_accounts;
   spec.name = body.value("name", "");
+  // Handles are case-insensitive: store the key under the name the registry will look up.
+  std::transform(spec.name.begin(), spec.name.end(), spec.name.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   spec.base_url = body.value("base_url", "");
   while (!spec.base_url.empty() && spec.base_url.back() == '/') spec.base_url.pop_back();
   spec.model = body.value("model", "");
@@ -1321,12 +1428,16 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
   if (!spec.base_url.starts_with("http://") && !spec.base_url.starts_with("https://"))
     return {{"error", "base URL must start with http:// or https://"}};
   if (spec.model.empty()) return {{"error", "model is required"}};
+  // A key is only kept sealed, under a wallet's vault.
+  if (!key.empty() && !is_wallet(uid)) return kWalletOnly;
+  if (!key.empty() && vault.size() != 32)
+    return {{"error", "unlock your vault first (sign in again)"}};
   if (auto err = reg_.add(spec); !err.empty()) return {{"error", err}};
 
   if (!key.empty()) {
     json slot = make_slot(key, vault);
     slot["hint"] = spec.key_hint;
-    if (!update_keys(opt_.keys_path, [&](json& keys) { keys[uid][spec.name] = slot; })) {
+    if (!update_keys(opt_.keys_path, [&](json& keys) { keys[keyring(uid, vault)][spec.name] = slot; })) {
       reg_.remove(spec.name, uid);
       return {{"error", "couldn't save the API key on the Saga host"}};
     }
@@ -1335,10 +1446,20 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
   return {{"ok", true}, {"name", spec.name}};
 }
 
-json Harness::remove_agent(const std::string& uid, const std::string& name) {
+json Harness::remove_agent(const std::string& uid, const std::string& name, const secrets::Key& vault) {
   if (!reg_.remove(name, uid)) return {{"error", "not one of your agents"}};
+  const std::string ring = keyring(uid, vault);
+  std::string handle = name;
+  std::transform(handle.begin(), handle.end(), handle.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   update_keys(opt_.keys_path, [&](json& keys) {
-    if (keys.contains(uid)) keys[uid].erase(name);
+    if (!keys.contains(ring) || !keys[ring].is_object()) return;
+    // Also any spelling an older Saga saved the key under ("MyAgent" for @myagent).
+    for (auto it = keys[ring].begin(); it != keys[ring].end();) {
+      std::string k = it.key();
+      std::transform(k.begin(), k.end(), k.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      it = k == handle ? keys[ring].erase(it) : std::next(it);
+    }
   });
   persist_user_agents(uid);
   return {{"ok", true}};
@@ -1455,7 +1576,7 @@ json read_marker(const std::string& workspace) {
 }  // namespace
 
 std::string Harness::github_token(const std::string& uid, const secrets::Key& vault) {
-  const json slot = read_keys(opt_.keys_path).value(kCreds, json::object()).value(uid, json::object())
+  const json slot = read_keys(opt_.keys_path).value(kCreds, json::object()).value(keyring(uid, vault), json::object())
                         .value("github", json::object());
   return open_slot(slot.value("secret", json()), vault);
 }
@@ -1496,7 +1617,8 @@ std::string Harness::repo_context(const Turn& t) {
 }
 
 json Harness::github_status(const std::string& uid, const secrets::Key& vault) {
-  const json slot = read_keys(opt_.keys_path).value(kCreds, json::object()).value(uid, json::object())
+  const std::string ring = keyring(uid, vault);
+  const json slot = read_keys(opt_.keys_path).value(kCreds, json::object()).value(ring, json::object())
                         .value("github", json::object());
   json out = {{"connected", !slot.empty()},
               {"login", slot.value("login", "")},
@@ -1504,7 +1626,7 @@ json Harness::github_status(const std::string& uid, const secrets::Key& vault) {
               {"device_available", !opt_.github_client_id.empty()},
               {"oauth_available", !opt_.github_client_id.empty() && !opt_.github_client_secret.empty()}};
   std::lock_guard lk(mu_);
-  if (auto it = gh_device_.find(uid); it != gh_device_.end()) {
+  if (auto it = gh_device_.find(ring); it != gh_device_.end()) {
     out["device"] = {{"status", it->second->status}, {"url", it->second->url}, {"code", it->second->code},
                      {"error", it->second->error}};
   }
@@ -1512,7 +1634,8 @@ json Harness::github_status(const std::string& uid, const secrets::Key& vault) {
 }
 
 json Harness::github_set_token(const std::string& uid, const std::string& token, const secrets::Key& vault) {
-  if (opt_.user_accounts && vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
+  if (!is_wallet(uid)) return kWalletOnly;
+  if (vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
   const std::string t = token.substr(0, 400);
   json me;
   try {
@@ -1521,7 +1644,7 @@ json Harness::github_set_token(const std::string& uid, const std::string& token,
     return {{"error", std::string("GitHub rejected the token: ") + e.what()}};
   }
   const json slot = {{"secret", make_slot(t, vault)}, {"login", me.value("login", "")}, {"id", me.value("id", 0)}, {"hint", hint(t)}};
-  if (!update_keys(opt_.keys_path, [&](json& keys) { keys[kCreds][uid]["github"] = slot; }))
+  if (!update_keys(opt_.keys_path, [&](json& keys) { keys[kCreds][keyring(uid, vault)]["github"] = slot; }))
     return {{"error", "couldn't save the GitHub token on the Saga host"}};
   return {{"ok", true}, {"login", me.value("login", "")}};
 }
@@ -1546,6 +1669,8 @@ json Harness::github_oauth_finish(const std::string& uid, const std::string& cod
 }
 
 json Harness::github_device(const std::string& uid, const secrets::Key& vault) {
+  if (!is_wallet(uid)) return kWalletOnly;
+  if (vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
   if (opt_.github_client_id.empty()) return {{"error", "GitHub sign-in isn't configured here — use a token"}};
   json start;
   try {
@@ -1559,7 +1684,7 @@ json Harness::github_device(const std::string& uid, const secrets::Key& vault) {
   st->status = "waiting";
   {
     std::lock_guard lk(mu_);
-    gh_device_[uid] = st;
+    gh_device_[keyring(uid, vault)] = st;
     // Poll until the user approves; the vault key lives only in this thread's memory meanwhile.
     background_.emplace_back(guarded([this, uid, st, vault, device = start.value("device_code", ""),
                               interval = start.value("interval", 5), expires = start.value("expires_in", 900)] {
@@ -1588,17 +1713,18 @@ json Harness::github_device(const std::string& uid, const secrets::Key& vault) {
   return {{"ok", true}, {"url", st->url}, {"code", st->code}};
 }
 
-json Harness::github_disconnect(const std::string& uid) {
+json Harness::github_disconnect(const std::string& uid, const secrets::Key& vault) {
+  const std::string ring = keyring(uid, vault);
   bool had = false;
   update_keys(opt_.keys_path, [&](json& keys) {
-    had = keys.contains(kCreds) && keys[kCreds].contains(uid) && keys[kCreds][uid].contains("github");
-    if (had) keys[kCreds][uid].erase("github");
+    had = keys.contains(kCreds) && keys[kCreds].contains(ring) && keys[kCreds][ring].contains("github");
+    if (had) keys[kCreds][ring].erase("github");
   });
   {
     std::lock_guard lk(mu_);
-    gh_device_.erase(uid);
+    gh_device_.erase(ring);
   }
-  const bool gone = !read_keys(opt_.keys_path).value(kCreds, json::object()).value(uid, json::object()).contains("github");
+  const bool gone = !read_keys(opt_.keys_path).value(kCreds, json::object()).value(ring, json::object()).contains("github");
   return {{"ok", gone}, {"deleted", had ? json::array({"github token"}) : json::array()}};
 }
 

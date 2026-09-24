@@ -4,6 +4,7 @@
 // Every durable artifact — transcripts, work checkpoints, lessons, prompts — is a Walrus blob.
 #include <atomic>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -104,13 +105,13 @@ class Harness {
     return reg_.roster(uid);
   }
   json connect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault);
-  json connect_status(const std::string& uid, const std::string& name);
+  json connect_status(const std::string& uid, const std::string& name, const secrets::Key& vault);
   json set_credential(const std::string& uid, const std::string& name, const std::string& kind,
                       const std::string& value, const secrets::Key& vault);  // token / API key
-  json disconnect_agent(const std::string& uid, const std::string& name);
+  json disconnect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault);
   json probe_agent(const std::string& uid, const std::string& name, const secrets::Key& vault);
   json add_agent(const std::string& uid, const json& body, const secrets::Key& vault);  // own API key
-  json remove_agent(const std::string& uid, const std::string& name);
+  json remove_agent(const std::string& uid, const std::string& name, const secrets::Key& vault);
   json set_model(const std::string& uid, const std::string& agent, const std::string& model);  // "" = default
   json models_view(const std::string& uid);  // per agent: default, the user's pick, suggestions
   // GitHub: connect (token or device flow), pick a repo per chat, open a PR from the agents' work.
@@ -120,13 +121,15 @@ class Harness {
   std::string github_authorize_url(const std::string& redirect_uri, const std::string& state) const;  // "" = not set up
   json github_oauth_finish(const std::string& uid, const std::string& code, const std::string& redirect_uri,
                            const secrets::Key& vault);
-  json github_disconnect(const std::string& uid);
+  json github_disconnect(const std::string& uid, const secrets::Key& vault);
   json github_repos(const std::string& uid, const secrets::Key& vault);
   json github_attach(const std::string& uid, const std::string& session, const std::string& full_name,
                      const secrets::Key& vault);
   json github_repo(const std::string& uid, const std::string& session, const secrets::Key& vault);
   json github_open_pr(const std::string& uid, const std::string& session, const std::string& title,
                       const secrets::Key& vault);
+  // Where a user's connections live: the wallet address, or for a username "<uid>~<key id>" (see .cpp).
+  std::string keyring(const std::string& uid, const secrets::Key& vault) const;
   // Vault: "ok" | "missing" (no key sent) | "mismatch" (secrets were sealed under another key).
   json vault_status(const std::string& uid, const secrets::Key& vault);
   json vault_reset(const std::string& uid, const secrets::Key& vault);  // forget old sealed secrets
@@ -140,7 +143,11 @@ class Harness {
  private:
   std::string build_context(Turn& t, const agents::Agent& agent, const std::string& instruction,
                             const std::vector<memwal::Memory>& facts, const std::vector<memwal::Memory>& episodes,
-                            const std::vector<memwal::Memory>& skills, const Emit& emit);
+                            const std::vector<memwal::Memory>& skills, std::vector<memwal::Memory> lessons,
+                            const Emit& emit);
+  // Memory reads run beside the turn, never in front of it: a slow relayer can't hold a reply hostage.
+  struct PendingRecall;
+  std::shared_ptr<PendingRecall> recall_async(std::string query, std::string ns, memwal::RecallOptions opt);
   void run_step(Turn& t, Step& s, const std::string& context, const Emit& emit);
   void apply_directives(Turn& t, const Step& s, const Emit& emit);
   json reflect(const Turn& t, int rating, const std::string& comment);
@@ -153,6 +160,7 @@ class Harness {
   std::string session_history(const std::string& uid, const std::string& session);
   void seed_user(const std::string& uid);
   std::string github_token(const std::string& uid, const secrets::Key& vault);
+  std::string api_key_for(const std::string& uid, const std::string& agent, const secrets::Key& vault);
   // Run git for this user's chat workspace: in their sandbox (user accounts) or on the host.
   proc::Result git(const std::string& uid, const std::string& workspace, const secrets::Key& vault,
                    const std::vector<std::string>& args, const std::string& token = "", int timeout_s = 120);
@@ -175,6 +183,7 @@ class Harness {
   std::map<std::string, std::shared_ptr<Turn>> turns_;  // this process only; Walrus is the record
   void prune_turns();  // caller holds mu_
   std::vector<std::thread> background_;
+  std::vector<std::future<void>> recalls_;  // in-flight memory reads (pruned as they finish)
   std::map<std::string, std::vector<std::string>> session_turns_;  // "<uid>/<session>" → turn ids, in order
   std::atomic<bool> evolving_{false};
   std::set<std::string> critics_;  // users whose critiques are waiting for the next evolution
@@ -191,6 +200,7 @@ class Harness {
   std::set<std::string> connecting_;                           // host-mode sign-ins in progress
   struct DeviceLogin {
     std::string url, code, status = "starting", error;          // starting|waiting|done|failed
+    std::atomic<bool> cancel{false};                            // a newer sign-in replaced this one
   };
   std::map<std::string, std::shared_ptr<DeviceLogin>> device_;
   std::map<std::string, std::shared_ptr<DeviceLogin>> gh_device_;  // uid → GitHub device sign-in  // "<uid>/<agent>" → device-code sign-in

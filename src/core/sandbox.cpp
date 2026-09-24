@@ -49,7 +49,7 @@ Lease::Lease(const Sandbox* sb) {
   if (leases[home_]++ == 0) {
     for (auto& rel : kLoginFiles) {
       try {
-        secrets::unseal_file(key_, (fs::path(home_) / rel).string());
+        secrets::unseal_file(key_, home_, rel);
       } catch (...) {  // sealed under another key (vault mismatch): leave it sealed
       }
     }
@@ -62,7 +62,7 @@ Lease::~Lease() {
   if (--leases[home_] == 0) {
     for (auto& rel : kLoginFiles) {
       try {
-        secrets::seal_file(key_, (fs::path(home_) / rel).string());
+        secrets::seal_file(key_, home_, rel);
       } catch (...) {
       }
     }

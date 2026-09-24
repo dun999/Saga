@@ -7,7 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23312F2C'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23ABD1C6'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23312F2C'/%3E%3Cellipse cx='16' cy='16.5' rx='14' ry='4.2' transform='rotate(-20 16 16.5)' fill='none' stroke='%23ABD1C6' stroke-width='1.3'/%3E%3Ccircle cx='16' cy='16.5' r='5.5' fill='%23F2EFE9'/%3E%3Ccircle cx='27' cy='13' r='2' fill='%23CFF3EA'/%3E%3C/svg%3E">
+<script src="/brand.js" defer></script>
 <style>
 :root {
   --charcoal: #312F2C; --mint: #ABD1C6;
@@ -396,6 +397,15 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 .device-code { font: 600 22px/1.2 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: .08em; margin: 8px 0 2px; }
 .connect-box input { width: 100%; border: 0; border-radius: 9px; padding: 9px 11px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; outline: none; margin-top: 8px; }
 .connect-box code { background: var(--surface); padding: 1px 6px; border-radius: 5px; }
+.connect-box ol { margin: 8px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.7; color: var(--ink); }
+.connect-box ol li { margin: 4px 0; }
+.connect-box .cmd { display: flex; align-items: center; gap: 8px; margin: 6px 0 2px; }
+.connect-box .cmd code { flex: 1; min-width: 0; padding: 7px 10px; font-size: 13px; overflow-x: auto; white-space: nowrap; }
+.connect-box .copy { padding: 5px 10px; font-size: 12px; }
+.connect-box .cmd input { margin-top: 0; flex: 1; }
+.connect-box .cmd .device-code { flex: 0 1 auto; margin: 0; padding: 4px 10px; }
+.connect-box .cmd .btn-connect { margin-left: auto; text-decoration: none; white-space: nowrap; }
+.connect-box .linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--ink); text-decoration: underline; cursor: pointer; }
 .btn-ghost { border: 0; border-radius: 99px; padding: 5px 12px; background: transparent; color: var(--muted); font-size: 12.5px; cursor: pointer; }
 .btn-ghost:hover { background: var(--hover); color: var(--ink); }
 .win { margin-top: 10px; }
@@ -669,14 +679,14 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
   <form id="gateForm">
     <span class="logo-mark" style="height:26px;margin-bottom:6px;align-self:flex-start" aria-hidden="true"></span>
     <b style="font-size:18px" id="gTitle">Sign in to Saga</b>
-    <div class="empty" style="padding:0" id="gBody">Enter your username. Your memory on Walrus follows it to any device.</div>
+    <div class="empty" style="padding:0" id="gBody">Pick a guest username to try Saga, or connect a wallet to keep your memory and accounts private.</div>
     <input id="gCode" placeholder="Access code" autocomplete="off">
     <input id="gHandle" placeholder="What should Saga call you?" aria-label="Username" autocomplete="off" spellcheck="false" autocapitalize="off">
-    <button class="btn">Continue</button>
+    <button class="btn">Continue as guest</button>
     <div class="g-or" aria-hidden="true"><span>or</span></div>
     <button type="button" class="g-wallet" id="gWallet">Connect a Sui wallet</button>
     <button type="button" class="btn-ghost" id="gCancel" hidden>Cancel</button>
-    <div class="note">Anyone who enters the same username sees its memory. For private memory, connect a wallet.</div>
+    <div class="note">Guest mode: anyone who enters the same username sees its memory, and guests can't connect accounts. For private memory and your own Claude, ChatGPT, Grok, GitHub or API keys, connect a wallet.</div>
     <div id="gErr" class="note"></div>
   </form>
 </div>
@@ -781,8 +791,8 @@ function renderProfilePane() {
     <div class="group-h">Profile</div>
     <div class="list">
       <div class="row"><div class="avatar">${esc(initial)}</div>
-        <div class="l"><b class="${me.auth ? "mono" : ""}">${esc(me.auth ? shortAddr(uid) : uid)}</b><span>${me.auth ? "Signed in with Sui. Your memory follows this wallet." : "Your memory follows this handle to any device."}</span></div>
-        ${me.auth ? `<button class="btn-ghost" id="signOut">Sign out</button>` : `<button class="btn-ghost" id="switchUser">Switch</button>`}</div>
+        <div class="l"><b class="${me.auth ? "mono" : ""}">${esc(me.auth ? shortAddr(uid) : uid)}</b><span>${me.auth ? "Signed in with Sui. Your memory follows this wallet." : "Guest. Anyone who types this username sees this memory."}</span></div>
+        ${me.auth ? `<button class="btn-ghost" id="signOut">Sign out</button>` : `<button class="btn-connect" id="toWallet">Connect wallet</button><button class="btn-ghost" id="switchUser">Switch</button>`}</div>
       <div class="row"><div class="l"><b>Theme</b></div><div class="seg">${["system", "light", "dark"].map(x => `<button data-t="${x}" class="${t === x ? "on" : ""}">${x[0].toUpperCase() + x.slice(1)}</button>`).join("")}</div></div>
     </div>
     <div class="group-h">Walrus memory</div>
@@ -796,6 +806,7 @@ function renderProfilePane() {
   $("#signOut")?.addEventListener("click", async () => { await fetch("/api/auth/logout", {method: "POST"}); location.reload(); });
   // Switching memory is a sign-in, never an edit: it goes through the username screen.
   $("#switchUser")?.addEventListener("click", () => { closeModal(); showGate(true); });
+  $("#toWallet")?.addEventListener("click", openWallet);
 }
 const shortAddr = a => /^0x[0-9a-f]{64}$/.test(a) ? a.slice(0, 6) + "…" + a.slice(-4) : a;
 function renderProfile() {
@@ -855,12 +866,15 @@ async function refreshUsage() {
       const pct = Math.max(0, Math.min(100, w.used_percent || 0));
       return `<div class="win"><div class="win-h"><span><b>${esc(w.label)}</b> limit</span><span>${Math.round(pct)}% used · ${until(w.resets_at)}</span></div><div class="meter"><i class="${pct >= 100 ? "full" : pct >= 90 ? "hot" : ""}" style="width:${pct}%"></i></div></div>`;
     }).join("");
-    const how = x.connect || [], userMode = state.accounts === "user";
-    const label = how.includes("device") ? (x.kind === "codex" ? "Sign in with ChatGPT" : "Sign in with Grok") : "Connect";
+    const how = me.auth || state.accounts !== "user" ? x.connect || [] : [], userMode = state.accounts === "user";
+    const label = "Connect";
+    const cs = connectState[x.name] || {};
+    const open = (!!x.device && cs.mode !== "closed") || ["token", "api_key", "busy"].includes(cs.mode);
     const action = x.custom
       ? `<button class="btn-ghost" data-remove="${esc(x.name)}">Remove</button>`
+      : x.locked ? ""
       : connected && userMode ? `<button class="btn-ghost" data-disconnect="${esc(x.name)}">Disconnect</button>`
-      : how.length && !connected && !x.device ? `<button class="btn-connect" data-open="${esc(x.name)}">${label}</button>` : "";
+      : how.length && !connected ? (open ? `<button class="btn-ghost" data-close="${esc(x.name)}">Close</button>` : `<button class="btn-connect" data-open="${esc(x.name)}">${label}</button>`) : "";
     const box = connectBox(x, how);
     return `<div class="tile">
       <div class="ag-row">
@@ -875,23 +889,29 @@ async function refreshUsage() {
   };
   // Sign-in panel shown under an agent: device code, a pasted token, or an API key.
   function connectBox(x, how) {
-    const st = connectState[x.name];
-    if (x.device) return `<div class="connect-box"><div class="m">Open <a href="${esc(x.device.url)}" target="_blank" rel="noopener">${esc(x.device.url.replace(/^https:\/\//, "").split("?")[0])}</a> and enter this code:</div><div class="device-code">${esc(x.device.code)}</div><div class="m">Waiting for you to approve it… this updates by itself.</div></div>`;
-    if (!st) return "";
-    const err = st.error ? `<div class="m off" style="margin-top:6px">${esc(st.error)}</div>`
-      : st.note ? `<div class="m" style="margin-top:6px">${esc(st.note)}</div>` : "";
-    if (st.mode === "token") return `<form class="connect-box" data-cred="${esc(x.name)}" data-kind="oauth_token">
-        <b style="font-size:13px">Use your Claude subscription</b>
-        <div class="m">On your own computer run <code>claude setup-token</code>, sign in, and paste the token it prints (starts with <code>sk-ant-oat</code>).</div>
-        <input name="value" type="password" placeholder="sk-ant-oat…" autocomplete="off" required>
-        <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap"><button class="btn-connect">Save</button>${how.includes("api_key") ? `<button type="button" class="btn-ghost" data-mode="api_key" data-agent="${esc(x.name)}">Use an API key instead</button>` : ""}<button type="button" class="btn-ghost" data-close="${esc(x.name)}">Cancel</button></div>${err}</form>`;
+    const st = connectState[x.name] || {};
+    const err = st.error ? `<div class="m off">${esc(st.error)}</div>` : st.note ? `<div class="m">${esc(st.note)}</div>` : "";
+    const keyLink = how.includes("api_key") && st.mode !== "api_key"
+      ? `<button type="button" class="linkish" data-mode="api_key" data-agent="${esc(x.name)}">Use an API key</button>` : "";
+    const copy = v => `<button type="button" class="btn-ghost copy" data-copy="${esc(v)}">Copy</button>`;
+    if (x.device && st.mode !== "closed" && st.mode !== "api_key") {
+      const prefilled = /[?&]user_code=/.test(x.device.url);
+      return `<div class="connect-box">
+        <div class="cmd"><code class="device-code">${esc(x.device.code)}</code>${prefilled ? "" : copy(x.device.code)}
+          <a class="btn-connect" href="${esc(x.device.url)}" target="_blank" rel="noopener">Open ${x.kind === "codex" ? "ChatGPT" : "Grok"} ↗</a></div>
+        <div class="m">Approve that code there. This connects by itself. ${keyLink}</div>
+        ${x.kind === "codex" ? `<div class="m">ChatGPT says to enable device code authorization? Turn it on in <a href="https://chatgpt.com/#settings/Security" target="_blank" rel="noopener">ChatGPT settings → Security</a>, then Close and Connect again.</div>` : ""}</div>`;
+    }
+    if (st.mode === "token") return `<form class="connect-box" data-cred="${esc(x.name)}" data-kind="auto">
+        <div class="m">Run this in a terminal, then paste the token it prints.</div>
+        <div class="cmd"><code>claude setup-token</code>${copy("claude setup-token")}</div>
+        <div class="cmd"><input name="value" type="password" placeholder="sk-ant-oat… or sk-ant-api…" autocomplete="off" required><button class="btn-connect">Save</button></div>
+        ${err}</form>`;
     if (st.mode === "api_key") return `<form class="connect-box" data-cred="${esc(x.name)}" data-kind="api_key">
-        <b style="font-size:13px">Use your ${x.kind === "codex" ? "OpenAI" : "Anthropic"} API key</b>
-        <div class="m">Billed to your own API account. Stored on the Saga host only, never in Walrus memory.</div>
-        <input name="value" type="password" placeholder="${x.kind === "codex" ? "sk-…" : "sk-ant-…"}" autocomplete="off" required>
-        <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn-connect">Save</button><button type="button" class="btn-ghost" data-close="${esc(x.name)}">Cancel</button></div>${err}</form>`;
+        <div class="cmd"><input name="value" type="password" placeholder="${x.kind === "codex" ? "OpenAI API key, sk-…" : "Anthropic API key, sk-ant-…"}" autocomplete="off" required><button class="btn-connect">Save</button></div>
+        ${err}</form>`;
     if (st.mode === "busy") return `<div class="connect-box"><div class="m">Starting sign-in…</div></div>`;
-    return err ? `<div class="connect-box">${err}${how.includes("api_key") ? `<div style="margin-top:8px"><button type="button" class="btn-ghost" data-mode="api_key" data-agent="${esc(x.name)}">Use an API key instead</button></div>` : ""}</div>` : "";
+    return err ? `<div class="connect-box">${err} ${keyLink}</div>` : "";
   }
   const addForm = `<form class="tile" id="addForm">
       <b style="font-size:13.5px">Add an agent with your own API key</b>
@@ -901,16 +921,18 @@ async function refreshUsage() {
         <input name="name" placeholder="@handle, e.g. qwen" required>
         <input name="model" placeholder="model" required>
         <input name="base_url" class="full" placeholder="base URL, e.g. https://openrouter.ai/api/v1" required>
-        <input name="api_key" class="full" type="password" placeholder="API key (leave empty for local Ollama)" autocomplete="off">
+        ${me.auth ? `<input name="api_key" class="full" type="password" placeholder="API key (leave empty for local Ollama)" autocomplete="off">` : `<div class="m full">Guests can only add keyless endpoints (like local Ollama). Connect a wallet to use an API key.</div>`}
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn-connect">Add agent</button><button type="button" class="btn-ghost" id="addCancel">Cancel</button><span class="m off" id="addErr"></span></div>
     </form>`;
   const addTile = `<div class="tile add-tile" id="addTile"><div class="plus">+</div><div><b style="color:var(--ink);font-size:13.5px;font-weight:500">Add an agent with your own API key</b><div class="m">OpenRouter, xAI, Groq, OpenAI, Ollama…</div></div></div>`;
-  const vaultNote = !me.auth ? "" : vault.state === "mismatch"
+  const guestNote = me.auth ? "" : `<div class="tile" style="display:flex;align-items:center;gap:12px"><div class="m" style="flex:1">Guests can't connect accounts. Sign in with a wallet to use Claude, ChatGPT or Grok.</div><button class="btn-connect" id="agWallet">Connect wallet</button></div>`;
+  const vaultNote = guestNote + (vault.state === "mismatch"
     ? `<div class="tile" style="background:rgba(180,81,59,.10)"><b style="font-size:13.5px">Your saved accounts are locked with a different key</b><div class="m" style="display:block;line-height:1.6">This happens with some wallets (like Google sign-in) on a new device or session: the vault key can't be recreated, so Saga can't open what you connected before. Reset to delete the old, unreadable credentials and connect again here.</div><div style="margin-top:10px"><button class="btn-connect" id="vaultReset">Reset and reconnect</button></div></div>`
-    : "";
+    : "");
   const foot = me.auth && vault.state !== "mismatch" ? `<div class="foot">${icon("save", 12)} Sealed with your vault key. Disconnect deletes it. <a href="/privacy" target="_blank">Privacy</a></div>` : "";
   $("#agents").innerHTML = vaultNote + `<div class="list">${list.map(tile).join("")}${addOpen ? addForm : addTile}</div>` + foot;
+  $("#agWallet")?.addEventListener("click", openWallet);
   $("#vaultReset")?.addEventListener("click", async () => { await api("/api/vault/reset", {}); vault = {state: "ok"}; refreshUsage(); });
 
   const poll = () => {
@@ -930,11 +952,21 @@ async function refreshUsage() {
     }
   });
   $("#agents").querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { connectState[b.dataset.agent] = {mode: b.dataset.mode}; refreshUsage(); });
-  $("#agents").querySelectorAll("[data-close]").forEach(b => b.onclick = () => { delete connectState[b.dataset.close]; refreshUsage(); });
+  $("#agents").querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { b.textContent = "Select and copy"; }
+    setTimeout(() => { b.textContent = "Copy"; }, 1500);
+  });
+  $("#agents").querySelectorAll("[data-close]").forEach(b => b.onclick = () => {
+    const x = list.find(v => v.name === b.dataset.close);
+    if (x && x.device) connectState[x.name] = {mode: "closed"}; else delete connectState[b.dataset.close];
+    refreshUsage();
+  });
   $("#agents").querySelectorAll("form[data-cred]").forEach(f => f.onsubmit = async e => {
     e.preventDefault();
-    const agent = f.dataset.cred;
-    const r = await fetch("/api/agents/credential", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({agent, kind: f.dataset.kind, value: f.value.value.trim()})}).then(r => r.json());
+    const agent = f.dataset.cred, value = f.value.value.trim();
+    // One field for Claude: a subscription token (sk-ant-oat…) or an API key (sk-ant-api…).
+    const kind = f.dataset.kind !== "auto" ? f.dataset.kind : /^sk-ant-oat/.test(value) ? "oauth_token" : "api_key";
+    const r = await fetch("/api/agents/credential", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({agent, kind, value})}).then(r => r.json());
     if (r.error) { connectState[agent] = {...connectState[agent], error: r.error}; refreshUsage(); return; }
     delete connectState[agent]; refreshUsage();
   });
@@ -985,6 +1017,11 @@ function renderGhPane() {
   if (gh.connected) {
     box.innerHTML = note + `<div class="list"><div class="row">${icon("gh", 22)}<div class="l"><b>@${esc(gh.login)}</b><span>${gh.unlocked ? "Connected. Agents commit to a saga/… branch; you open the pull request." : "Connected, but locked on this device. Unlock your vault to use it."}</span></div><button class="btn-ghost" id="ghOff">Disconnect</button></div></div>`;
     $("#ghOff").onclick = async () => { await api("/api/github/disconnect", {}); ghRepos = null; ghNotice = null; refreshGitHub(); };
+    return;
+  }
+  if (!me.auth) {
+    box.innerHTML = `<div class="list"><div class="row">${icon("gh", 22)}<div class="l"><b>GitHub</b><span>Guests can't connect GitHub. Connect a wallet to let agents work on your repos.</span></div><button class="btn-connect" id="ghWallet">Connect wallet</button></div></div>`;
+    $("#ghWallet").onclick = openWallet;
     return;
   }
   const signIn = gh.oauth_available || gh.device_available;
@@ -1645,19 +1682,21 @@ function showGate(switching) {
   $("#gTitle").textContent = switching ? "Switch account" : "Sign in to Saga";
   $("#gBody").textContent = me.gated && !switching
     ? "This deployment is invite-only. Enter the access code and a username."
-    : "Enter your username. Your memory on Walrus follows it to any device.";
+    : "Pick a guest username to try Saga, or connect a wallet to keep your memory and accounts private.";
   $("#gCancel").hidden = !switching;
   $("#gErr").textContent = ""; $("#gHandle").value = "";
   $("#gate").style.display = "flex"; $("#gHandle").focus();
 }
 $("#gCancel").onclick = () => { $("#gate").style.display = "none"; };
 // Both ways in: a username, or a Sui wallet (proven by signature, so its memory is yours alone).
-$("#gWallet").onclick = () => {
+function openWallet() {
+  closeModal();
   const si = $("#signin"); delete si.dataset.mode;
   $("#siTitle").textContent = "Connect a Sui wallet";
   $("#siBack").hidden = !!me.wallet_required;
   $("#gate").style.display = "none"; si.classList.add("open");
-};
+}
+$("#gWallet").onclick = openWallet;
 $("#siBack").onclick = () => { $("#signin").classList.remove("open"); showGate(!$("#gCancel").hidden); };
 $("#gateForm").addEventListener("submit", async e => {
   e.preventDefault();

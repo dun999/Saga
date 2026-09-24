@@ -406,9 +406,11 @@ int cmd_serve(const Args& a) {
     std::getline(ss, addr, ',');
     if (auto n = web::normalize_address(addr); !n.empty()) o.auth.allowed.insert(n);
   }
+  // An allowlist only means something if every request has to prove a wallet: it implies wallet-only.
+  if (!o.auth.allowed.empty() && !a.has("no-auth")) o.auth.required = true;
   // On the operator's accounts, anyone who signs in spends the operator's plans: a public bind then
   // needs an access code or allowlist. With per-user accounts + sandbox, open sign-up is fine.
-  if (!local && !ho.user_accounts && o.access_code.empty() && o.auth.allowed.empty()) {
+  if (!local && !ho.user_accounts && o.access_code.empty() && (o.auth.allowed.empty() || !o.auth.required)) {
     std::fprintf(stderr,
                  "saga: refusing to bind %s without SAGA_ACCESS_CODE or SAGA_ALLOWED_ADDRESSES — agents can edit "
                  "files and run tools.\n",

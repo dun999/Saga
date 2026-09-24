@@ -34,6 +34,9 @@ bool on_path(const std::string& exe) {
 }
 
 Result run(const std::vector<std::string>& argv, const Options& opt) {
+  // A child that exits without reading its stdin must cost us EPIPE, not the whole server.
+  static const bool sigpipe_ignored = (signal(SIGPIPE, SIG_IGN), true);
+  (void)sigpipe_ignored;
   Result res;
   if (argv.empty()) return res;
   int out_p[2], err_p[2], in_p[2];
@@ -81,19 +84,19 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
     close(err_p[0]);
     return res;
   }
-  if (!opt.stdin_data.empty()) {
-    size_t off = 0;
-    while (off < opt.stdin_data.size()) {
-      ssize_t n = write(in_p[1], opt.stdin_data.data() + off, opt.stdin_data.size() - off);
-      if (n <= 0) break;
-      off += static_cast<size_t>(n);
-    }
-  }
-  close(in_p[1]);
-
+  // stdin is fed from the same loop as the output, non-blocking, so a child that never reads its
+  // prompt still hits the deadline and cancel instead of stalling us in write().
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(opt.timeout_s);
+  size_t in_off = 0;
+  int in_fd = in_p[1];
+  if (opt.stdin_data.empty()) {
+    close(in_fd);
+    in_fd = -1;
+  } else {
+    fcntl(in_fd, F_SETFL, fcntl(in_fd, F_GETFL) | O_NONBLOCK);
+  }
   std::string line_buf;
-  pollfd fds[2] = {{out_p[0], POLLIN, 0}, {err_p[0], POLLIN, 0}};
+  pollfd fds[3] = {{out_p[0], POLLIN, 0}, {err_p[0], POLLIN, 0}, {in_fd, POLLOUT, 0}};
   int open_fds = 2;
   char buf[8192];
   while (open_fds > 0) {
@@ -105,7 +108,15 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
       kill(-pid, SIGKILL);
       break;
     }
-    if (poll(fds, 2, 250) <= 0) continue;
+    if (poll(fds, 3, 250) <= 0) continue;
+    if (fds[2].fd >= 0 && (fds[2].revents & (POLLOUT | POLLERR | POLLHUP))) {
+      const ssize_t n = write(fds[2].fd, opt.stdin_data.data() + in_off, opt.stdin_data.size() - in_off);
+      if (n > 0) in_off += static_cast<size_t>(n);
+      if ((n < 0 && errno != EAGAIN && errno != EINTR) || in_off >= opt.stdin_data.size()) {
+        close(fds[2].fd);  // done, or the child closed its end (EPIPE)
+        fds[2].fd = -1;
+      }
+    }
     for (int i = 0; i < 2; ++i) {
       if (fds[i].fd < 0 || !(fds[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
       ssize_t n = read(fds[i].fd, buf, sizeof buf);
@@ -130,7 +141,7 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
   }
   if (!line_buf.empty() && opt.on_stdout_line) opt.on_stdout_line(line_buf);
   for (auto& f : fds)
-    if (f.fd >= 0) close(f.fd);
+    if (f.fd >= 0) close(f.fd);  // includes stdin if the child exited without reading it all
 
   int status = 0;
   waitpid(pid, &status, 0);
