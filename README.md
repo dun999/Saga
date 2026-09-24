@@ -32,6 +32,76 @@ Built for the Walrus **"Chatbots That Remember"** hackathon. The design draws on
 At boot Saga calls `restore()` on the hot namespaces. The relayer's vector index is only a cache, and
 Walrus is the source of truth.
 
+## Two kinds of self-improvement: the agent's, and the harness's
+
+Most "self-improving" setups make the **agent** learn. Saga makes the **harness** learn: the layer
+around the agents that decides what each one is told.
+
+### When agents improve themselves
+
+Each agent keeps its own memory and experience: Claude Code has its `CLAUDE.md` and memory files,
+Codex has its own, and a chatbot has its own chat history. They can work in the same workflow, but what
+one learns stays with it. If you tell Claude you deploy to Fly.io, Codex still doesn't know. If you add
+a new agent, it starts from zero.
+
+```mermaid
+flowchart LR
+    U(["You"]) --> A["Agent A"]
+    U --> B["Agent B"]
+    U -.-> C["New agent C"]
+    A <--> MA[("A's memory<br/>and experience")]
+    B <--> MB[("B's memory<br/>and experience")]
+    C <--> MC[("empty")]
+    MA x--x MB
+```
+
+Every agent is its own island. Knowledge doesn't cross from A to B, and swapping or adding an agent
+means a knowledge gap.
+
+### When the harness improves
+
+In Saga, the harness owns the memory and the experience, on Walrus. Before any agent runs, the harness
+picks what is relevant (who you are, what happened before, what worked, the rules it has learned) and
+hands it over with the task. After the turn, the harness decides what was learned and keeps it. The
+agents are interchangeable workers. None of them has to remember anything.
+
+```mermaid
+flowchart LR
+    U(["You"]) --> H
+    subgraph H["Saga harness"]
+        direction TB
+        R["Step 1: recall what matters<br/>for this task"] --> X["Step 2: build the context"]
+        L["Step 4: reflect, keep lessons,<br/>evolve the rules"]
+    end
+    W[("Walrus memory<br/>facts · episodes · skills<br/>playbook · lessons")] --> R
+    X --> A1["@claude"]
+    X --> A2["@codex"]
+    X --> A3["@saga"]
+    X -.-> A4["any new agent<br/>or API"]
+    A1 & A2 & A3 & A4 --> F["Step 3: result + your 👍/👎"]
+    F --> L
+    L --> W
+```
+
+This is what makes Saga **agent-agnostic**: plug in any coding CLI or OpenAI-compatible API, and on its
+first turn it already knows you, your past work, the skills that worked and the rules the harness has
+learned. There's no knowledge gap. The improvement belongs to the system, not to any one model, so
+it survives a model change, a new provider or a machine restart.
+
+| What is learned | Where it lives | Who gets it |
+|---|---|---|
+| Who you are, your preferences | `u:<you>:facts` | every agent |
+| What happened before | `u:<you>:episodes`, `u:<you>:chat` | every agent |
+| Work in progress this turn | `task:<turn>` blackboard | every agent in the turn |
+| How to do a multi-step job | `harness:skills` | every agent |
+| How to behave (the playbook) | `harness:prompts` | every agent |
+| What one agent should do differently | `agent:<name>:lessons` | only that `@name` |
+
+Saga does keep some lessons per agent, such as "@codex: run the tests before saying it's done", because
+agents have different strengths. Even those live in the harness, keyed by the `@name` rather than
+stored inside the model. Change the model behind `@codex` and its lessons carry over. Remove an agent and
+nothing it learned about you is lost.
+
 ## The self-improvement loop
 
 ```
@@ -54,9 +124,10 @@ Walrus is the source of truth.
 * **Playbook, not rewrites** (ACE): the system prompt is a fixed base plus short rules. Every
   `SAGA_EVOLVE_EVERY` critiques (default 3), the brain proposes at most three add/edit/remove edits,
   so rules that work can't be lost in a rewrite.
-* **Replay gate** (Darwin Gödel Machine, GEPA): before a new version serves anyone, it answers the
-  user's own rated past messages next to its parent, and a judge picks the better answer blind, in
-  shuffled order. A version that loses more than it wins is kept as `rejected` and never served.
+* **Replay gate** (Darwin Gödel Machine, GEPA): before a new version serves anyone, it answers rated
+  past messages from every user whose critique it responds to, next to its parent, and a judge picks
+  the better answer blind, in shuffled order. A version that loses more than it wins is kept as
+  `rejected` and never served, and one with nothing to replay isn't created at all.
   Among live versions, Thompson sampling over 👍/👎 decides the traffic. `saga evolve "<critique>"
   --user NAME` runs one evolution on demand.
 * **Skills**: a successful multi-agent procedure is distilled into a recallable skill.
@@ -86,12 +157,14 @@ Other commands:
 ./build/saga serve --no-memory     # the "before" baseline
 ```
 
-**Sign-in with Sui.** The app is gated by wallet sign-in: any Sui wallet in the browser (Wallet Standard —
+**Sign in with a username or a Sui wallet.** With a wallet, any Sui wallet in the browser (Wallet Standard —
 Slush, Suiet, Phantom, …) signs a one-time challenge as a personal message, and your address becomes your
 Saga identity, so your memory namespaces follow your wallet across devices. Ed25519 signatures are verified
 in C++; every other scheme — including zkLogin accounts such as Slush's "Sign in with Google" — is verified
 by a Sui full node (`verifySignature` over GraphQL). Sessions are stateless HMAC-signed cookies, so there is
-still no database. Use `--no-auth` / `SAGA_AUTH=off` for single-user local runs.
+still no database. A username is quicker but proves nothing: anyone who types it gets that username's
+memory. Set `SAGA_AUTH=wallet` or pass `--wallet-only` to allow wallets only, which you want on a public
+deployment.
 
 **Bring your own accounts.** When Saga serves other people (`--host 0.0.0.0`, or `SAGA_ACCOUNTS=user`),
 every user connects their *own* providers in **Agents**, and nothing runs on the operator's plans:

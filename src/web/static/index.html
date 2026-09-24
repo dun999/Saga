@@ -671,7 +671,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
     <b style="font-size:18px" id="gTitle">Sign in to Saga</b>
     <div class="empty" style="padding:0" id="gBody">Enter your username. Your memory on Walrus follows it to any device.</div>
     <input id="gCode" placeholder="Access code" autocomplete="off">
-    <input id="gHandle" placeholder="Username (e.g. mira)" autocomplete="off" spellcheck="false" autocapitalize="off">
+    <input id="gHandle" placeholder="What should Saga call you?" aria-label="Username" autocomplete="off" spellcheck="false" autocapitalize="off">
     <button class="btn">Continue</button>
     <div class="g-or" aria-hidden="true"><span>or</span></div>
     <button type="button" class="g-wallet" id="gWallet">Connect a Sui wallet</button>
@@ -810,6 +810,8 @@ function renderProfile() {
 // ---------- boot ----------
 async function boot() {
   me = await api("/api/me"); uid = me.uid;
+  // Not signed in yet (the server handed out a throwaway anon id): offer both ways in.
+  if (!me.auth && !me.wallet_required && /^anon-/.test(uid)) showGate(false);
   if (me.auth) {
     window.sagaAddress = uid;
     vault = await api("/api/vault").catch(() => ({state: "missing"}));

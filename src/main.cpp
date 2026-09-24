@@ -397,8 +397,9 @@ int cmd_serve(const Args& a) {
   o.port = std::stoi(a.get("port", env::get("SAGA_PORT", std::to_string(o.port))));
   o.access_code = env::get("SAGA_ACCESS_CODE");
   o.threads = std::stoi(env::get("SAGA_THREADS", std::to_string(o.threads)));
-  // Sign-in with Sui is on unless SAGA_AUTH=off (e.g. single-user local runs).
-  o.auth.required = env::get("SAGA_AUTH", "on") != "off" && !a.has("no-auth");
+  // Sign in with a username or a Sui wallet. SAGA_AUTH=wallet (or --wallet-only) allows wallets only.
+  const std::string auth_mode = env::get("SAGA_AUTH", "both");
+  o.auth.required = (auth_mode == "wallet" || auth_mode == "on" || a.has("wallet-only")) && !a.has("no-auth");
   o.auth.secret = env::get("SAGA_SESSION_SECRET");
   for (std::stringstream ss(env::get("SAGA_ALLOWED_ADDRESSES")); ss.good();) {
     std::string addr;
@@ -414,6 +415,11 @@ int cmd_serve(const Args& a) {
                  o.host.c_str());
     return 1;
   }
+  if (!local && !o.auth.required)
+    std::fprintf(stderr,
+                 "saga: warning: username sign-in is on for %s — anyone who types a username gets that username's "
+                 "memory. Set SAGA_AUTH=wallet to allow wallets only.\n",
+                 o.host.c_str());
   if (!local && !ho.user_accounts)
     std::fprintf(stderr,
                  "saga: warning: operator accounts on %s — every signed-in user's agents run as you, unsandboxed, "
@@ -426,7 +432,7 @@ void usage() {
   std::puts(
       "saga — self-improving multi-agent harness with native Walrus Memory\n\n"
       "usage: saga <command> [flags]\n"
-      "  serve   [--host H --port P] [--no-memory] [--no-auth]   web UI (default http://127.0.0.1:8080)\n"
+      "  serve   [--host H --port P] [--no-memory] [--wallet-only]   web UI (default http://127.0.0.1:8080)\n"
       "  chat    [--user NAME] [--no-memory]         terminal chat\n"
       "  doctor                                      check credentials, agents, Walrus round-trip\n"
       "  stats   [user…]                             memories/blobs per namespace\n"
