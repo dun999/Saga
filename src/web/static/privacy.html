@@ -47,9 +47,15 @@ li { margin: 6px 0; }
 </header>
 <main>
   <h1>Privacy &amp; cookies</h1>
-  <p class="updated">Last updated: September 2026</p>
+  <p class="updated">Last updated: 25 September 2026</p>
 
-  <div class="summary"><p><strong>In short:</strong> Saga uses only the cookies it needs to sign you in and unlock your vault — no analytics, no ads, no tracking. Your memory is stored encrypted on Walrus. Accounts you connect are encrypted with a key derived from your wallet that Saga never stores, and <strong>Disconnect deletes them</strong>.</p></div>
+  <div class="summary"><p><strong>In short:</strong> Saga uses only the cookies it needs to sign you in and unlock your vault — no analytics, no ads, no tracking. Your memory is stored encrypted on Walrus. Accounts you connect are encrypted with a key derived from your wallet that Saga never stores, and <strong>Disconnect deletes them</strong>. A username is guest mode: anyone who types the same name sees its memory.</p></div>
+
+  <h2>Wallet or guest</h2>
+  <ul>
+    <li><strong>Wallet.</strong> Your Sui address is your identity, proven by a signature, so your memory is yours alone. Only wallet users can connect accounts (Claude, ChatGPT, Grok, GitHub, API keys).</li>
+    <li><strong>Guest username.</strong> Quick to try, but it proves nothing: anyone who enters the same username sees and adds to that username's memory, chats and files. Guests can't connect accounts. Don't put anything private in a guest session.</li>
+  </ul>
 
   <h2>Who runs this</h2>
   <p>Saga is open-source software built for the Walrus “Chatbots That Remember” hackathon. Each deployment is run by its operator — whoever hosts the server you are using. This page describes how the software handles data; the operator is responsible for the server it runs on.</p>
@@ -61,7 +67,8 @@ li { margin: 6px 0; }
     <tbody>
       <tr><td><code>saga_session</code></td><td>Keeps you signed in. Contains your Sui address and an expiry, signed by the server. <em>HttpOnly</em> — page scripts can't read it.</td><td>14 days, or until you sign out</td></tr>
       <tr><td><code>saga_vault</code></td><td>Your vault key: a hash of your wallet's signature over a fixed “Unlock your Saga vault” message. It is sent with your requests so the server can unlock <em>your</em> connected accounts for that request only; the server never writes it down.</td><td>14 days, or until you sign out</td></tr>
-      <tr><td><code>saga_uid</code></td><td>Only when sign-in is turned off (single-user local runs): an anonymous handle for your memory.</td><td>1 year</td></tr>
+      <tr><td><code>saga_uid</code></td><td>Your guest username, or an anonymous handle before you pick one. Not used once you sign in with a wallet.</td><td>1 year</td></tr>
+      <tr><td><code>saga_gh_state</code></td><td>Only while you connect GitHub: a one-time value that proves the reply from GitHub belongs to your request.</td><td>10 minutes</td></tr>
       <tr><td>Local storage: <code>saga-theme</code>, <code>saga-side</code>, <code>saga-cookies</code></td><td>Your theme, whether the sidebar is open, and that you've seen the cookie notice. Stays in your browser.</td><td>Until you clear it</td></tr>
     </tbody>
   </table>
@@ -71,7 +78,8 @@ li { margin: 6px 0; }
     <thead><tr><th>Data</th><th>Where</th><th>Protection</th></tr></thead>
     <tbody>
       <tr><td>Your Sui address</td><td>Your session cookie; used as the name of your memory namespaces</td><td>Public by nature; never linked to your name or email by Saga</td></tr>
-      <tr><td>Memory: facts about you, chat transcripts, file checkpoints, lessons</td><td>Walrus mainnet, through the Walrus Memory (MemWal) relayer</td><td>Encrypted with SEAL before it is stored. The relayer sees plaintext while it indexes and serves your recalls, and keeps a search index of your memories.</td></tr>
+      <tr><td>Memory: facts about you, chat transcripts, file checkpoints, lessons</td><td>Walrus mainnet, through the Walrus Memory (MemWal) relayer</td><td>Encrypted with SEAL before it is stored. The relayer sees plaintext while it indexes and serves your recalls, and keeps a search index of your memories. Keys, tokens and passwords you type into a chat are replaced with “[redacted secret]” before anything is written.</td></tr>
+      <tr><td>Lessons and skills learned from your 👍/👎</td><td>Walrus mainnet, in namespaces shared by everyone on this deployment</td><td>Shared on purpose, so every user's agents improve. They record what worked or failed, not who you are, but they can echo details of the conversation they came from.</td></tr>
       <tr><td>Connected accounts: Claude token or API key, your own API keys, ChatGPT/Codex and Grok sign-ins</td><td>The Saga server (a key file, and a private folder per user)</td><td>Encrypted with your vault key (XSalsa20-Poly1305). Without you signed in, they can't be read. They are never written to Walrus.</td></tr>
       <tr><td>GitHub token, and clones of repos you pick</td><td>The Saga server: the token in the key file, clones in your chat workspace</td><td>The token is encrypted with your vault key and only handed to git for a single push or clone; clones are only visible to your own agents. Disconnect deletes the token.</td></tr>
       <tr><td>Files agents create in your chats</td><td>The Saga server (your workspace) and, as checkpoints, Walrus</td><td>Your workspace is only visible to your own agents, inside a sandbox</td></tr>
@@ -80,9 +88,10 @@ li { margin: 6px 0; }
 
   <h2>Your connected accounts</h2>
   <ul>
-    <li><strong>Encrypted at rest.</strong> Tokens, API keys and provider sign-ins are sealed with your vault key. The server keeps only the ciphertext and a short fingerprint used to tell whether your browser holds the right key.</li>
+    <li><strong>Encrypted at rest.</strong> Tokens, API keys and provider sign-ins are sealed with your vault key. Beside the ciphertext the server keeps, in the clear, only a short fingerprint of your vault key (to tell whether your browser holds the right one), the last 4 characters of each key or token, and your GitHub username, so the app can show what's connected.</li>
     <li><strong>Unlocked only for your requests.</strong> While one of your agents runs, Saga decrypts what it needs for that run, inside a sandbox that no other user's agents can see, then seals it again. During that window the server necessarily holds the plaintext in memory — so you are trusting the operator of this deployment while your agents run.</li>
     <li><strong>Disconnect deletes.</strong> Disconnecting an agent removes its stored token, key or sign-in from the server. Signing out clears your session and vault cookies.</li>
+    <li><strong>Unless the operator runs the agents.</strong> A deployment can instead run every agent on the operator's own provider logins. Then there's nothing for you to connect, your prompts go through the operator's accounts, and agents run without a per-user sandbox, so use such a deployment only if you trust its operator.</li>
     <li><strong>Use a capped key if you prefer.</strong> An API key with a monthly spending limit bounds what any key can cost.</li>
     <li><strong>Some wallets can't recreate the key.</strong> Wallets that sign with rotating keys (for example Google sign-in wallets) may produce a different vault key on a new device. Saga can't open what was sealed before, and asks you to reconnect.</li>
   </ul>
@@ -92,9 +101,11 @@ li { margin: 6px 0; }
   <ul>
     <li><strong>Walrus Memory (MemWal) relayer and Walrus mainnet</strong> — stores and recalls your encrypted memory.</li>
     <li><strong>Sui mainnet (GraphQL)</strong> — verifies wallet signatures that aren't checked locally.</li>
+    <li><strong>Boundless inference</strong> — runs the built-in <code>@saga</code> agent, so it receives the prompts sent to it, including relevant memories, on the operator's account.</li>
     <li><strong>The AI providers you connect</strong> — Anthropic (Claude), OpenAI (Codex / ChatGPT), xAI (Grok) and any API you add receive the prompts your agents send, including relevant memories, under your own account.</li>
+    <li><strong>GitHub</strong> — only if you connect it: sign-in, and the repos you pick are cloned from and pushed to it.</li>
     <li><strong>esm.sh</strong> — serves the open-source Wallet Standard library the sign-in page uses to find your wallet.</li>
-    <li><strong>Google Fonts</strong> — the landing page loads its typefaces from Google.</li>
+    <li><strong>Google Fonts</strong> — Saga's pages load their typefaces from Google.</li>
   </ul>
 
   <h2>Deleting your data</h2>
