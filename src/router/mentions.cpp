@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 #include <sstream>
 
 namespace saga::router {
@@ -14,7 +15,13 @@ std::string lower(std::string s) {
   return s;
 }
 
-// Trim whitespace plus connective filler left over at segment edges ("…, then", "and").
+bool one_of(const std::string& s, std::initializer_list<const char*> words) {
+  const std::string l = lower(s);
+  return std::any_of(words.begin(), words.end(), [&](const char* w) { return l == w; });
+}
+
+// Trim whitespace plus connective filler left over at segment edges ("…, then", "and"). Text that is
+// nothing but a connective ("@claude and @codex") is empty: it joins mentions, it isn't a task.
 std::string tidy(std::string s) {
   auto trim = [](std::string& x) {
     const char* ws = " \t\r\n,;:.-";
@@ -34,8 +41,24 @@ std::string tidy(std::string s) {
         changed = true;
       }
     }
+    for (const char* w : {"and then ", "and ", "then ", "also ", "plus "}) {
+      const std::string pre(w);
+      if (s.size() > pre.size() && lower(s.substr(0, pre.size())) == pre) {
+        s.erase(0, pre.size());
+        trim(s);
+        changed = true;
+      }
+    }
   }
+  if (one_of(s, {"and", "then", "also", "and then", "after that", "plus", "&", "or"})) return "";
   return s;
+}
+
+// "hey @saga @claude, introduce yourselves": the greeting addresses the agents, it isn't a task.
+bool greeting(const std::string& s) {
+  return one_of(s, {"hey", "hi", "hello", "yo", "ok", "okay", "please", "so", "all", "team", "guys", "hey all",
+                    "hi all", "hey team", "hi team", "hey guys", "hi guys", "hello all", "hello team", "hey everyone",
+                    "hi everyone", "hello everyone"});
 }
 
 }  // namespace
@@ -53,8 +76,11 @@ std::vector<Segment> split_mentions(const std::string& text, const std::vector<s
   }
 
   std::vector<Segment> out;
-  const std::string head = tidy(text.substr(0, hits.empty() ? text.size() : hits.front().at));
-  if (!head.empty()) out.push_back({"", head});
+  std::string head = tidy(text.substr(0, hits.empty() ? text.size() : hits.front().at));
+  if (!hits.empty() && greeting(head)) head.clear();
+  // A mention with no instruction of its own takes the next one ("@codex @grok write a haiku"), or the
+  // text before the mentions ("fix the flaky test @codex") — which then belongs to them, not the primary.
+  bool head_used = false;
   for (size_t k = 0; k < hits.size(); ++k) {
     const size_t stop = k + 1 < hits.size() ? hits[k + 1].at : text.size();
     std::string instr = tidy(text.substr(hits[k].end, stop - hits[k].end));
@@ -68,9 +94,13 @@ std::vector<Segment> split_mentions(const std::string& text, const std::vector<s
         ++n;
       }
     }
-    if (instr.empty()) instr = head.empty() ? "Continue the task above." : head;
+    if (instr.empty()) {
+      instr = head.empty() ? "Continue the task above." : head;
+      head_used |= !head.empty();
+    }
     out.push_back({hits[k].name, instr});
   }
+  if (!head.empty() && !head_used) out.insert(out.begin(), {"", head});
   return out;
 }
 

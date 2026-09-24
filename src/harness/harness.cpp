@@ -426,7 +426,13 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   std::vector<router::Segment> plan = router::split_mentions(message, names);
   if (plan.empty()) plan.push_back({"", message});
   std::vector<std::pair<router::Segment, std::string>> queue;  // segment, requested_by
-  for (auto& seg : plan) queue.push_back({seg, "user"});
+  for (auto& seg : plan) {
+    if (seg.agent.empty()) seg.agent = reg_.primary()->name();
+    const bool dup = std::any_of(queue.begin(), queue.end(), [&](auto& q) {
+      return q.first.agent == seg.agent && q.first.instruction == seg.instruction;
+    });
+    if (!dup) queue.push_back({seg, "user"});  // "@saga @saga hi" runs once
+  }
 
   t->steps.reserve(opt_.max_steps);
   for (size_t qi = 0; qi < queue.size() && static_cast<int>(t->steps.size()) < opt_.max_steps; ++qi) {
