@@ -31,6 +31,7 @@ struct Options {
   std::string workspaces_dir = "workspaces";
   std::string saga_bin;       // absolute path of this binary, for `saga mem` inside agents
   int max_steps = 6;          // total agent runs per turn, handoffs included
+  bool trace = false;         // print each turn's phases and timings to stderr
   int evolve_every = 3;       // negative critiques before a prompt mutation
   int agent_timeout_s = 900;
   std::string keys_path;      // own API keys (0600 file on this host, never in memory)

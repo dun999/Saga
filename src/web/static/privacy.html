@@ -61,7 +61,6 @@ li { margin: 6px 0; }
     <tbody>
       <tr><td><code>saga_session</code></td><td>Keeps you signed in. Contains your Sui address and an expiry, signed by the server. <em>HttpOnly</em> — page scripts can't read it.</td><td>14 days, or until you sign out</td></tr>
       <tr><td><code>saga_vault</code></td><td>Your vault key: a hash of your wallet's signature over a fixed “Unlock your Saga vault” message. It is sent with your requests so the server can unlock <em>your</em> connected accounts for that request only; the server never writes it down.</td><td>14 days, or until you sign out</td></tr>
-      <tr><td><code>saga_access</code></td><td>Only on invite-only deployments: remembers that you entered the access code.</td><td>1 year</td></tr>
       <tr><td><code>saga_uid</code></td><td>Only when sign-in is turned off (single-user local runs): an anonymous handle for your memory.</td><td>1 year</td></tr>
       <tr><td>Local storage: <code>saga-theme</code>, <code>saga-side</code>, <code>saga-cookies</code></td><td>Your theme, whether the sidebar is open, and that you've seen the cookie notice. Stays in your browser.</td><td>Until you clear it</td></tr>
     </tbody>

@@ -680,7 +680,6 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
     <span class="logo-mark" style="height:26px;margin-bottom:6px;align-self:flex-start" aria-hidden="true"></span>
     <b style="font-size:18px" id="gTitle">Sign in to Saga</b>
     <div class="empty" style="padding:0" id="gBody">Pick a guest username to try Saga, or connect a wallet to keep your memory and accounts private.</div>
-    <input id="gCode" placeholder="Access code" autocomplete="off">
     <input id="gHandle" placeholder="What should Saga call you?" aria-label="Username" autocomplete="off" spellcheck="false" autocapitalize="off">
     <button class="btn">Continue as guest</button>
     <div class="g-or" aria-hidden="true"><span>or</span></div>
@@ -1678,11 +1677,8 @@ function addFeedback(turn, id) {
 
 // The username screen: shown when the server asks for it, or when the user switches account.
 function showGate(switching) {
-  $("#gCode").hidden = switching && !me.gated;
   $("#gTitle").textContent = switching ? "Switch account" : "Sign in to Saga";
-  $("#gBody").textContent = me.gated && !switching
-    ? "This deployment is invite-only. Enter the access code and a username."
-    : "Pick a guest username to try Saga, or connect a wallet to keep your memory and accounts private.";
+  $("#gBody").textContent = "Pick a guest username to try Saga, or connect a wallet to keep your memory and accounts private.";
   $("#gCancel").hidden = !switching;
   $("#gErr").textContent = ""; $("#gHandle").value = "";
   $("#gate").style.display = "flex"; $("#gHandle").focus();
@@ -1703,7 +1699,7 @@ $("#gateForm").addEventListener("submit", async e => {
   const handle = $("#gHandle").value.trim();
   if (!handle) { $("#gErr").textContent = "Enter a username."; return; }
   if (handle === uid) { $("#gate").style.display = "none"; return; }
-  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({access_code: $("#gCode").value, handle})});
+  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({handle})});
   const j = await r.json().catch(() => ({}));
   if (r.ok && j.uid) location.reload(); else $("#gErr").textContent = j.error || "That username can't be used. Try letters and numbers.";
 });

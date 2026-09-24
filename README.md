@@ -49,8 +49,8 @@ relayer's reads:
   long as a Walrus write, so a reply can land right as the previous blob id appears without one waiting
   for the other.
 
-To see where a turn spends its time, run the server with `SAGA_TRACE=1`. It prints each phase to
-stderr: recalls started, recalled, each agent running and finished.
+To see where a turn spends its time, run `saga serve --trace`. It prints each phase to stderr:
+recalls started, recalled, each agent running and finished.
 
 ## Two kinds of self-improvement: the agent's, and the harness's
 
@@ -142,7 +142,7 @@ nothing it learned about you is lost.
   involved and says which playbook rules and lessons in context helped or hurt. A rule or lesson that
   hurts at least twice, and more often than it helps, stops being used.
 * **Playbook, not rewrites** (ACE): the system prompt is a fixed base plus short rules. Every
-  `SAGA_EVOLVE_EVERY` critiques (default 3), the brain proposes at most three add/edit/remove edits,
+  3 critiques, the brain proposes at most three add/edit/remove edits,
   so rules that work can't be lost in a rewrite.
 * **Replay gate** (Darwin Gödel Machine, GEPA): before a new version serves anyone, it answers rated
   past messages from every user whose critique it responds to, next to its parent, and a judge picks
@@ -181,13 +181,14 @@ Other commands:
 Slush, Suiet, Phantom, …) signs a one-time challenge as a personal message, and your address becomes your
 Saga identity, so your memory namespaces follow your wallet across devices. Ed25519 signatures are verified
 in C++; every other scheme — including zkLogin accounts such as Slush's "Sign in with Google" — is verified
-by a Sui full node (`verifySignature` over GraphQL). Sessions are stateless HMAC-signed cookies, so there is
-still no database. A username is quicker but proves nothing: anyone who types it gets that username's
-memory. Set `SAGA_AUTH=wallet` or pass `--wallet-only` to allow wallets only, which you want on a public
-deployment.
+by a Sui full node (`verifySignature` over GraphQL). Sessions are stateless HMAC-signed cookies (the key is
+made once in `~/.config/saga/session-secret`, so restarts don't sign anyone out), so there is still no
+database. A username is **guest mode**: quicker, but it proves nothing, so anyone who types it gets that
+username's memory, and guests can't connect accounts. Pass `--wallet-only` to allow wallets only, which you
+want on a public deployment.
 
-**Bring your own accounts.** When Saga serves other people (`--host 0.0.0.0`, or `SAGA_ACCOUNTS=user`),
-every user connects their *own* providers in **Agents**, and nothing runs on the operator's plans:
+**Bring your own accounts.** When Saga serves other people (`--host 0.0.0.0`, or `--accounts user`),
+every wallet user connects their *own* providers in **Agents**, and nothing runs on the operator's plans:
 
 | Agent | How a user connects |
 |---|---|
@@ -224,13 +225,12 @@ from a fresh blob-less clone of GitHub that fetches only the branch's new commit
 the token unset while it does. Agents can commit but cannot push, or see the token.
 
 To deploy publicly, pass `--host 0.0.0.0` (per-user accounts are then the default). With operator
-accounts (`SAGA_ACCOUNTS=host`), also set `SAGA_ACCESS_CODE` or `SAGA_ALLOWED_ADDRESSES`. Saga refuses to bind a public
-interface without an access code, because the agents can edit files and run tools inside `workspaces/`.
+accounts (`--accounts host`), also pass `--allow 0x…,0x…`: only those wallets can sign in. Saga refuses to
+bind a public interface on operator accounts without it, because the agents can edit files and run tools inside `workspaces/`.
 Operator accounts are for people you trust: their agents run as you, **without a sandbox**, so they can read
 the host's files (including `.env`) and each other's memory. Use per-user accounts for anyone else.
 
-Each user can have up to 4 live tabs and 3 running chats at once; `SAGA_THREADS` (default 256) sets the
-server's worker threads.
+Each user can have up to 4 live tabs and 3 running chats at once, on 256 worker threads.
 
 ## Agents and LLMs
 

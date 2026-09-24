@@ -64,14 +64,13 @@ memwal::Config memwal_config() {
 
 harness::Options harness_options(const Args& a) {
   harness::Options o;
-  o.workspaces_dir = a.get("workspaces", env::get("SAGA_WORKSPACES", o.workspaces_dir));
-  o.evolve_every = std::stoi(env::get("SAGA_EVOLVE_EVERY", std::to_string(o.evolve_every)));
-  o.agent_timeout_s = std::stoi(env::get("SAGA_AGENT_TIMEOUT", std::to_string(o.agent_timeout_s)));
+  o.workspaces_dir = a.get("workspaces", o.workspaces_dir);
+  o.trace = a.has("trace");
   std::error_code ec;
   o.saga_bin = std::filesystem::canonical("/proc/self/exe", ec).string();
   o.workspaces_dir = std::filesystem::absolute(o.workspaces_dir).string();
-  o.keys_path = env::get("SAGA_KEYS_FILE", env::get("HOME", ".") + "/.config/saga/keys.json");
-  o.homes_dir = std::filesystem::absolute(env::get("SAGA_HOMES", "agent-homes")).string();
+  o.keys_path = env::get("HOME", ".") + "/.config/saga/keys.json";
+  o.homes_dir = std::filesystem::absolute("agent-homes").string();
   o.github_client_id = env::get("SAGA_GITHUB_CLIENT_ID");
   o.github_client_secret = env::get("SAGA_GITHUB_CLIENT_SECRET");
   return o;
@@ -211,7 +210,7 @@ int cmd_chat(const Args& a) {
   harness::Harness h(reg, store, ho);
   h.boot(print_event);
   (void)gate;
-  const std::string uid = a.get("user", env::get("SAGA_USER", "cli"));
+  const std::string uid = a.get("user", "cli");
   const std::string session = uid + "-" + crypto::uuid4().substr(0, 6);
   std::printf("saga chat as '%s' (memory %s). /good, /bad <why>, /quit\n", uid.c_str(), mw ? "on" : "off");
   std::string last_turn;
@@ -306,7 +305,7 @@ int cmd_evolve(const Args& a) {
   memwal::Store store(&mw, true);
   harness::Harness h(reg, store, ho);
   h.boot();
-  const json r = h.evolve_now(a.get("user", env::get("SAGA_USER", "cli")), a.pos);
+  const json r = h.evolve_now(a.get("user", "cli"), a.pos);
   std::printf("%s\n", r.dump(2).c_str());
   store.flush(std::chrono::seconds(90));
   return r.contains("error") ? 1 : 0;
@@ -363,19 +362,40 @@ int cmd_mem(const Args& a) {
   return 2;
 }
 
+// Sign-in sessions are HMAC cookies. Their key is made once and kept next to the keys file (0600), so
+// restarting the server doesn't sign everyone out.
+std::string session_secret(const std::filesystem::path& dir) {
+  const auto path = dir / "session-secret";
+  {
+    std::ifstream in(path);
+    std::string s;
+    if (in >> s && s.size() >= 32) return s;
+  }
+  const std::string s = crypto::random_hex(32);
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  {
+    std::ofstream(path, std::ios::trunc);
+  }
+  std::filesystem::permissions(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+                               std::filesystem::perm_options::replace, ec);
+  std::ofstream(path, std::ios::trunc) << s;
+  return s;
+}
+
 int cmd_serve(const Args& a) {
   web::ServerOptions o;
-  o.host = a.get("host", env::get("SAGA_HOST", o.host));
+  o.host = a.get("host", o.host);
   const bool local = o.host == "127.0.0.1" || o.host == "localhost";
 
   // Whose provider accounts run the agents: the operator's own logins (local default) or each
   // user's own, sandboxed per user (default when serving other people).
   harness::Options ho = harness_options(a);
-  const std::string accounts = a.get("accounts", env::get("SAGA_ACCOUNTS", local ? "host" : "user"));
+  const std::string accounts = a.get("accounts", local ? "host" : "user");
   ho.user_accounts = accounts == "user";
   if (ho.user_accounts) {
     if (!sandbox::available()) {
-      std::fprintf(stderr, "saga: SAGA_ACCOUNTS=user runs each user's agents in a bubblewrap sandbox — install bwrap\n");
+      std::fprintf(stderr, "saga: --accounts user runs each user's agents in a bubblewrap sandbox — install bwrap\n");
       return 1;
     }
     std::error_code ec;
@@ -394,14 +414,11 @@ int cmd_serve(const Args& a) {
   harness::Harness h(reg, store, ho);
   (void)gate;
   h.boot(print_event);
-  o.port = std::stoi(a.get("port", env::get("SAGA_PORT", std::to_string(o.port))));
-  o.access_code = env::get("SAGA_ACCESS_CODE");
-  o.threads = std::stoi(env::get("SAGA_THREADS", std::to_string(o.threads)));
-  // Sign in with a username or a Sui wallet. SAGA_AUTH=wallet (or --wallet-only) allows wallets only.
-  const std::string auth_mode = env::get("SAGA_AUTH", "both");
-  o.auth.required = (auth_mode == "wallet" || auth_mode == "on" || a.has("wallet-only")) && !a.has("no-auth");
-  o.auth.secret = env::get("SAGA_SESSION_SECRET");
-  for (std::stringstream ss(env::get("SAGA_ALLOWED_ADDRESSES")); ss.good();) {
+  o.port = std::stoi(a.get("port", std::to_string(o.port)));
+  // Sign in with a username (guest) or a Sui wallet; --wallet-only allows wallets only.
+  o.auth.required = a.has("wallet-only") && !a.has("no-auth");
+  o.auth.secret = session_secret(std::filesystem::path(ho.keys_path).parent_path());
+  for (std::stringstream ss(a.get("allow")); ss.good();) {
     std::string addr;
     std::getline(ss, addr, ',');
     if (auto n = web::normalize_address(addr); !n.empty()) o.auth.allowed.insert(n);
@@ -409,10 +426,10 @@ int cmd_serve(const Args& a) {
   // An allowlist only means something if every request has to prove a wallet: it implies wallet-only.
   if (!o.auth.allowed.empty() && !a.has("no-auth")) o.auth.required = true;
   // On the operator's accounts, anyone who signs in spends the operator's plans: a public bind then
-  // needs an access code or allowlist. With per-user accounts + sandbox, open sign-up is fine.
-  if (!local && !ho.user_accounts && o.access_code.empty() && (o.auth.allowed.empty() || !o.auth.required)) {
+  // needs an allowlist of wallets. With per-user accounts + sandbox, open sign-up is fine.
+  if (!local && !ho.user_accounts && (o.auth.allowed.empty() || !o.auth.required)) {
     std::fprintf(stderr,
-                 "saga: refusing to bind %s without SAGA_ACCESS_CODE or SAGA_ALLOWED_ADDRESSES — agents can edit "
+                 "saga: refusing to bind %s on operator accounts without --allow 0x…,0x… — agents can edit "
                  "files and run tools.\n",
                  o.host.c_str());
     return 1;
@@ -420,7 +437,7 @@ int cmd_serve(const Args& a) {
   if (!local && !o.auth.required)
     std::fprintf(stderr,
                  "saga: warning: username sign-in is on for %s — anyone who types a username gets that username's "
-                 "memory. Set SAGA_AUTH=wallet to allow wallets only.\n",
+                 "memory. Pass --wallet-only to allow wallets only.\n",
                  o.host.c_str());
   if (!local && !ho.user_accounts)
     std::fprintf(stderr,
@@ -434,7 +451,8 @@ void usage() {
   std::puts(
       "saga — self-improving multi-agent harness with native Walrus Memory\n\n"
       "usage: saga <command> [flags]\n"
-      "  serve   [--host H --port P] [--no-memory] [--wallet-only]   web UI (default http://127.0.0.1:8080)\n"
+      "  serve   [--host H --port P] [--no-memory]  web UI (default http://127.0.0.1:8080)\n"
+      "          [--accounts host|user] [--wallet-only] [--allow 0x…,0x…] [--trace]\n"
       "  chat    [--user NAME] [--no-memory]         terminal chat\n"
       "  doctor                                      check credentials, agents, Walrus round-trip\n"
       "  stats   [user…]                             memories/blobs per namespace\n"

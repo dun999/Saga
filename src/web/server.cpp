@@ -126,14 +126,10 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   Auth auth(opt.auth);
   h.store().add_listener([hub](const memwal::WriteRecord& r) { hub->push(r); });
 
-  // Identity + optional access gate.
+  // Identity gate.
   svr.set_pre_routing_handler([&](const httplib::Request& req, httplib::Response& res) {
     if (!req.path.starts_with("/api/")) return httplib::Server::HandlerResponse::Unhandled;
     if (req.path == "/api/login" || req.path.starts_with("/api/auth/")) return httplib::Server::HandlerResponse::Unhandled;
-    if (!opt.access_code.empty() && cookie(req, "saga_access") != opt.access_code) {
-      send_json(res, {{"error", "access code required"}}, 401);
-      return httplib::Server::HandlerResponse::Handled;
-    }
     // Sign-in with Sui: every other API call needs a verified wallet session.
     if (auth.config().required && auth.session_address(cookie(req, "saga_session")).empty()) {
       send_json(res, {{"error", "sign in required"}, {"login", true}}, 401);
@@ -195,15 +191,10 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   svr.Post("/api/login", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
     if (!j.is_object()) return send_json(res, {{"error", "bad json"}}, 400);
-    const std::string code = j.value("access_code", "");
-    const bool already_in = !opt.access_code.empty() && cookie(req, "saga_access") == opt.access_code;
-    if (!opt.access_code.empty() && code != opt.access_code && !already_in)
-      return send_json(res, {{"error", "wrong code"}}, 401);
+    if (auth.config().required) return send_json(res, {{"error", "This Saga only allows wallet sign-in."}}, 403);
     std::string handle = sanitize_uid(j.value("handle", ""));
     if (looks_like_address(handle))
       return send_json(res, {{"error", "That looks like a wallet address. Use Connect wallet to sign in with it."}}, 400);
-    if (!opt.access_code.empty() && !already_in)
-      res.set_header("Set-Cookie", "saga_access=" + code + "; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax");
     if (!handle.empty()) {
       res.headers.emplace("Set-Cookie", "saga_uid=" + handle + "; Path=/; Max-Age=31536000; SameSite=Lax");
       // Choosing a username leaves any wallet session, or the wallet would keep winning.
@@ -216,7 +207,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     const std::string uid = uid_of(req, res);
     const std::string address = auth.session_address(cookie(req, "saga_session"));
     // auth: signed in with a wallet. wallet_required: this deployment only allows wallets.
-    send_json(res, {{"uid", uid}, {"gated", !opt.access_code.empty()}, {"auth", !address.empty()},
+    send_json(res, {{"uid", uid}, {"auth", !address.empty()},
                     {"address", address}, {"wallet_required", auth.config().required}});
   });
 
@@ -292,8 +283,8 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   svr.Post("/api/agents/connect", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
     const std::string agent = j.is_object() ? j.value("agent", "") : "";
-    // Operator mode signs in the *host's* CLIs, so it is only offered on a private deployment.
-    if (!h.user_accounts() && !opt.access_code.empty())
+    // Operator mode signs in the *host's* CLIs, so it is only offered when Saga serves this machine alone.
+    if (!h.user_accounts() && opt.host != "127.0.0.1" && opt.host != "localhost")
       return send_json(res, {{"error", "connect provider accounts on the Saga host"}}, 403);
     auto r = h.connect_agent(uid_of(req, res), agent, vault_of(req));
     send_json(res, r, r.contains("error") ? 400 : 200);
@@ -354,9 +345,9 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   // "Connect GitHub": off to github.com to authorize, back via the callback, then the app finishes the
   // exchange in a same-site request, the only kind that carries the (SameSite=Strict) vault cookie.
   auto site_of = [](const httplib::Request& req) {
-    if (auto u = env::get("SAGA_PUBLIC_URL"); !u.empty()) return u;
-    const std::string proto = req.get_header_value("X-Forwarded-Proto");
-    return (proto.empty() ? "http" : proto) + "://" + req.get_header_value("Host");
+    // Behind a reverse proxy the forwarded headers carry the public scheme and host.
+    const std::string proto = req.get_header_value("X-Forwarded-Proto"), fwd = req.get_header_value("X-Forwarded-Host");
+    return (proto.empty() ? "http" : proto) + "://" + (fwd.empty() ? req.get_header_value("Host") : fwd);
   };
   svr.Get("/api/github/login", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string state = crypto::uuid4();
@@ -514,8 +505,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     }, [feeds, uid](bool) { feeds->give(uid); });
   });
 
-  std::printf("saga: listening on http://%s:%d%s\n", opt.host.c_str(), opt.port,
-              opt.access_code.empty() ? "" : " (access code required)");
+  std::printf("saga: listening on http://%s:%d\n", opt.host.c_str(), opt.port);
   std::fflush(stdout);
   if (!svr.listen(opt.host, opt.port)) {
     std::fprintf(stderr, "saga: cannot listen on %s:%d\n", opt.host.c_str(), opt.port);

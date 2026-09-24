@@ -399,8 +399,8 @@ std::shared_ptr<Harness::PendingRecall> Harness::recall_async(std::string query,
 
 std::string Harness::chat(const std::string& uid, const std::string& session, const std::string& message,
                           const Emit& emit, const secrets::Key& vault) {
-  // SAGA_TRACE=1 prints where each turn spends its time (stderr).
-  static const bool tracing = std::getenv("SAGA_TRACE") != nullptr;
+  // `saga serve --trace` prints where each turn spends its time (stderr).
+  const bool tracing = opt_.trace;
   const auto t0 = std::chrono::steady_clock::now();
   auto trace = [&](const std::string& what) {
     if (tracing)

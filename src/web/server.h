@@ -9,7 +9,6 @@ namespace saga::web {
 struct ServerOptions {
   std::string host = "127.0.0.1";
   int port = 8080;
-  std::string access_code;  // if set, required from every browser (public deployments)
   AuthConfig auth;          // Sign-in with Sui (wallet / Google via zkLogin)
   // Worker threads. A live feed or a streaming chat holds one for as long as it is open, so the
   // per-user caps below keep one user (or a pile of tabs) from starving everyone else.
