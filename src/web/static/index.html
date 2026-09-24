@@ -276,6 +276,9 @@ textarea::placeholder { color: var(--faint); }
 .mnav button:hover { background: var(--hover); color: var(--ink); }
 .mnav button.on { background: var(--surface); color: var(--ink); font-weight: 500; }
 .mbody { flex: 1; min-width: 0; position: relative; overflow-y: auto; padding: 22px 26px; }
+/* The profile window scrolls without showing scrollbars (wheel, trackpad and touch still scroll). */
+.mnav, .mbody, .subtabs, .connect-box .cmd code { scrollbar-width: none; }
+.mnav::-webkit-scrollbar, .mbody::-webkit-scrollbar, .subtabs::-webkit-scrollbar, .connect-box .cmd code::-webkit-scrollbar { display: none; }
 .mbody section { display: none; }
 .mbody section > h3 { display: none; }  /* the category header names the page */
 .ghead { display: none; margin-bottom: 14px; }
