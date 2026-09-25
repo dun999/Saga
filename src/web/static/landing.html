@@ -5,18 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Saga — a harness that remembers, on Walrus</title>
 <meta name="description" content="A chatbot harness with native Walrus memory, built in C++. Hand work between Claude Code, Codex and Grok with @mentions; everything Saga learns lives on Walrus mainnet.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23312F2C'/%3E%3Cellipse cx='16' cy='16.5' rx='14' ry='4.2' transform='rotate(-20 16 16.5)' fill='none' stroke='%23ABD1C6' stroke-width='1.3'/%3E%3Ccircle cx='16' cy='16.5' r='5.5' fill='%23F2EFE9'/%3E%3Ccircle cx='27' cy='13' r='2' fill='%23CFF3EA'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232F2F31'/%3E%3Cellipse cx='16' cy='16.5' rx='14' ry='4.2' transform='rotate(-20 16 16.5)' fill='none' stroke='%2392A9E1' stroke-width='1.3'/%3E%3Ccircle cx='16' cy='16.5' r='5.5' fill='%23EBE1CC'/%3E%3Ccircle cx='27' cy='13' r='2' fill='%23D9E2F8'/%3E%3C/svg%3E">
 <script src="/brand.js" defer></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <style>
 :root {
-  --charcoal: #312F2C; --mint: #ABD1C6;
-  --canvas: #F6F4EF; --white: #FFFFFF; --panel: #ECE9E2; --panel-2: #E3DFD6; --surface: #FFFFFF;
-  --ink: #312F2C; --muted: #6F6A61; --faint: #9C968C;
-  --mint-deep: #3F7F6D;
-  --claude: #C8612F; --codex: #23875F; --grok: #6E58E0;
+  /* Cream paper, lavender haze and soft graphite; every tile carries a hairline edge in ink. */
+  --graphite: #2F2F31; --lavender: #92A9E1;
+  --canvas: #EBE1CC; --panel: #E1D5BC; --panel-2: #D6C8AB; --surface: #F6F1E6;
+  --ink: #2F2F31; --muted: #625D54; --faint: #938B7C;
+  --lav-deep: #3F57A0; --edge: #2F2F31;
+  --claude: #C8612F; --codex: #23875F; --grok: #8E4FC0;
   --radius: 26px;
   --col: 1180px;
   --sans: "Inter Tight", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -25,15 +26,15 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --canvas: #312F2C; --panel: #3A3835; --panel-2: #45423E; --surface: #3A3835;
-    --ink: #F2EFE9; --muted: #B3AEA5; --faint: #8A857C; --mint-deep: #ABD1C6;
-    --claude: #F0925F; --codex: #5FD3A0; --grok: #B3A4FF;
+    --canvas: #2F2F31; --panel: #3A3A3D; --panel-2: #454549; --surface: #3A3A3D;
+    --ink: #EBE1CC; --muted: #B2AB9E; --faint: #86817A; --lav-deep: #92A9E1; --edge: rgba(235,225,204,.4);
+    --claude: #F0925F; --codex: #5FD3A0; --grok: #D6A6EE;
   }
 }
 :root[data-theme="dark"] {
-  --canvas: #312F2C; --panel: #3A3835; --panel-2: #45423E; --surface: #3A3835;
-  --ink: #F2EFE9; --muted: #B3AEA5; --faint: #8A857C; --mint-deep: #ABD1C6;
-  --claude: #F0925F; --codex: #5FD3A0; --grok: #B3A4FF;
+  --canvas: #2F2F31; --panel: #3A3A3D; --panel-2: #454549; --surface: #3A3A3D;
+  --ink: #EBE1CC; --muted: #B2AB9E; --faint: #86817A; --lav-deep: #92A9E1; --edge: rgba(235,225,204,.4);
+  --claude: #F0925F; --codex: #5FD3A0; --grok: #D6A6EE;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -46,35 +47,31 @@ a { color: inherit; text-decoration: none; }
 .ag-claude { color: var(--claude); } .ag-codex { color: var(--codex); } .ag-grok { color: var(--grok); }
 
 /* buttons */
-.btn { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 22px; border-radius: 99px; font-weight: 600; font-size: 15px; border: 0; cursor: pointer; transition: transform .15s, background .2s; }
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 22px; border-radius: 12px; font-weight: 600; font-size: 15px; border: 0; cursor: pointer; transition: transform .15s, background .2s; }
 .btn:active { transform: scale(.97); }
 .btn svg { transition: transform .25s var(--ease); }
 .btn:hover svg { transform: translateX(3px); }
-.btn-dark { background: var(--charcoal); color: var(--mint); }
-.btn-dark:hover { background: #1f1d1b; }
-.btn-soft { background: var(--panel); color: var(--ink); }
-.btn-soft:hover { background: var(--panel-2); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn-dark { background: var(--mint); color: var(--charcoal); } }
-:root[data-theme="dark"] .btn-dark { background: var(--mint); color: var(--charcoal); }
-.btn-sm { height: 38px; padding: 0 16px; font-size: 13.5px; }
+.btn-dark { background: var(--graphite); color: var(--lavender); }
+.btn-dark:hover { background: #1E1E20; }
+.btn-soft { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--edge); }
+.btn-soft:hover { background: var(--panel); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn-dark { background: var(--lavender); color: var(--graphite); } }
+:root[data-theme="dark"] .btn-dark { background: var(--lavender); color: var(--graphite); }
+.btn-sm { height: 38px; padding: 0 16px; font-size: 13.5px; border-radius: 10px; }
 
 /* header */
 header.top { position: sticky; top: 0; z-index: 30; backdrop-filter: saturate(1.4) blur(14px); background: color-mix(in srgb, var(--canvas) 78%, transparent); transition: background .3s, color .3s; }
-/* Over the white stage the bar turns white too, so nothing draws a band across it. */
-header.top.on-white { background: rgba(255,255,255,.86); color: #312F2C; }
-header.top.on-white nav.links { color: #6F6A61; }
+/* Over the paper stage the bar turns paper too, so nothing draws a band across it. */
+header.top.on-white { background: rgba(246,241,230,.88); color: #2F2F31; }
+header.top.on-white nav.links { color: #625D54; }
 /* The wordmark sets its own colour, so it has to follow the white header over the demo too. */
-header.top.on-white .wordmark { color: #312F2C; }
+header.top.on-white .wordmark { color: #2F2F31; }
 header.top.on-white .bh { --bh-hot: #FFFFFF; }
 header.top .col { display: flex; align-items: center; justify-content: space-between; height: 68px; }
 .wordmark { display: flex; align-items: center; color: var(--ink); transition: color .3s; }
 /* The Saga wordmark: a transparent image used as a mask, so it takes the colour of the text around it. */
 .logo-mark { display: inline-block; flex: none; aspect-ratio: 1363 / 340; height: 24px; background: currentColor;
   -webkit-mask: url(/saga-logo.png) center / contain no-repeat; mask: url(/saga-logo.png) center / contain no-repeat; }
-
-.mark { width: 26px; height: 26px; border-radius: 8px; background: var(--charcoal); display: grid; place-items: center; }
-.mark i { width: 10px; height: 10px; border-radius: 50%; background: var(--mint); display: block; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .mark { background: var(--mint); } :root:not([data-theme="light"]) .mark i { background: var(--charcoal); } }
 nav.links { display: flex; gap: 26px; font-size: 14px; color: var(--muted); }
 nav.links a:hover { color: var(--ink); }
 @media (max-width: 760px) { nav.links { display: none; } }
@@ -83,8 +80,6 @@ nav.links a:hover { color: var(--ink); }
 /* The hero owns the whole first screen; the demo only arrives on scroll. */
 .hero { min-height: calc(100vh - 68px); min-height: calc(100svh - 68px); display: flex; align-items: center; padding: 40px 0 64px; position: relative; overflow: hidden; }
 .hero > .col { width: 100%; }
-.chip { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); background: var(--panel); padding: 6px 14px; border-radius: 99px; }
-.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #6FBF9F; box-shadow: 0 0 0 4px rgba(171,209,198,.35); }
 h1 { font-size: clamp(58px, 10.5vw, 158px); line-height: .92; letter-spacing: -.035em; font-weight: 600; margin: 0; max-width: 11ch; }
 /* The typed word owns a fixed-height line of its own, so deleting and retyping it never
    collapses the line or re-wraps the heading — nothing below it moves. */
@@ -92,7 +87,7 @@ h1 { font-size: clamp(58px, 10.5vw, 158px); line-height: .92; letter-spacing: -.
 h1 .ln { display: block; overflow: hidden; padding: .06em 0 .1em; margin: -.06em 0 -.1em; }
 h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 @keyframes line-up { from { transform: translateY(112%); } }
-.tw .caret { display: inline-block; width: .06em; height: .82em; background: var(--mint-deep); margin-left: .04em; vertical-align: -.06em; animation: blink 1s steps(1) infinite; }
+.tw .caret { display: inline-block; width: .06em; height: .82em; background: var(--lav-deep); margin-left: .04em; vertical-align: -.06em; animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .lede { margin: 32px 0 0; max-width: 58ch; color: var(--muted); font-size: clamp(17px, 1.5vw, 21px); line-height: 1.6; }
 .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 40px; }
@@ -100,19 +95,19 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 .scroll-cue.gone { opacity: 0; }
 .scroll-cue i { width: 1.5px; height: 26px; border-radius: 2px; background: var(--faint); opacity: .6; animation: cue 1.8s ease-in-out infinite; transform-origin: top; }
 @keyframes cue { 0% { transform: scaleY(0); } 50% { transform: scaleY(1); } 100% { transform: scaleY(1); opacity: 0; } }
-.hero-orb { position: absolute; right: -10vw; top: 8vh; width: 56vw; max-width: 820px; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 35% 35%, var(--mint), transparent 62%); opacity: .55; filter: blur(8px); pointer-events: none; animation: orb-in 1.8s ease backwards, drift 14s ease-in-out infinite alternate;
+.hero-orb { position: absolute; right: -10vw; top: 8vh; width: 56vw; max-width: 820px; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 35% 35%, var(--lavender), transparent 62%); opacity: .55; filter: blur(8px); pointer-events: none; animation: orb-in 1.8s ease backwards, drift 14s ease-in-out infinite alternate;
   translate: calc(var(--px, 0) * 70px) calc(var(--py, 0) * 50px); transition: translate 1.4s var(--ease); }
 @keyframes orb-in { from { opacity: 0; } }
 @keyframes drift { to { transform: translate(-4vw, 5vh) scale(1.08); } }
 .rise { animation: rise .7s cubic-bezier(.2,.7,.2,1) both; }
 @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
 
-/* ============ full-screen white chat stage ============ */
-.stage { position: relative; min-height: 100vh; min-height: 100svh; background: #FFFFFF; color: #312F2C; display: flex; flex-direction: column; justify-content: center; padding: calc(68px + 4vh) 0 5vh; overflow: hidden; }
-.stage .eyebrow { text-align: center; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #9C968C; }
+/* ============ full-screen paper chat stage ============ */
+.stage { position: relative; min-height: 100vh; min-height: 100svh; background: #F6F1E6; color: #2F2F31; display: flex; flex-direction: column; justify-content: center; padding: calc(68px + 4vh) 0 5vh; overflow: hidden; }
+.stage .eyebrow { text-align: center; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #938B7C; }
 .stage .intro { padding: 0 20px; }
 .stage h2 { text-align: center; font-size: clamp(28px, 3.6vw, 46px); letter-spacing: -.035em; line-height: 1.08; font-weight: 600; margin: 12px auto 0; max-width: 26ch; }
-.stage .ag-claude { color: #C8612F; } .stage .ag-codex { color: #23875F; } .stage .ag-grok { color: #6E58E0; }
+.stage .ag-claude { color: #C8612F; } .stage .ag-codex { color: #23875F; } .stage .ag-grok { color: #8E4FC0; }
 /* Chat anchors to the bottom like a real thread; older lines slide up under a soft fade. */
 .thread { max-width: 720px; width: calc(100% - 40px); height: clamp(300px, calc(100svh - 360px), 540px); flex: none; margin: 4vh auto 0; padding: 0 0 4px; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, transparent, #000 7%); mask-image: linear-gradient(to bottom, transparent, #000 7%); }
@@ -120,24 +115,24 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 .m.in { opacity: 1; transform: none; }
 .m.out { opacity: 0; transition-duration: .6s; }
 .u-row { display: flex; justify-content: flex-end; }
-.u-bubble { background: #312F2C; color: #F6F2EA; padding: 12px 18px; border-radius: 22px 22px 6px 22px; font-size: 15.5px; max-width: 86%; }
+.u-bubble { background: #2F2F31; color: #EBE1CC; padding: 12px 18px; border-radius: 22px 22px 6px 22px; font-size: 15.5px; max-width: 86%; }
 .u-bubble .ag-claude { color: #F4A67C; } .u-bubble .ag-codex { color: #7FDDB3; }
 .ico { flex: none; }
 /* An agent turn: name line, the answer in a bubble, then what it did — outside the bubble. */
 .amsg { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.a-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: #5B5650; padding-left: 2px; }
-.a-head .st { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #6F6A61; transition: color .4s; }
-.a-head .st.ok { color: #3F7F6D; }
-.a-bubble { font-size: 15px; line-height: 1.55; padding: 11px 16px; border-radius: 6px 20px 20px 20px; max-width: 88%; background: #EFEBE3; min-height: 44px; }
+.a-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: #57524A; padding-left: 2px; }
+.a-head .st { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #625D54; transition: color .4s; }
+.a-head .st.ok { color: #3F57A0; }
+.a-bubble { font-size: 15px; line-height: 1.55; padding: 11px 16px; border-radius: 6px 20px 20px 20px; max-width: 88%; background: #E9E0CD; min-height: 44px; }
 /* Solid agent colours, white text: the bubble says who is talking at a glance. */
 .amsg.claude .a-bubble { background: #C8612F; color: #FFFFFF; } .amsg.codex .a-bubble { background: #23875F; color: #FFFFFF; }
 .amsg .a-bubble { font-weight: 500; }
 .amsg .a-bubble > div + div { margin-top: 3px; }
 /* A mention inside a bubble is just coloured text: a light green that stays readable on orange. */
 .amsg .a-bubble .ag { font-weight: 600; } .amsg .a-bubble .ag-codex { color: #B6F5D6; }
-.a-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #6F6A61; padding-left: 4px; opacity: 0; transform: translateY(4px); transition: opacity .35s, transform .35s; }
+.a-note { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #625D54; padding-left: 4px; opacity: 0; transform: translateY(4px); transition: opacity .35s, transform .35s; }
 .a-note.in { opacity: 1; transform: none; }
-.a-note code { font: 500 12.5px ui-monospace, "SF Mono", Menlo, monospace; color: #3F7F6D; }
+.a-note code { font: 500 12.5px ui-monospace, "SF Mono", Menlo, monospace; color: #3F57A0; }
 .amsg .a-bubble code { font: 500 13.5px ui-monospace, "SF Mono", Menlo, monospace; background: rgba(0,0,0,.16); padding: 1px 6px; border-radius: 6px; }
 .amsg .a-bubble .dots i { background: rgba(255,255,255,.85); }
 .amsg .a-bubble .wcaret { background: #FFFFFF; }
@@ -145,30 +140,30 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 .a-bubble { transform-origin: 0 0; animation: bpop .4s cubic-bezier(.34,1.36,.64,1) backwards; }
 .u-bubble { transform-origin: 100% 100%; animation: bpop .4s cubic-bezier(.34,1.36,.64,1) backwards; }
 @keyframes bpop { from { opacity: 0; transform: translateY(6px) scale(.94); } }
-.wcaret { display: inline-block; width: 2px; height: 1.05em; margin-left: 2px; vertical-align: -.16em; border-radius: 1px; background: #3F7F6D; }
+.wcaret { display: inline-block; width: 2px; height: 1.05em; margin-left: 2px; vertical-align: -.16em; border-radius: 1px; background: #3F57A0; }
 .dots { display: inline-flex; gap: 4px; padding: 7px 0; }
-.dots i { width: 6px; height: 6px; border-radius: 50%; background: #A39E94; animation: bob 1.1s ease-in-out infinite; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: #A39C8C; animation: bob 1.1s ease-in-out infinite; }
 .dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
 @keyframes bob { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
-.composer { max-width: 720px; width: calc(100% - 40px); margin: 14px auto 0; background: #FFFFFF; border-radius: 26px; box-shadow: 0 18px 50px rgba(49,47,44,.10), 0 2px 8px rgba(49,47,44,.06); display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 22px; }
-.composer .typed { flex: 1; font-size: 16px; min-height: 26px; color: #312F2C; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.composer .typed .ph { color: #A39E94; }
-.composer .typed .cur { display: inline-block; width: 2px; height: 18px; background: #312F2C; vertical-align: -3px; margin-left: 1px; animation: blink 1s steps(1) infinite; }
-.composer .send { width: 40px; height: 40px; border-radius: 50%; background: #312F2C; color: #ABD1C6; display: grid; place-items: center; flex: none; transition: transform .15s; }
+.composer { max-width: 720px; width: calc(100% - 40px); margin: 14px auto 0; background: #FFFDF8; border: 1.5px solid #2F2F31; border-radius: 26px; box-shadow: 0 18px 50px rgba(47,47,49,.10); display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 22px; }
+.composer .typed { flex: 1; font-size: 16px; min-height: 26px; color: #2F2F31; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer .typed .ph { color: #938B7C; }
+.composer .typed .cur { display: inline-block; width: 2px; height: 18px; background: #2F2F31; vertical-align: -3px; margin-left: 1px; animation: blink 1s steps(1) infinite; }
+.composer .send { width: 40px; height: 40px; border-radius: 50%; background: #2F2F31; color: #92A9E1; display: grid; place-items: center; flex: none; transition: transform .15s; }
 .composer .send.hit { transform: scale(.86); }
 .ac { max-width: 720px; width: calc(100% - 40px); margin: 0 auto; position: relative; height: 0; }
-.ac > div { position: absolute; bottom: 10px; left: 14px; background: #FFFFFF; border-radius: 14px; box-shadow: 0 14px 40px rgba(49,47,44,.14); padding: 8px 12px; font-size: 14px; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; }
+.ac > div { position: absolute; bottom: 10px; left: 14px; background: #FFFDF8; border: 1.5px solid #2F2F31; border-radius: 14px; box-shadow: 0 14px 40px rgba(47,47,49,.14); padding: 8px 12px; font-size: 14px; opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; }
 .ac > div.in { opacity: 1; transform: none; }
-.ac small { display: block; color: #8A857C; font-size: 12px; }
+.ac small { display: block; color: #7A7468; font-size: 12px; }
 
 /* essential-cookies notice */
-.cookie-note { position: fixed; left: 16px; bottom: 16px; z-index: 50; max-width: 360px; background: var(--surface, #fff); color: var(--ink); border-radius: 16px; padding: 14px 16px; box-shadow: 0 12px 34px rgba(20,18,16,.18); font-size: 13px; line-height: 1.5; display: none; }
+.cookie-note { position: fixed; left: 16px; bottom: 16px; z-index: 50; max-width: 360px; background: var(--surface); color: var(--ink); border: 1.5px solid var(--edge); border-radius: 16px; padding: 14px 16px; box-shadow: 0 12px 34px rgba(20,18,16,.18); font-size: 13px; line-height: 1.5; display: none; }
 .cookie-note.show { display: block; animation: cn-in .3s ease both; }
 @keyframes cn-in { from { opacity: 0; transform: translateY(8px); } }
 .cookie-note a { color: inherit; font-weight: 600; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cookie-note button { background: #ABD1C6; color: #312F2C; } }
-:root[data-theme="dark"] .cookie-note button { background: #ABD1C6; color: #312F2C; }
-.cookie-note button { margin-top: 10px; border: 0; border-radius: 99px; padding: 6px 14px; background: #312F2C; color: #ABD1C6; font: inherit; font-weight: 600; cursor: pointer; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cookie-note button { background: #92A9E1; color: #2F2F31; } }
+:root[data-theme="dark"] .cookie-note button { background: #92A9E1; color: #2F2F31; }
+.cookie-note button { margin-top: 10px; border: 0; border-radius: 8px; padding: 6px 14px; background: #2F2F31; color: #92A9E1; font: inherit; font-weight: 600; cursor: pointer; }
 
 /* research marquee: every card is a link to the paper */
 .band { padding: 28px 0 8px; }
@@ -181,8 +176,8 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 .marquee::before, .marquee::after { content: ""; position: absolute; top: 0; bottom: 0; width: 12vw; z-index: 2; pointer-events: none; }
 .marquee::before { left: 0; background: linear-gradient(to right, var(--canvas), transparent); }
 .marquee::after { right: 0; background: linear-gradient(to left, var(--canvas), transparent); }
-.paper { flex: none; width: 300px; background: var(--panel); border-radius: 18px; padding: 16px 18px; transition: background .2s, transform .2s; }
-.paper:hover { background: var(--panel-2); transform: translateY(-2px); }
+.paper { flex: none; width: 300px; border: 1.5px solid var(--edge); border-radius: 18px; padding: 16px 18px; transition: background .2s, transform .2s; }
+.paper:hover { background: var(--panel); transform: translateY(-2px); }
 .paper b { display: block; font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 .paper p { font-size: 13.5px; color: var(--muted); margin: 6px 0 0; line-height: 1.45; }
 
@@ -231,24 +226,33 @@ h1 .ln > span { display: block; animation: line-up 1s var(--ease) backwards; }
 /* Everything after the card stack breathes on the same rhythm; sections above it keep their spacing. */
 .steps-head, #research, #faq { padding-top: clamp(120px, 16vh, 200px); }
 footer { margin-top: clamp(140px, 20vh, 240px) !important; }
-/* Every card carries its own edge (a soft lift shadow plus a hairline of its own tint),
-   so a charcoal card still reads on the charcoal page in dark mode. */
+/* Partitioned cards: each card is one outlined shape with two corners cut away, and a small tile of
+   the card's colour sits in each cut, the mark up top and the label below (mirrored on every other card).
+   The shape is an SVG path fitted to the card by shapeCard(), so the cuts stay see-through to the card
+   behind it. The hairline edge and a drop shadow that follows the cuts keep a graphite card readable
+   on the graphite page in dark mode. */
 /* Close to square but not square (about 3:2 on a laptop): as tall as the pinned screen allows, after
    the 10vh gap on top, the 24px peek per card behind it, and a margin at the bottom. */
-.stack .card { width: 100%; min-height: clamp(440px, calc(90svh - 120px), 760px); border-radius: var(--radius); padding: 38px; display: flex; flex-direction: column; justify-content: space-between; transform-origin: top center; position: relative; overflow: hidden; will-change: transform;
-  box-shadow: 0 -2px 0 rgba(255,255,255,.06) inset, 0 24px 60px -18px rgba(20,18,16,.35), 0 2px 10px rgba(20,18,16,.10); }
-.card .logo { position: absolute; right: 34px; top: 32px; width: clamp(84px, 11vw, 132px); height: auto; color: inherit; opacity: .92; }
-.card .eb { font-size: 11.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; opacity: .65; }
-.card h3 { font-size: clamp(28px, 3.4vw, 42px); letter-spacing: -.035em; line-height: 1.06; margin: 0; font-weight: 600; max-width: 20ch; }
-.card p { max-width: 58ch; font-size: 15px; line-height: 1.6; opacity: .85; margin: 14px 0 0; }
-.card .art { position: absolute; right: 34px; top: 26px; font-family: var(--serif); font-style: italic; font-size: clamp(64px, 9vw, 120px); line-height: 1; opacity: .9; }
-.card code { font: 13px ui-monospace, monospace; background: rgba(255,255,255,.14); padding: 2px 7px; border-radius: 6px; }
-.card.light code { background: rgba(49,47,44,.08); }
-@media (max-width: 640px) { .stack .card { padding: 26px; min-height: clamp(400px, 68svh, 540px); } .card .art, .card .logo { right: 22px; top: 20px; } .card .logo { width: 72px; } }
+.stack .card { --gap: 14px; --r: 28px; --tr: 20px; --tab: clamp(88px, 10vw, 124px); --pill: 58px;
+  width: 100%; min-height: clamp(440px, calc(90svh - 120px), 760px); padding: calc(var(--tab) + var(--gap) + 12px) clamp(28px, 5vw, 64px) calc(var(--pill) + var(--gap) + 12px);
+  display: flex; flex-direction: column; justify-content: center; transform-origin: top center; position: relative; will-change: transform; }
+.card .shape { position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 22px 34px rgba(20,18,16,.22)); }
+.card .shape path { fill: var(--bg); stroke: var(--edge); stroke-width: 1.5; }
+.card .tile { position: absolute; display: grid; place-items: center; background: var(--bg); border: 1.5px solid var(--edge); border-radius: var(--tr); }
+.card .mark { top: 0; right: 0; width: var(--tab); height: var(--tab); }
+.card .label { bottom: 0; left: 0; height: var(--pill); padding: 0 24px; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; white-space: nowrap; }
+.card.flip .mark { right: auto; left: 0; } .card.flip .label { left: auto; right: 0; }
+.card .logo { width: 56%; height: auto; }
+/* The other marks are heavy strokes, so they carry the same weight as the solid Walrus mark. */
+.card .glyph { width: 58%; height: auto; fill: none; stroke: currentColor; stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.card h3 { font-size: clamp(30px, 4.4vw, 58px); letter-spacing: -.04em; line-height: 1.02; margin: 0; font-weight: 600; max-width: 16ch; }
+.card p { max-width: 56ch; font-size: 15.5px; line-height: 1.6; opacity: .88; margin: 18px 0 0; }
+@media (max-width: 640px) { .stack .card { --gap: 10px; --r: 22px; --tr: 16px; --tab: 72px; --pill: 46px; padding-left: 24px; padding-right: 24px; min-height: clamp(420px, 72svh, 560px); } .card .label { padding: 0 16px; font-size: 11px; } }
 
 /* steps */
 .steps { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; margin-top: 34px; list-style: none; padding: 0; }
-.steps li { border-radius: var(--radius); padding: 28px; grid-column: span 4; box-shadow: 0 16px 40px -20px rgba(20,18,16,.35); }
+.steps li { border-radius: var(--radius); padding: 28px; grid-column: span 4; border: 1.5px solid var(--edge); }
+.steps .s-graphite { background: #2F2F31; color: #EBE1CC; } .steps .s-lavender { background: #92A9E1; color: #2F2F31; } .steps .s-line { color: var(--ink); }
 .steps li:nth-child(3) { grid-column: span 8; }
 .steps li { transition: transform .35s var(--ease); }
 .steps li:hover { transform: translateY(-3px); }
@@ -260,14 +264,14 @@ footer { margin-top: clamp(140px, 20vh, 240px) !important; }
 
 /* faq */
 .faq { margin-top: 32px; display: grid; gap: 8px; }
-.faq details { background: var(--panel); border-radius: 16px; }
+.faq details { border: 1.5px solid var(--edge); border-radius: 18px; }
 .faq summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 16px; padding: 18px 22px; font-weight: 500; font-size: 15px; }
 .faq summary::-webkit-details-marker { display: none; }
 .faq summary::after { content: "+"; font-size: 20px; line-height: 1; color: var(--faint); transition: transform .2s; }
 .faq details[open] summary::after { transform: rotate(45deg); }
 .faq .a { padding: 0 22px 20px; color: var(--muted); font-size: 14.5px; line-height: 1.65; max-width: 80ch; }
 .faq details { overflow: hidden; transition: background .2s; }
-.faq details:hover { background: var(--panel-2); }
+.faq details:hover, .faq details[open] { background: var(--panel); }
 .faq summary::after { transition: transform .3s cubic-bezier(.2,.7,.2,1); }
 
 /* footer */
@@ -276,7 +280,7 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
 .giant .logo-mark { height: auto; width: min(92vw, 1500px); background: linear-gradient(to bottom, var(--muted), var(--faint)); }
 .lid { position: relative; margin-top: -7vw; border-radius: 17vw 17vw 0 0; background: var(--canvas); padding: 11vw 20px 48px; text-align: center; }
 .lid nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 28px; font-weight: 500; font-size: 15px; }
-.lid nav a:hover { color: var(--mint-deep); }
+.lid nav a:hover { color: var(--lav-deep); }
 .lid p { max-width: 70ch; margin: 22px auto 0; color: var(--faint); font-size: 12.5px; line-height: 1.7; }
 
 @media (max-width: 640px) { .a-bubble { font-size: 14.5px; } }
@@ -354,9 +358,9 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
     <h2>Three steps from zero to remembered.</h2>
     <p>It's one binary. Your agents stay the ones you already pay for.</p>
     <ol class="steps">
-      <li style="background:#242220;color:#F6F2EA"><span class="n">01</span><h4>Connect your agents</h4><p>Sign in to Claude Code, Codex or Grok once — Saga shows each provider's own 5-hour and weekly limits — or add an API key with <b>＋</b>.</p></li>
-      <li style="background:#ABD1C6;color:#1F2B27"><span class="n">02</span><h4>Chat and mention</h4><p>Write what you want. <b>@codex</b> the backend, <b>@grok</b> the review. Agents can hand off to each other too.</p></li>
-      <li style="background:#5B5449;color:#FBF8F2"><span class="n">03</span><h4>It remembers, and gets better</h4><p>Facts, transcripts, file checkpoints and lessons land on Walrus as they happen. A <span class="i-up"></span> or <span class="i-down"></span> rating becomes a lesson; three critiques evolve the system prompt. Restart anywhere — <code>saga serve</code> picks up where you left off.</p></li>
+      <li class="s-graphite"><span class="n">01</span><h4>Connect your agents</h4><p>Sign in to Claude Code, Codex or Grok once — Saga shows each provider's own 5-hour and weekly limits — or add an API key with <b>＋</b>.</p></li>
+      <li class="s-lavender"><span class="n">02</span><h4>Chat and mention</h4><p>Write what you want. <b>@codex</b> the backend, <b>@grok</b> the review. Agents can hand off to each other too.</p></li>
+      <li class="s-line"><span class="n">03</span><h4>It remembers, and gets better</h4><p>Facts, transcripts, file checkpoints and lessons land on Walrus as they happen. A <span class="i-up"></span> or <span class="i-down"></span> rating becomes a lesson; three critiques evolve the system prompt. Restart anywhere — <code>saga serve</code> picks up where you left off.</p></li>
     </ol>
   </section>
 
@@ -452,34 +456,66 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
   /* ---- stacking cards ---- */
   // The Walrus Memory mark (MystenLabs/MemWal, apps/app/public/walrus-memory-favicon.svg), drawn in the card's ink.
   const WALRUS = `<svg class="logo" viewBox="0 0 16 16" aria-label="Walrus"><path fill="currentColor" d="M5.74039 11.4995L6.47757 3H9.52243L10.2593 11.4995L10.6735 11.5826C11.0695 10.6141 12.1627 7.20084 12.4354 3H16L13.2513 14H8.93784L8.21281 8.5H7.78734L7.06231 14H2.74872L0 3H3.56456C3.8373 7.20084 4.93032 10.6141 5.32647 11.5827L5.74039 11.4996V11.4995Z"/></svg>`;
+  // Lavender and graphite take turns, and the graphite cards are mirrored, like a two-colour spread.
+  const LAVENDER = {bg: "#92A9E1", ink: "#2F2F31"}, GRAPHITE = {bg: "#2F2F31", ink: "#92A9E1"};
+  // Line marks (Lucide, ISC) drawn at a heavy stroke.
+  const glyph = d => `<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
   const CARDS = [
-    {eb: "Memory · on Walrus", art: WALRUS, bg: "#ABD1C6", ink: "#23302C", title: "It knows you the second time.",
+    {eb: "Memory · on Walrus", art: WALRUS, ...LAVENDER, title: "It knows you the second time.",
      body: "Every message is distilled into facts stored as encrypted blobs on Walrus mainnet. Next week, on another machine, Saga already knows you write Rust and want terse answers — and so does every agent you mention."},
-    {eb: "Handoff", art: '<span class="art">@</span>', bg: "#242220", ink: "#F2EFE9", title: "Agents that pass the baton.",
+    {eb: "Handoff", art: glyph('<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>'), ...GRAPHITE, title: "Agents that pass the baton.",
      body: "Split work with a mention. A shared blackboard means @codex reads what @claude built and why, instead of starting cold. Agents can hand off to each other on their own."},
-    {eb: "Checkpoints", art: '<span class="art">↺</span>', bg: "#E9E4DA", ink: "#312F2C", title: "Work you can restore anywhere.",
+    {eb: "Checkpoints", art: glyph('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>'), ...LAVENDER, title: "Work you can restore anywhere.",
      body: "Every file an agent changes is snapshotted to Walrus as it happens. Wipe the machine, open the chat, press restore — the workspace comes back from the network."},
-    {eb: "Self-improving", art: '<span class="art">∞</span>', bg: "#5B5449", ink: "#F6F2EA", title: "A harness that rewrites itself.",
+    {eb: "Self-improving", art: glyph('<path d="M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8"/>'), ...GRAPHITE, title: "A harness that rewrites itself.",
      body: "Ratings become per-agent lessons, good runs become skills, and critiques evolve the system prompt. The model's weights stay fixed; the harness around them keeps getting better."},
   ];
   const stack = $("#stack");
-  stack.innerHTML = CARDS.map((c, i) => `<div class="pin"><article class="card" style="background:${c.bg};color:${c.ink};top:${i * 24}px">
-      <span class="eb">${c.eb}</span>${c.art}
-      <div><h3>${c.title}</h3><p>${c.body}</p></div></article></div>`).join("");
+  stack.innerHTML = CARDS.map((c, i) => `<div class="pin"><article class="card${i % 2 ? " flip" : ""}" style="--bg:${c.bg};color:${c.ink};top:${i * 24}px">
+      <svg class="shape" aria-hidden="true"><path/></svg>
+      <div class="tile mark" aria-hidden="true">${c.art}</div><span class="tile label">${c.eb}</span>
+      <div class="copy"><h3>${c.title}</h3><p>${c.body}</p></div></article></div>`).join("");
+  // An orthogonal outline through [x, y, radius] corners; each corner turns into an arc that bends the
+  // way the outline turns, so cut-in corners round inward.
+  const rounded = pts => pts.map(([x, y, r], i) => {
+    const [px, py] = pts.at(i - 1), [nx, ny] = pts[(i + 1) % pts.length];
+    const ix = Math.sign(x - px), iy = Math.sign(y - py), ox = Math.sign(nx - x), oy = Math.sign(ny - y);
+    return `${i ? "L" : "M"}${x - ix * r} ${y - iy * r}A${r} ${r} 0 0 ${ix * oy - iy * ox > 0 ? 1 : 0} ${x + ox * r} ${y + oy * r}`;
+  }).join("") + "Z";
+  // The card's outline, clockwise from its top-left corner, with the mark cut out of the top right and
+  // the label out of the bottom left. The inner corner of each cut is its tile's radius plus the gap,
+  // so the gap stays even all the way round.
+  const shapeCard = card => {
+    const W = card.offsetWidth, H = card.offsetHeight, css = getComputedStyle(card), px = v => parseFloat(css.getPropertyValue(v));
+    const g = px("--gap"), R = px("--r"), t = px("--tr"), mark = card.querySelector(".mark"), label = card.querySelector(".label");
+    const mw = mark.offsetWidth + g, mh = mark.offsetHeight + g, lw = label.offsetWidth + g, lh = label.offsetHeight + g, cut = t + g;
+    let pts = [[0, 0, R], [W - mw, 0, t], [W - mw, mh, cut], [W, mh, t], [W, H, R], [lw, H, t], [lw, H - lh, cut], [0, H - lh, t]];
+    if (card.classList.contains("flip")) pts = pts.map(([x, y, r]) => [W - x, y, r]);
+    const svg = card.querySelector(".shape");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.firstChild.setAttribute("d", rounded(pts));
+  };
+  const fit = new ResizeObserver(entries => entries.forEach(e => shapeCard(e.target.closest(".card"))));
+  stack.querySelectorAll(".card, .card .label").forEach(el => fit.observe(el));
   const cards = [...stack.querySelectorAll(".card")];
   // Card i shrinks only while later cards slide over it; the last card never scales, and each
-  // card's scale is a pure function of scroll so nothing jumps when the stack releases.
+  // card's scale is a pure function of scroll so nothing jumps when the stack releases. Its words
+  // fade as the next card's top edge passes over them, so they never peek through that card's cut-outs.
   const onScroll = () => {
-    const pins = stack.querySelectorAll(".pin"), n = cards.length;
-    const first = pins[0].getBoundingClientRect().top, step = innerHeight;
-    const progress = Math.min(n - 1, Math.max(0, -first / step));  // 0 … n-1 cards covered
+    // Measured on the stack, not a pin: a stuck pin's top stays at 0. Pin i sticks once the stack has
+    // scrolled i screens, so the stack's offset in screens is how many cards have landed.
+    const n = cards.length, progress = Math.min(n - 1, Math.max(0, -stack.getBoundingClientRect().top / innerHeight));
     cards.forEach((c, i) => {
       const covered = Math.min(n - 1 - i, Math.max(0, progress - i));
+      const copy = c.querySelector(".copy"), r = copy.getBoundingClientRect();
+      const next = cards[i + 1] ? cards[i + 1].getBoundingClientRect().top : Infinity;
+      copy.style.opacity = Math.min(1, Math.max(0, (next - r.top) / r.height));
+      if (reduce) return;
       c.style.transform = `scale(${1 - covered * 0.045})`;
       c.style.filter = covered > 0 ? `brightness(${1 - Math.min(covered, 1) * 0.06})` : "";
     });
   };
-  if (!reduce) { addEventListener("scroll", onScroll, {passive: true}); addEventListener("resize", onScroll); onScroll(); }
+  addEventListener("scroll", onScroll, {passive: true}); addEventListener("resize", onScroll); onScroll();
 
   /* ---- FAQ: height-animated accordion, one answer open at a time ---- */
   document.querySelectorAll(".faq details").forEach(d => {

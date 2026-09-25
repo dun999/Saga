@@ -7,41 +7,42 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23312F2C'/%3E%3Cellipse cx='16' cy='16.5' rx='14' ry='4.2' transform='rotate(-20 16 16.5)' fill='none' stroke='%23ABD1C6' stroke-width='1.3'/%3E%3Ccircle cx='16' cy='16.5' r='5.5' fill='%23F2EFE9'/%3E%3Ccircle cx='27' cy='13' r='2' fill='%23CFF3EA'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232F2F31'/%3E%3Cellipse cx='16' cy='16.5' rx='14' ry='4.2' transform='rotate(-20 16 16.5)' fill='none' stroke='%2392A9E1' stroke-width='1.3'/%3E%3Ccircle cx='16' cy='16.5' r='5.5' fill='%23EBE1CC'/%3E%3Ccircle cx='27' cy='13' r='2' fill='%23D9E2F8'/%3E%3C/svg%3E">
 <script src="/brand.js" defer></script>
 <style>
 :root {
-  --charcoal: #312F2C; --mint: #ABD1C6;
-  --bg: #F6F4EF; --side: #ECE9E2; --surface: #FFFFFF; --surface-2: #E4E0D7; --hover: rgba(49,47,44,.06);
-  --ink: #312F2C; --muted: #7A756C; --faint: #A39E94;
-  --accent: var(--mint); --accent-text: #3F7F6D;
-  --send: var(--charcoal); --send-ink: var(--mint);
-  --ok: #3F7F6D; --bad: #B4513B; --warn: #9A6A12;
-  --shadow: 0 10px 30px rgba(49,47,44,.10), 0 2px 6px rgba(49,47,44,.06);
-  --code: #EFECE5;
-  --a-saga: #2B8A86; --a-claude: #C8612F; --a-codex: #23875F; --a-grok: #6E58E0; --a-xai: #2F6FC4; --a-qwen: #A87A12; --a-other: #8A5BB5;
-  --line: rgba(49,47,44,.08);
+  /* Cream paper, lavender haze and soft graphite. */
+  --graphite: #2F2F31; --lavender: #92A9E1; --haze: rgba(146,169,225,.28);
+  --bg: #EBE1CC; --side: #E1D5BC; --surface: #F7F2E8; --surface-2: #D8CBB0; --hover: rgba(47,47,49,.06);
+  --ink: #2F2F31; --muted: #625D54; --faint: #938B7C;
+  --accent: var(--lavender); --accent-text: #3F57A0;
+  --send: var(--graphite); --send-ink: var(--lavender);
+  --ok: #2F7A5C; --bad: #B4513B; --warn: #8A5E0E;
+  --shadow: 0 10px 30px rgba(47,47,49,.10), 0 2px 6px rgba(47,47,49,.06);
+  --code: #E4DAC5;
+  --a-saga: #4F68B5; --a-claude: #C8612F; --a-codex: #23875F; --a-grok: #8E4FC0; --a-xai: #2B8A86; --a-qwen: #A87A12; --a-other: #9A5B70;
+  --line: rgba(47,47,49,.09);
   --ease-out: cubic-bezier(.2,.7,.2,1); --ease-pop: cubic-bezier(.34,1.36,.64,1);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #312F2C; --side: #2A2826; --surface: #3A3835; --surface-2: #45423E; --bar-shadow: 0 18px 50px rgba(0,0,0,.34), 0 2px 8px rgba(0,0,0,.22); --hover: rgba(255,255,255,.05);
-    --ink: #F2EFE9; --muted: #ABA69D; --faint: #7E7A72;
-    --accent-text: var(--mint); --send: var(--mint); --send-ink: var(--charcoal);
-    --ok: #ABD1C6; --bad: #F08F79; --warn: #E3B563;
+    --bg: #2F2F31; --side: #28282A; --surface: #3A3A3D; --surface-2: #454549; --bar-shadow: 0 18px 50px rgba(0,0,0,.34), 0 2px 8px rgba(0,0,0,.22); --hover: rgba(255,255,255,.05);
+    --ink: #EBE1CC; --muted: #B2AB9E; --faint: #86817A;
+    --accent-text: var(--lavender); --send: var(--lavender); --send-ink: var(--graphite);
+    --ok: #8FCFB4; --bad: #F08F79; --warn: #E3B563;
     --shadow: 0 12px 34px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.25);
-    --code: #2A2826; --line: rgba(255,255,255,.07);
-    --a-saga: #6CCFC8; --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #B3A4FF; --a-xai: #86B7FF; --a-qwen: #E9C46A; --a-other: #D2A8F0;
+    --code: #28282A; --line: rgba(235,225,204,.08);
+    --a-saga: #92A9E1; --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #D6A6EE; --a-xai: #6CCFC8; --a-qwen: #E9C46A; --a-other: #E7A6BD;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #312F2C; --side: #2A2826; --surface: #3A3835; --surface-2: #45423E; --bar-shadow: 0 18px 50px rgba(0,0,0,.34), 0 2px 8px rgba(0,0,0,.22); --hover: rgba(255,255,255,.05);
-  --ink: #F2EFE9; --muted: #ABA69D; --faint: #7E7A72;
-  --accent-text: var(--mint); --send: var(--mint); --send-ink: var(--charcoal);
-  --ok: #ABD1C6; --bad: #F08F79; --warn: #E3B563;
+  --bg: #2F2F31; --side: #28282A; --surface: #3A3A3D; --surface-2: #454549; --bar-shadow: 0 18px 50px rgba(0,0,0,.34), 0 2px 8px rgba(0,0,0,.22); --hover: rgba(255,255,255,.05);
+  --ink: #EBE1CC; --muted: #B2AB9E; --faint: #86817A;
+  --accent-text: var(--lavender); --send: var(--lavender); --send-ink: var(--graphite);
+  --ok: #8FCFB4; --bad: #F08F79; --warn: #E3B563;
   --shadow: 0 12px 34px rgba(0,0,0,.35), 0 2px 6px rgba(0,0,0,.25);
-  --code: #2A2826; --line: rgba(255,255,255,.07);
-  --a-saga: #6CCFC8; --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #B3A4FF; --a-xai: #86B7FF; --a-qwen: #E9C46A; --a-other: #D2A8F0;
+  --code: #28282A; --line: rgba(235,225,204,.08);
+  --a-saga: #92A9E1; --a-claude: #F0925F; --a-codex: #5FD3A0; --a-grok: #D6A6EE; --a-xai: #6CCFC8; --a-qwen: #E9C46A; --a-other: #E7A6BD;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -103,12 +104,12 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 .profile { position: relative; padding: 8px; }
 .profile-card { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px; border: 0; border-radius: 12px; background: transparent; cursor: pointer; text-align: left; }
 .profile-card:hover { background: var(--hover); }
-.avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--mint); color: var(--charcoal); display: grid; place-items: center; font-weight: 700; flex: none; }
+.avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--lavender); color: var(--graphite); display: grid; place-items: center; font-weight: 700; flex: none; }
 .profile-card .who { flex: 1; min-width: 0; }
 .profile-card .who b { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-card .who span { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); display: inline-block; }
-.dot.on { background: #6FBF9F; box-shadow: 0 0 0 3px rgba(171,209,198,.25); }
+.dot.on { background: #6FBF9F; box-shadow: 0 0 0 3px rgba(111,191,159,.25); }
 .seg { display: flex; gap: 4px; margin-top: 6px; background: var(--side); padding: 3px; border-radius: 9px; }
 .seg button { flex: 1; border: 0; background: transparent; border-radius: 7px; padding: 5px 0; font-size: 12px; cursor: pointer; color: var(--muted); }
 .seg button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
@@ -138,9 +139,9 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 .recall li { margin: 3px 0; }
 /* An agent turn is three things: name line, one solid bubble with the answer, one quiet line under it.
    Bubble colours are the same in light and dark mode, deep enough for white text. */
-.lane { margin: 4px 0 18px; --solid: #7A5AA8; }
-.lane.a-saga { --solid: #2B8A86; } .lane.a-claude { --solid: #C8612F; } .lane.a-codex { --solid: #23875F; } .lane.a-grok { --solid: #6E58E0; }
-.lane.a-xai { --solid: #2F6FC4; } .lane.a-qwen { --solid: #8F670F; }
+.lane { margin: 4px 0 18px; --solid: #8A4F64; }
+.lane.a-saga { --solid: #4F68B5; } .lane.a-claude { --solid: #C8612F; } .lane.a-codex { --solid: #23875F; } .lane.a-grok { --solid: #8E4FC0; }
+.lane.a-xai { --solid: #237873; } .lane.a-qwen { --solid: #8F670F; }
 .lane-h { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; color: var(--muted); }
 .lane-h .from { flex: none; display: inline-flex; gap: 5px; }
 .lane-h .status { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -152,7 +153,7 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 .lane .out .dots i { background: rgba(255,255,255,.85); }
 .lane .out .caret { background: #FFFFFF; }
 .lane .out .ag { font-weight: 600; }
-.lane .out .ag-saga { color: #BDF0EC; } .lane .out .ag-claude { color: #FFD2BA; } .lane .out .ag-codex { color: #B6F5D6; } .lane .out .ag-grok { color: #DCD3FF; }
+.lane .out .ag-saga { color: #DCE4FA; } .lane .out .ag-claude { color: #FFD2BA; } .lane .out .ag-codex { color: #B6F5D6; } .lane .out .ag-grok { color: #F0D4FF; }
 /* The line under the bubble: steps, files, what was remembered, the Walrus blob, rating. */
 .lane .meta { display: flex; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); margin-top: 6px; padding-left: 4px; min-height: 0; }
 .lane .meta:empty { display: none; }
@@ -215,8 +216,8 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 .recalled .chip { margin: 0; }
 .recalled .quiet { font-size: 13px; color: var(--faint); }
 .facts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
-.fact { display: inline-flex; align-items: center; gap: 6px; max-width: 300px; padding: 5px 12px; border: 0; border-radius: 99px; background: rgba(171,209,198,.28); color: var(--accent-text); font-size: 12.5px; cursor: pointer; transition: background .15s; }
-.fact:hover { background: rgba(171,209,198,.42); }
+.fact { display: inline-flex; align-items: center; gap: 6px; max-width: 300px; padding: 5px 12px; border: 0; border-radius: 99px; background: var(--haze); color: var(--accent-text); font-size: 12.5px; cursor: pointer; transition: background .15s; }
+.fact:hover { background: rgba(146,169,225,.42); }
 .fact span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resume { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 16px auto 0; max-width: 520px; }
 .resume button { display: flex; align-items: center; gap: 12px; border: 0; background: var(--surface); border-radius: 14px; padding: 10px 14px; cursor: pointer; color: var(--muted); transition: background .15s, transform .2s var(--ease-out); }
@@ -314,15 +315,9 @@ textarea::placeholder { color: var(--faint); }
 .list details.more > div { padding: 0 16px 14px; font-size: 12px; color: var(--muted); line-height: 1.8; }
 .foot { font-size: 12px; color: var(--faint); margin: 10px 2px 0; display: flex; gap: 6px; align-items: center; }
 .foot a { color: inherit; }
-.notice { font-size: 13px; padding: 10px 14px; border-radius: 12px; margin-bottom: 12px; background: rgba(171,209,198,.25); color: var(--accent-text); }
+.notice { font-size: 13px; padding: 10px 14px; border-radius: 12px; margin-bottom: 12px; background: var(--haze); color: var(--accent-text); }
 .notice.bad { background: rgba(180,81,59,.10); color: var(--bad); }
 /* an agent inside the Agents list */
-.ag-row { display: flex; align-items: center; gap: 12px; }
-.ag-row .l { flex: 1; min-width: 0; }
-.ag-row .model { font-size: 12px; color: var(--faint); margin-left: 4px; }
-.ag-row .tag { font-size: 11px; color: var(--accent-text); background: rgba(171,209,198,.25); border-radius: 99px; padding: 1px 7px; margin-left: 4px; }
-.ag-row .st { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin-top: 2px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.list .add-tile { border: 0; border-top: 1px solid var(--line); }
 /* model menu in the chat bar: a quiet chip that opens a designed list, grouped by agent */
 .model-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 32px; padding: 0 8px 0 11px; border: 0; border-radius: 99px; background: transparent; color: var(--muted); font-size: 13px; cursor: pointer; white-space: nowrap; max-width: 46%; overflow: hidden; }
 .model-chip:hover, .model-chip[aria-expanded="true"] { background: var(--hover); color: var(--ink); }
@@ -348,7 +343,7 @@ textarea::placeholder { color: var(--faint); }
 .mp-in input { flex: 1; min-width: 0; border: 0; border-radius: 9px; padding: 7px 10px; background: var(--side); color: var(--ink); font: inherit; font-size: 13px; outline: none; }
 .mp-in input:focus { box-shadow: 0 0 0 2px var(--accent); }
 .mp-err { font-size: 12px; color: var(--bad); padding: 0 10px 6px; }
-.ag-row .st .dot, .row .dot { flex: none; }
+.row .dot { flex: none; }
 .alt { margin-top: 12px; }
 .alt summary { cursor: pointer; list-style: none; font-size: 12.5px; color: var(--muted); display: inline-flex; gap: 6px; }
 .alt summary::-webkit-details-marker { display: none; }
@@ -368,7 +363,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 .field-row label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 .field-row input[type=text] { width: 100%; max-width: 360px; border: 0; border-radius: 10px; padding: 9px 12px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; outline: none; }
 .meter { height: 6px; border-radius: 99px; background: var(--side); overflow: hidden; margin-top: 8px; }
-.meter i { display: block; height: 100%; background: var(--mint); border-radius: 99px; }
+.meter i { display: block; height: 100%; background: var(--lavender); border-radius: 99px; }
 .meter i.full { background: var(--bad); }
 .meter i.hot { background: var(--warn); }
 .agent-tile { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: center; }
@@ -416,7 +411,51 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 .win-h b { color: var(--ink); font-weight: 600; }
 .add-tile { display: flex; align-items: center; gap: 10px; cursor: pointer; color: var(--muted); background: transparent; border: 2px dashed var(--surface-2); }
 .add-tile:hover { color: var(--ink); background: var(--hover); }
-.plus { width: 30px; height: 30px; border-radius: 50%; background: var(--mint); color: var(--charcoal); display: grid; place-items: center; font-size: 18px; font-weight: 700; flex: none; }
+/* Agents: one card per agent, like a usage deck. The provider's logo sits frameless in ink, and the
+   meters take the agent's colour; a connected card is washed with it. Its body (usage limits, or a
+   sign-in under way) folds away behind the chevron. */
+.deck { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.deck > .tile { margin: 0; border-radius: 18px; padding: 14px 16px; }
+.acard { --c: var(--a-other); background: var(--surface); border-radius: 18px; padding: 14px 12px 14px 14px; box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow .2s; }
+.acard.on { background: linear-gradient(115deg, color-mix(in srgb, var(--c) 13%, var(--surface)) 0%, var(--surface) 48%); }
+.acard:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 40%, transparent); }
+.acard header { display: flex; align-items: center; gap: 12px; }
+.acard .brand { flex: none; width: 40px; height: 40px; display: grid; place-items: center; color: var(--ink); font-size: 22px; font-weight: 700; transition: color .3s, opacity .3s; }
+.acard .brand svg { width: 28px; height: 28px; }
+.acard:not(.on) .brand { color: var(--faint); }
+.acard .id { flex: 1; min-width: 0; }
+.acard .nm { display: flex; align-items: baseline; gap: 6px; font-size: 14.5px; white-space: nowrap; }
+.acard .model { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; }
+.acard .tag { font-size: 11px; color: var(--accent-text); background: var(--haze); border-radius: 99px; padding: 1px 7px; }
+.acard .st { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12.5px; color: var(--muted); min-width: 0; }
+.acard .st > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.acard .st .dot { flex: none; }
+/* Collapsed, the tightest limit peeks out: a short bar and its percentage. */
+.peek { flex: none; margin-left: auto; padding-left: 8px; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.peek i { width: 34px; height: 5px; border-radius: 99px; background: linear-gradient(90deg, var(--c) var(--p), color-mix(in srgb, var(--c) 16%, var(--side)) var(--p)); }
+.peek.hot i { background: linear-gradient(90deg, var(--warn) var(--p), var(--side) var(--p)); } .peek.hot { color: var(--warn); }
+.peek.full i { background: var(--bad); } .peek.full { color: var(--bad); }
+.acard.open .peek { display: none; }
+.acard .acts { flex: none; display: flex; align-items: center; gap: 2px; }
+.acard .acts .icon-btn { width: 32px; height: 32px; border-radius: 99px; }
+.acard .chev-gap { width: 32px; flex: none; }  /* keeps Disconnect in line on cards without a chevron */
+.chev svg { transition: transform .25s var(--ease-out); }
+.chev.up svg { transform: rotate(180deg); }
+.icon-btn.spin svg { animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.abody { margin: 12px 4px 2px 52px; animation: fold .28s var(--ease-out) backwards; }
+@keyframes fold { from { opacity: 0; transform: translateY(-4px); } }
+.abody > .connect-box:first-child, .acard .win:first-child { margin-top: 0; }
+.acard > .connect-box, .aerr { margin-left: 52px; }
+.aerr { margin-top: 10px; font-size: 12px; color: var(--bad); }
+.acard .m { font-size: 11.5px; color: var(--faint); margin-top: 3px; }
+.acard .meter { height: 7px; background: color-mix(in srgb, var(--c) 14%, var(--side)); }
+.acard .meter i { background: var(--c); }
+.acard .meter i.hot { background: var(--warn); } .acard .meter i.full { background: var(--bad); }
+/* On a phone the actions drop to their own row under the name, so the status keeps the full width. */
+@media (max-width: 560px) { .abody, .aerr, .acard > .connect-box { margin-left: 0; } .peek { display: none; }
+  .acard header { flex-wrap: wrap; row-gap: 6px; } .acard .acts { order: 3; width: 100%; padding-left: 46px; } .acard .acts .chev, .acard .chev-gap { margin-left: auto; } }
+.plus { width: 30px; height: 30px; border-radius: 50%; background: var(--lavender); color: var(--graphite); display: grid; place-items: center; font-size: 18px; font-weight: 700; flex: none; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
 .form-grid input { width: 100%; border: 0; border-radius: 9px; padding: 8px 10px; background: var(--side); color: var(--ink); font: inherit; font-size: 13px; outline: none; }
 .form-grid .full { grid-column: 1 / -1; }
@@ -428,24 +467,22 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 .scrim { display: none; }
 /* essential-cookies notice */
 /* over the sidebar's chat list: clear of the composer, the profile card and right-aligned messages */
-.cookie-note { position: fixed; left: 16px; bottom: 78px; z-index: 50; max-width: 268px; background: var(--surface, #fff); color: var(--ink); border-radius: 16px; padding: 14px 16px; box-shadow: 0 12px 34px rgba(20,18,16,.18); font-size: 13px; line-height: 1.5; display: none; }
+.cookie-note { position: fixed; left: 16px; bottom: 78px; z-index: 50; max-width: 268px; background: var(--surface); color: var(--ink); border-radius: 16px; padding: 14px 16px; box-shadow: 0 12px 34px rgba(20,18,16,.18); font-size: 13px; line-height: 1.5; display: none; }
 .cookie-note.show { display: block; animation: cn-in .3s var(--ease-out) both; }
 @keyframes cn-in { from { opacity: 0; transform: translateY(8px); } }
 /* phones: the top of the screen, never over the composer */
 @media (max-width: 860px) { .cookie-note { left: 12px; right: 12px; top: 12px; bottom: auto; max-width: none; } .cookie-note.show { animation-name: cn-down; } }
 @keyframes cn-down { from { opacity: 0; transform: translateY(-8px); } }
 .cookie-note a { color: inherit; font-weight: 600; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cookie-note button { background: #ABD1C6; color: #312F2C; } }
-:root[data-theme="dark"] .cookie-note button { background: #ABD1C6; color: #312F2C; }
-.cookie-note button { margin-top: 10px; border: 0; border-radius: 99px; padding: 6px 14px; background: #312F2C; color: #ABD1C6; font: inherit; font-weight: 600; cursor: pointer; }
+.cookie-note button { margin-top: 10px; border: 0; border-radius: 99px; padding: 6px 14px; background: var(--send); color: var(--send-ink); font: inherit; font-weight: 600; cursor: pointer; }
 
 /* sign-in: full-screen, calm, one card */
 #signin { position: fixed; inset: 0; z-index: 40; background: var(--bg); display: none; align-items: center; justify-content: center; padding: 16px; }
 #signin.open { display: flex; }
 .si-card { width: 100%; max-width: 400px; background: var(--surface); border-radius: 22px; padding: 30px 26px 22px; box-shadow: var(--shadow); text-align: center; }
 #signin.open .si-card { animation: rise .5s var(--ease-out) backwards; }
-.si-mark { width: 44px; height: 44px; border-radius: 13px; background: var(--charcoal); display: grid; place-items: center; margin: 0 auto 16px; }
-.si-mark i { width: 16px; height: 16px; border-radius: 50%; background: var(--mint); display: block; }
+.si-mark { width: 44px; height: 44px; border-radius: 13px; background: var(--graphite); display: grid; place-items: center; margin: 0 auto 16px; }
+.si-mark i { width: 16px; height: 16px; border-radius: 50%; background: var(--lavender); display: block; }
 .si-card h2 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
 .si-card > p { color: var(--muted); font-size: 13.5px; margin: 8px 0 18px; line-height: 1.55; }
 .wallets { display: flex; flex-direction: column; gap: 8px; text-align: left; }
@@ -711,6 +748,8 @@ const ICON_PATHS = {
   file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
   term: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>',
 };
 ICON_PATHS.gh = '<path fill="currentColor" stroke="none" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/>';
 ICON_PATHS.history = '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>';
@@ -857,37 +896,59 @@ const PRESETS = [
   {label: "Ollama (local)", base_url: "http://127.0.0.1:11434/v1", model: "qwen3:8b"},
 ];
 let connectPoll = null, addOpen = false;
-const connectState = {};  // agent → {mode: token|api_key|busy, error}
+const connectState = {};  // agent → {mode: token|api_key|busy|confirm|closed, error, note}
+const usageOpen = new Set((() => { try { return JSON.parse(store.get("saga-usage-open")) || []; } catch { return []; } })()), refreshing = new Set();
+// Each provider's own monochrome mark, drawn frameless in ink, and who makes it. Claude and OpenAI
+// come from Simple Icons (CC0), Grok from LobeHub Icons (MIT).
+const BRANDS = {
+  // Saga's own icon: the wordmark's S inside its tilted orbit, with the moon on the near side.
+  saga: {mark: '<svg viewBox="-24 -22 384 384" width="28" height="28" fill="currentColor"><defs><mask id="saga-cut"><rect x="-24" y="-22" width="384" height="384" fill="#fff"/><path d="M351.24 105.31A195 58 -20 0 1 -15.24 238.69" fill="none" stroke="#000" stroke-width="44"/></mask></defs><path d="M-15.24 238.69A195 58 -20 0 1 351.24 105.31" fill="none" stroke="currentColor" stroke-width="13" opacity=".4"/><g mask="url(#saga-cut)"><path d="M266 71H115C52 71 50 144 110 154L226 186C286 196 284 269 221 269H70" fill="none" stroke="currentColor" stroke-width="54" stroke-linejoin="round"/><path d="M265 44H306L265 98ZM71 296H30L71 242Z"/></g><path d="M351.24 105.31A195 58 -20 0 1 -15.24 238.69" fill="none" stroke="currentColor" stroke-width="13"/><circle cx="328" cy="150" r="22"/></svg>'},
+  "claude-code": {by: "Anthropic", mark: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></svg>'},
+  codex: {by: "OpenAI", mark: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>'},
+  "grok-cli": {by: "xAI", mark: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815"/></svg>'},
+};
 async function refreshUsage() {
   const list = await api("/api/agents").catch(() => null); if (!list) return;
+  // One card per agent: logo, name and status, then its actions (refresh usage, connect or
+  // disconnect, and a chevron that shows or hides the card's body: usage limits or a sign-in in progress).
   const tile = x => {
     const a = x.account || {};
     const connected = !!a.connected && !x.unavailable;
+    const brand = BRANDS[x.name === "saga" ? "saga" : x.kind] || {};
     const who = [/^not (connected|signed in)$/.test(a.detail || "") ? "" : a.detail, a.plan ? a.plan + " plan" : "", a.account].filter(Boolean).map(esc).join(" · ");
-    const wins = (a.windows || []).map(w => {
-      const pct = Math.max(0, Math.min(100, w.used_percent || 0));
-      return `<div class="win"><div class="win-h"><span><b>${esc(w.label)}</b> limit</span><span>${Math.round(pct)}% used · ${until(w.resets_at)}</span></div><div class="meter"><i class="${pct >= 100 ? "full" : pct >= 90 ? "hot" : ""}" style="width:${pct}%"></i></div></div>`;
-    }).join("");
-    const how = me.auth || state.accounts !== "user" ? x.connect || [] : [], userMode = state.accounts === "user";
-    const label = "Connect";
+    const ws = (a.windows || []).map(w => ({...w, pct: Math.max(0, Math.min(100, w.used_percent || 0))}));
+    const worst = ws.reduce((m, w) => !m || w.pct > m.pct ? w : m, null);
+    const heat = pct => pct >= 100 ? "full" : pct >= 90 ? "hot" : "";
+    const how = me.auth || state.accounts !== "user" ? x.connect || [] : [];
     const cs = connectState[x.name] || {};
-    const open = (!!x.device && cs.mode !== "closed") || ["token", "api_key", "busy"].includes(cs.mode);
-    const action = x.custom
-      ? `<button class="btn-ghost" data-remove="${esc(x.name)}">Remove</button>`
-      : x.locked ? ""
-      : connected && userMode ? `<button class="btn-ghost" data-disconnect="${esc(x.name)}">Disconnect</button>`
-      : how.length && !connected ? (open ? `<button class="btn-ghost" data-close="${esc(x.name)}">Close</button>` : `<button class="btn-connect" data-open="${esc(x.name)}">${label}</button>`) : "";
+    const connecting = (!!x.device && cs.mode !== "closed") || ["token", "api_key", "busy", "confirm"].includes(cs.mode);
     const box = connectBox(x, how);
-    return `<div class="tile">
-      <div class="ag-row">
-        <div class="l">${agentName(x.name)}${x.model_pick || x.model ? `<span class="model">${esc(modelLabel(x.model_pick || x.model))}</span>` : ""}${x.primary ? `<span class="tag">primary</span>` : ""}
-          <span class="st"><i class="dot ${connected ? "on" : ""}"></i>${connected ? "Connected" : esc(x.unavailable || "Not connected")}${who ? " · " + who : ""}</span></div>
-        ${action}
-      </div>
-      ${wins || (connected && a.windows_hint ? `<div class="m" style="margin-top:6px">${esc(a.windows_hint)} <button class="btn-ghost" data-probe="${esc(x.name)}" style="padding:2px 8px">Check now</button></div>` : "")}
-      ${a.last_error ? `<div class="m off" style="margin-top:6px">${esc(a.last_error)}</div>` : ""}
-      ${box}
-    </div>`;
+    const usage = connected && (ws.length || a.windows_hint) ? ws.map(w => `<div class="win"><div class="win-h"><span><b>${esc(w.label)}</b> limit</span><span>${Math.round(w.pct)}% used · ${until(w.resets_at)}</span></div><div class="meter"><i class="${heat(w.pct)}" style="width:${w.pct}%"></i></div></div>`).join("")
+      + (ws.length ? "" : `<div class="m">${esc(a.windows_hint)}</div>`) : "";
+    // The chevron opens usage on a connected card, and hides a sign-in that is under way on the others.
+    // Notes and errors from the last action stay outside it, always visible.
+    const inner = connecting ? box : usage, open = connecting || (!!usage && usageOpen.has(x.name));
+    const chevron = inner ? `<button class="icon-btn chev${open ? " up" : ""}" data-toggle="${esc(x.name)}" aria-expanded="${open}" aria-label="${open ? "Hide" : "Show"} ${connecting ? "sign-in" : "usage limits"}" title="${open ? "Hide" : "Show"} ${connecting ? "sign-in" : "usage limits"}">${icon("chev", 16)}</button>` : "";
+    const refresh = connected && (x.kind === "claude-code" || x.kind === "codex")
+      ? `<button class="icon-btn${refreshing.has(x.name) ? " spin" : ""}" data-probe="${esc(x.name)}" aria-label="Refresh usage" title="${x.kind === "claude-code" ? "Refresh usage (sends Claude one tiny request)" : "Refresh usage"}">${icon("refresh", 15)}</button>` : "";
+    const action = x.custom ? `<button class="btn-ghost" data-remove="${esc(x.name)}">Remove</button>`
+      : x.locked ? ""
+      : connected && how.length ? (cs.mode === "confirm" ? "" : `<button class="btn-ghost" data-disconnect="${esc(x.name)}">Disconnect</button>`)
+      : how.length && !connected && !connecting ? `<button class="btn-connect" data-open="${esc(x.name)}">Connect</button>` : "";
+    // Collapsed, a connected card still says how close its tightest limit is.
+    const peek = worst ? `<span class="peek ${heat(worst.pct)}"><i style="--p:${worst.pct}%"></i>${esc(worst.label)} ${Math.round(worst.pct)}%</span>` : "";
+    return `<article class="acard${connected ? " on" : ""}${open ? " open" : ""}" style="--c:var(--a-${KNOWN.includes(x.name) ? x.name : "other"})">
+      <header>
+        <div class="brand" aria-hidden="true">${brand.mark || esc(x.name[0].toUpperCase())}</div>
+        <div class="id">
+          <div class="nm">${agentName(x.name)}${x.model_pick || x.model ? `<span class="model">${esc(modelLabel(x.model_pick || x.model))}</span>` : ""}${x.primary ? `<span class="tag">primary</span>` : ""}</div>
+          <div class="st"><i class="dot ${connected ? "on" : ""}"></i><span>${connected ? "Connected" : esc(x.unavailable || "Not connected")}${brand.by ? " · " + brand.by : ""}${who ? " · " + who : ""}</span>${peek}</div>
+        </div>
+        <div class="acts">${refresh}${action}${chevron || (action ? `<span class="chev-gap"></span>` : "")}</div>
+      </header>
+      ${a.last_error || cs.refreshError ? `<div class="aerr">${esc(cs.refreshError || a.last_error)}</div>` : ""}
+      ${inner ? `<div class="abody"${open ? "" : " hidden"}>${inner}</div>` : ""}${connecting ? "" : box}
+    </article>`;
   };
   // Sign-in panel shown under an agent: device code, a pasted token, or an API key.
   function connectBox(x, how) {
@@ -913,6 +974,10 @@ async function refreshUsage() {
         <div class="cmd"><input name="value" type="password" placeholder="${x.kind === "codex" ? "OpenAI API key, sk-…" : "Anthropic API key, sk-ant-…"}" autocomplete="off" required><button class="btn-connect">Save</button></div>
         ${err}</form>`;
     if (st.mode === "busy") return `<div class="connect-box"><div class="m">Starting sign-in…</div></div>`;
+    // On operator accounts the login is this machine's own CLI login, so say so before signing it out.
+    if (st.mode === "confirm") return `<div class="connect-box">
+        <div class="m">This signs ${esc(x.kind === "codex" ? "Codex" : x.kind === "grok-cli" ? "Grok" : "Claude Code")} out on this computer, for every app that uses it, not only Saga.</div>
+        <div class="cmd"><button class="btn-connect" data-disconnect="${esc(x.name)}" data-sure="1">Sign out</button><button type="button" class="btn-ghost" data-close="${esc(x.name)}">Cancel</button></div></div>`;
     return err ? `<div class="connect-box">${err} ${keyLink}</div>` : "";
   }
   const addForm = `<form class="tile" id="addForm">
@@ -933,7 +998,7 @@ async function refreshUsage() {
     ? `<div class="tile" style="background:rgba(180,81,59,.10)"><b style="font-size:13.5px">Your saved accounts are locked with a different key</b><div class="m" style="display:block;line-height:1.6">This happens with some wallets (like Google sign-in) on a new device or session: the vault key can't be recreated, so Saga can't open what you connected before. Reset to delete the old, unreadable credentials and connect again here.</div><div style="margin-top:10px"><button class="btn-connect" id="vaultReset">Reset and reconnect</button></div></div>`
     : "");
   const foot = me.auth && vault.state !== "mismatch" ? `<div class="foot">${icon("save", 12)} Sealed with your vault key. Disconnect deletes it. <a href="/privacy" target="_blank">Privacy</a></div>` : "";
-  $("#agents").innerHTML = vaultNote + `<div class="list">${list.map(tile).join("")}${addOpen ? addForm : addTile}</div>` + foot;
+  $("#agents").innerHTML = vaultNote + `<div class="deck">${list.map(tile).join("")}${addOpen ? addForm : addTile}</div>` + foot;
   $("#agWallet")?.addEventListener("click", openWallet);
   $("#vaultReset")?.addEventListener("click", async () => { await api("/api/vault/reset", {}); vault = {state: "ok"}; refreshUsage(); });
 
@@ -973,16 +1038,38 @@ async function refreshUsage() {
     delete connectState[agent]; refreshUsage();
   });
   $("#agents").querySelectorAll("[data-disconnect]").forEach(b => b.onclick = async () => {
-    b.disabled = true; b.textContent = "Disconnecting…";
-    const r = await api("/api/agents/disconnect", {agent: b.dataset.disconnect});
-    connectState[b.dataset.disconnect] = r.ok ? {note: "Disconnected — the stored credential was deleted."} : {error: r.error || "Could not delete the credential."};
+    const name = b.dataset.disconnect, userMode = state.accounts === "user";
+    if (!userMode && !b.dataset.sure) { connectState[name] = {mode: "confirm"}; refreshUsage(); return; }
+    b.disabled = true; b.textContent = userMode ? "Disconnecting…" : "Signing out…";
+    const r = await api("/api/agents/disconnect", {agent: name});
+    connectState[name] = r.ok ? {note: userMode ? "Disconnected. The stored credential was deleted." : "Signed out on this computer."}
+                              : {error: r.error || "Could not disconnect."};
     refreshUsage();
   });
   if (list.some(v => v.device)) poll();
+  // Refresh re-reads the provider's status and usage now instead of waiting for the next run.
   $("#agents").querySelectorAll("[data-probe]").forEach(b => b.onclick = async () => {
-    b.disabled = true; b.textContent = "checking…";
-    const r = await api("/api/agents/probe", {agent: b.dataset.probe});
-    if (r.error) b.textContent = r.error; else refreshUsage();
+    const name = b.dataset.probe;
+    if (refreshing.has(name)) return;
+    refreshing.add(name); b.classList.add("spin");
+    const r = await api("/api/agents/probe", {agent: name}).catch(() => ({error: "Could not refresh."}));
+    refreshing.delete(name);
+    connectState[name] = {...connectState[name], refreshError: r.error || ""};
+    refreshUsage();
+  });
+  $("#agents").querySelectorAll("[data-toggle]").forEach(b => b.onclick = () => {
+    const name = b.dataset.toggle, x = list.find(v => v.name === name), cs = connectState[name] || {};
+    if ((x && x.device && cs.mode !== "closed") || ["token", "api_key", "busy", "confirm"].includes(cs.mode)) {
+      if (x && x.device) connectState[name] = {mode: "closed"}; else delete connectState[name];  // hide the sign-in
+      return refreshUsage();
+    }
+    // Usage opens and closes in place: no refetch, and the choice is remembered per agent.
+    const card = b.closest(".acard"), open = !card.classList.contains("open");
+    open ? usageOpen.add(name) : usageOpen.delete(name);
+    store.set("saga-usage-open", JSON.stringify([...usageOpen]));
+    card.classList.toggle("open", open); b.classList.toggle("up", open); b.setAttribute("aria-expanded", open);
+    b.title = b.ariaLabel = (open ? "Hide" : "Show") + " usage limits";
+    card.querySelector(".abody").hidden = !open;
   });
   $("#agents").querySelectorAll("[data-remove]").forEach(b => b.onclick = async () => {
     await api("/api/agents/remove", {name: b.dataset.remove}); await reloadAgents(); refreshUsage();
@@ -1240,7 +1327,7 @@ function setPromptVersion(v, animate) {
   b.innerHTML = `${icon("evolve", 13)}prompt <b>v${v}</b>`;
   if (animate && v !== pvShown && !calm) {
     b.querySelector("b").animate([{transform: "translateY(8px)", opacity: 0}, {transform: "none", opacity: 1}], {duration: 420, easing: "cubic-bezier(.34,1.36,.64,1)"});
-    b.animate([{boxShadow: "0 0 0 0 rgba(171,209,198,.9)"}, {boxShadow: "0 0 0 10px rgba(171,209,198,0)"}], {duration: 900, easing: "ease-out"});
+    b.animate([{boxShadow: "0 0 0 0 rgba(146,169,225,.9)"}, {boxShadow: "0 0 0 10px rgba(146,169,225,0)"}], {duration: 900, easing: "ease-out"});
   }
   pvShown = v;
 }

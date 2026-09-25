@@ -58,7 +58,7 @@
   style.textContent = `
 .logo-mark.bh-on { background: none !important; -webkit-mask: none !important; mask: none !important; position: relative; }
 .logo-mark .bh { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.bh { --bh-disk: var(--a-saga, #3FB5AC); --bh-hot: #E6FFFA; }
+.bh { --bh-disk: var(--a-saga, #7F97D6); --bh-hot: #F1F4FD; }
 .bh-far path, .bh-near path, .bh-lens path { fill: none; stroke-linecap: round; }
 .bh .bh-glow { stroke: var(--bh-disk); stroke-width: 34; opacity: .38; }
 .bh .bh-band { stroke-width: 20; opacity: .22; }
@@ -130,7 +130,7 @@
   const ring = (from, to, alpha, width) => {
     g.beginPath();
     g.ellipse(cx, cy, rx, ry, tilt, from, to);
-    g.strokeStyle = `rgba(171,209,198,${alpha})`;
+    g.strokeStyle = `rgba(146,169,225,${alpha})`;
     g.lineWidth = width;
     g.stroke();
   };
@@ -140,8 +140,8 @@
       const [x, y] = at(t - i * 0.13);
       g.beginPath();
       g.arc(x, y, (front ? 4.2 : 3) * (1 - i * 0.13), 0, Math.PI * 2);
-      g.fillStyle = i ? `rgba(171,209,198,${(front ? 0.28 : 0.14) * (1 - i / 6)})` : front ? "#CFF3EA" : "rgba(171,209,198,.55)";
-      g.shadowColor = "#6CCFC8";
+      g.fillStyle = i ? `rgba(146,169,225,${(front ? 0.28 : 0.14) * (1 - i / 6)})` : front ? "#D9E2F8" : "rgba(146,169,225,.55)";
+      g.shadowColor = "#92A9E1";
       g.shadowBlur = i ? 0 : front ? 10 : 4;
       g.fill();
     }
@@ -152,12 +152,12 @@
     g.clearRect(0, 0, N, N);
     g.beginPath();
     g.roundRect(0, 0, N, N, 15);
-    g.fillStyle = "#312F2C";
+    g.fillStyle = "#2F2F31";
     g.fill();
     ring(Math.PI, Math.PI * 2, 0.35, 2);  // far half
     if (Math.sin(t) < 0) moon(t);
     const h = 36, w = h * S_W / S_H;
-    drawS(cx - w / 2, cy - h / 2 - 1, h, "#F2EFE9");
+    drawS(cx - w / 2, cy - h / 2 - 1, h, "#EBE1CC");
     ring(0, Math.PI, 0.8, 2.4);  // near half, over the S
     if (Math.sin(t) >= 0) moon(t);
     link.type = "image/png";

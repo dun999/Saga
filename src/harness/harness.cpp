@@ -1338,9 +1338,22 @@ json Harness::set_credential(const std::string& uid, const std::string& name, co
 }
 
 json Harness::disconnect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault) {
-  if (!opt_.user_accounts) return {{"error", "operator accounts are managed on the Saga host"}};
   agents::Agent* a = reg_.find(name);
   if (!a) return {{"error", "unknown agent"}};
+  if (!opt_.user_accounts) {
+    // Operator mode: Connect ran the provider's own sign-in on the Saga host, so Disconnect runs its
+    // sign-out there too. That signs this machine's CLI out for every program that uses it.
+    if (a->logout_argv().empty()) return {{"error", "@" + name + " has nothing to disconnect"}};
+    std::string cmd;
+    for (auto& p : a->logout_argv()) cmd += (cmd.empty() ? "" : " ") + p;
+    proc::Options o;
+    o.timeout_s = 30;
+    o.merge_stderr = true;
+    const proc::Result p = proc::run(a->logout_argv(), o);
+    a->invalidate(nullptr);
+    if (p.exit_code != 0) return {{"error", "`" + cmd + "` failed: " + strip_ansi(p.out).substr(0, 200)}};
+    return {{"ok", true}, {"deleted", json::array({cmd})}};
+  }
   // Only provider CLIs have a login to delete. Anything else (the built-in @saga) would fall through to
   // erasing the Grok login below.
   const std::string& kind = a->spec().kind;
@@ -1419,8 +1432,14 @@ json Harness::probe_agent(const std::string& uid, const std::string& name, const
   if (!a) return {{"error", "unknown agent"}};
   const auto sb = sandbox_for(uid, "", vault);
   const sandbox::Sandbox* sbp = sb ? &*sb : nullptr;
-  if (!a->probe_usage(sbp)) return {{"error", "@" + name + " did not report usage windows"}};
-  return {{"ok", true}, {"account", a->account(sbp)}};
+  // Refresh: forget the cached status, then ask for usage where the provider only reports it in a
+  // response (Claude). The others (Codex) are re-read from what their CLI last recorded.
+  a->invalidate(sbp);
+  const bool probed = a->probe_usage(sbp);
+  json account = a->account(sbp);
+  if (!probed && account.value("windows", json::array()).empty())
+    return {{"error", "@" + name + " did not report usage windows"}};
+  return {{"ok", true}, {"account", account}};
 }
 
 json Harness::add_agent(const std::string& uid, const json& body, const secrets::Key& vault) {

@@ -301,7 +301,11 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   });
   svr.Post("/api/agents/disconnect", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
-    send_json(res, h.disconnect_agent(uid_of(req, res), j.is_object() ? j.value("agent", "") : "", vault_of(req)));
+    // Like Connect: in operator mode this signs out the host's own CLIs, so only on this machine.
+    if (!h.user_accounts() && opt.host != "127.0.0.1" && opt.host != "localhost")
+      return send_json(res, {{"error", "disconnect provider accounts on the Saga host"}}, 403);
+    auto r = h.disconnect_agent(uid_of(req, res), j.is_object() ? j.value("agent", "") : "", vault_of(req));
+    send_json(res, r, r.contains("error") ? 400 : 200);
   });
   svr.Post("/api/agents/probe", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);

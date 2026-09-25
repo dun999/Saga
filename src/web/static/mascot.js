@@ -1,15 +1,15 @@
-// Saga's mascot: a teal memory blob that carries a parcel over to a teammate and hands it off.
+// Saga's mascot: a lavender memory blob that carries a parcel over to a teammate and hands it off.
 // Pixel art drawn as SVG, animated on one JS timeline so every move eases in and out.
 //   SagaMascot.mount(el, {loop: true})              landing: loops while on screen
 //   SagaMascot.mount(el, {loop: false, onDone})     app: plays the delivery once
 (() => {
   const CSS = `
-.sm { --saga: #3FB5AC; --saga-hi: #8FE0D8; --saga-line: #1F6F6A; --cheek: #F2A2A0; --ink: #2B2A27;
+.sm { --saga: #92A9E1; --saga-hi: #C9D5F4; --saga-line: #3F57A0; --cheek: #F2A2A0; --ink: #2B2A27;
   --buddy: #D97757; --buddy-eye: #2B2A27; --box: #D8B27A; --box-lid: #E9CB98; --box-edge: #A97F45; --box-shade: #BF9558;
-  --ribbon: #2FA39A; --heart: #E5687A; --spark: #7FE3DA;
+  --ribbon: #6F87CF; --heart: #E5687A; --spark: #B9C8F2;
   position: relative; width: 100%; aspect-ratio: 640 / 232; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sm { --saga-line: #0F4A46; --ink: #EDE8DF; --buddy-eye: #1B1A18; } }
-:root[data-theme="dark"] .sm { --saga-line: #0F4A46; --ink: #EDE8DF; --buddy-eye: #1B1A18; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sm { --saga-line: #2A3C78; --ink: #EDE8DF; --buddy-eye: #1B1A18; } }
+:root[data-theme="dark"] .sm { --saga-line: #2A3C78; --ink: #EDE8DF; --buddy-eye: #1B1A18; }
 .sm-stage { position: absolute; left: 0; top: 0; width: 640px; height: 232px; transform-origin: top left; }
 .sm-a, .sm-fx { position: absolute; left: 0; bottom: 14px; will-change: transform; }
 .sm-a { transform-origin: 50% 100%; }

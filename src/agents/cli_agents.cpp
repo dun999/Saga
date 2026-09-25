@@ -296,6 +296,7 @@ class ClaudeCodeAgent : public CliAgent {
   }
 
   std::vector<std::string> login_argv() const override { return {"claude", "auth", "login"}; }
+  std::vector<std::string> logout_argv() const override { return {"claude", "auth", "logout"}; }
 
   // Claude reports usage windows only inside a response stream, so ask the cheapest model for one word.
   bool probe_usage(const sandbox::Sandbox* sb) override {
