@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Install toolchain
         run: dnf -y install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel git pkgconf
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake -S . -B build -G Ninja
       - name: Build
