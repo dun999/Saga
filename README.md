@@ -1,5 +1,7 @@
 # Saga: agents that remember, chat that improve, on Walrus
 
+[![CI](https://github.com/dun999/Saga/actions/workflows/ci.yml/badge.svg)](https://github.com/dun999/Saga/actions/workflows/ci.yml)
+
 Saga is a self-improving, multi-agent **harness** written in C++23. Plug in the coding agents you already
 use (**Claude Code, Codex, Grok**) and any **OpenAI-compatible API** (xAI, OpenRouter, Groq, Ollama,
 llama.cpp), then hand work between them with `@mentions`:

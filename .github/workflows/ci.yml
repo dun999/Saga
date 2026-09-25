@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Fedora ships GCC 15, which implements the C++23 range-for lifetime rules Saga relies on (P2718).
+    container: registry.fedoraproject.org/fedora:43
+    steps:
+      - name: Install toolchain
+        run: dnf -y install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel git pkgconf
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -G Ninja
+      - name: Build
+        run: cmake --build build
+      - name: Smoke test
+        run: ./build/saga help
+      # tests/ is kept out of the repo; this runs once it is published.
+      - name: Unit tests
+        if: hashFiles('tests/*.cpp') != ''
+        run: ./build/saga_tests
