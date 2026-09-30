@@ -37,7 +37,7 @@ jobs:
     container: registry.fedoraproject.org/fedora@sha256:f26286dae657dfce0fefcdca33d759fa565dbe772ed9f78e5608f1961dafc8cb
     steps:
       - name: Install toolchain
-        run: dnf -y install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel git pkgconf
+                run: dnf -y install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel git pkgconf libasan libubsan
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
