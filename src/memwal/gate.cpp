@@ -1,6 +1,7 @@
 #include "memwal/gate.h"
 
 #include <poll.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -9,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
+#include <vector>
 
 namespace saga::memwal {
 namespace fs = std::filesystem;
@@ -97,20 +99,40 @@ json gate_transact(const std::string& path, const json& req) {
 }
 
 Gate::Gate(Client& client) : client_(client) {
-  path_ = (fs::temp_directory_path() / ("saga-mem-" + std::to_string(::getpid()) + ".sock")).string();
-  if (path_.size() >= sizeof(sockaddr_un::sun_path)) throw std::runtime_error("memory socket path too long");
+  // The socket inode keeps the mode it was created with. fchmod on the fd does not change the
+  // pathname another user would connect to, and umask is process-global, so the directory is 0700
+  // and the bind itself happens under a temporary 077 umask that is restored before anything else.
+  std::string tmpl = (fs::temp_directory_path() / "saga-mem-XXXXXX").string();
+  std::vector<char> buf(tmpl.begin(), tmpl.end());
+  buf.push_back('\0');
+  if (::mkdtemp(buf.data()) == nullptr) throw std::runtime_error("cannot create memory socket directory");
+  dir_ = buf.data();
+  auto fail = [&](const std::string& why) {
+    if (listen_fd_ >= 0) ::close(listen_fd_);
+    listen_fd_ = -1;
+    if (!path_.empty()) ::unlink(path_.c_str());
+    ::rmdir(dir_.c_str());
+    dir_.clear();
+    path_.clear();
+    throw std::runtime_error(why);
+  };
+  if (::chmod(dir_.c_str(), 0700) != 0) fail("cannot protect memory socket directory");
+  path_ = dir_ + "/sock";
+  if (path_.size() >= sizeof(sockaddr_un::sun_path)) fail("memory socket path too long");
   listen_fd_ = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-  if (listen_fd_ < 0) throw std::runtime_error("memory socket");
+  if (listen_fd_ < 0) fail("memory socket");
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   std::memcpy(addr.sun_path, path_.c_str(), path_.size() + 1);
-  ::unlink(path_.c_str());
-  if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0 ||
-      ::fchmod(listen_fd_, 0600) != 0 || ::listen(listen_fd_, 16) != 0) {
-    ::close(listen_fd_);
-    ::unlink(path_.c_str());
-    throw std::runtime_error("cannot bind memory socket " + path_);
+  int bound = -1;
+  {
+    const mode_t prev = ::umask(077);
+    bound = ::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof addr);
+    ::umask(prev);
   }
+  if (bound != 0 || ::chmod(path_.c_str(), 0600) != 0 || ::fchmod(listen_fd_, 0600) != 0 ||
+      ::listen(listen_fd_, 16) != 0)
+    fail("cannot bind memory socket " + path_);
   thread_ = std::thread([this] { serve(); });
 }
 
@@ -119,6 +141,7 @@ Gate::~Gate() {
   if (thread_.joinable()) thread_.join();
   if (listen_fd_ >= 0) ::close(listen_fd_);
   if (!path_.empty()) ::unlink(path_.c_str());
+  if (!dir_.empty()) ::rmdir(dir_.c_str());
 }
 
 void Gate::serve() {

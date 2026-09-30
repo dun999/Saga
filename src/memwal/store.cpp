@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "memwal/redact.h"
+
 namespace saga::memwal {
 namespace {
 
@@ -26,7 +28,10 @@ std::string encode_record(const std::string& kind, const json& payload) {
 std::optional<json> decode_record(const std::string& text, const std::string& kind) {
   const std::string prefix = "SAGA:" + kind + " ";
   if (!text.starts_with(prefix)) return std::nullopt;
-  auto j = json::parse(text.substr(prefix.size()), nullptr, false);
+  const std::string body = text.substr(prefix.size());
+  // nlohmann has no depth limit; a nested record can overflow the stack inside parse.
+  if (json_nesting(body) > kMaxJsonDepth) return std::nullopt;
+  auto j = json::parse(body, nullptr, false);
   if (j.is_discarded()) return std::nullopt;
   return j;
 }
@@ -44,19 +49,35 @@ Store::~Store() {
 void Store::put(const std::string& ns, const std::string& kind, const std::string& text, const std::string& ref,
                 const std::string& owner) {
   if (!enabled() || text.empty()) return;
+  // Agent output, checkpoints, and direct memory calls all land here, past the web field limits.
+  // Refuse before the queue: the logged text is the placeholder, never the original.
+  constexpr size_t kMaxQueued = 200;
+  const StorageText prepared = prepare_for_storage(text);
   WriteRecord r;
   r.ns = ns;
   r.kind = kind;
-  r.text = text;
+  r.text = prepared.text;
   r.ref = ref;
   r.owner = owner;
   r.ts = now_s();
+  bool queued = false;
   {
     std::lock_guard lk(mu_);
-    queue_.push_back(r);
+    if (!prepared.ok) {
+      r.status = "failed";
+      r.error = prepared.error;
+      log_.push_back(r);
+    } else if (queue_.size() >= kMaxQueued) {
+      r.status = "failed";
+      r.error = "memory queue is full";
+      log_.push_back(r);
+    } else {
+      queue_.push_back(r);
+      queued = true;
+    }
   }
   notify(r);
-  cv_.notify_all();
+  if (queued) cv_.notify_all();
 }
 
 void Store::analyze(const std::string& ns, const std::string& text) {

@@ -383,16 +383,39 @@ std::string session_secret(const std::filesystem::path& dir) {
   return s;
 }
 
+bool loopback_host(const std::string& host) {
+  return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]";
+}
+
+// "https://saga.example" or "https://saga.example:8443". One trailing slash is dropped.
+// A path, query, or userinfo is rejected: this string is the only host baked into challenges.
+std::string canonical_origin(std::string s) {
+  if (!s.empty() && s.back() == '/') s.pop_back();
+  const bool http = s.starts_with("http://");
+  const bool https = s.starts_with("https://");
+  if (!http && !https) throw std::runtime_error("--public-origin must start with http:// or https://");
+  const std::string host = s.substr(https ? 8 : 7);
+  if (host.empty() || host.find('/') != std::string::npos || host.find('?') != std::string::npos ||
+      host.find('#') != std::string::npos || host.find('@') != std::string::npos ||
+      host.find(' ') != std::string::npos)
+    throw std::runtime_error("--public-origin must be a scheme and host, with no path or user info");
+  return s;
+}
+
 int cmd_serve(const Args& a) {
   web::ServerOptions o;
   o.host = a.get("host", o.host);
-  const bool local = o.host == "127.0.0.1" || o.host == "localhost";
+  const bool local = loopback_host(o.host);
 
   // Whose provider accounts run the agents: the operator's own logins (local default) or each
   // user's own, sandboxed per user (default when serving other people).
   harness::Options ho = harness_options(a);
   const std::string accounts = a.get("accounts", local ? "host" : "user");
   ho.user_accounts = accounts == "user";
+  if (a.has("operator-budget")) {
+    ho.operator_daily_runs = std::stoi(a.get("operator-budget"));
+    if (ho.operator_daily_runs < 0) throw std::runtime_error("--operator-budget must be 0 or greater");
+  }
   if (ho.user_accounts) {
     if (!sandbox::available()) {
       std::fprintf(stderr, "saga: --accounts user runs each user's agents in a bubblewrap sandbox — install bwrap\n");
@@ -415,6 +438,12 @@ int cmd_serve(const Args& a) {
   (void)gate;
   h.boot(print_event);
   o.port = std::stoi(a.get("port", std::to_string(o.port)));
+  if (a.has("public-origin")) o.public_origin = canonical_origin(a.get("public-origin"));
+  o.trust_proxy = a.has("trust-proxy");
+  o.secure_cookies = a.has("secure-cookies") || o.public_origin.starts_with("https://");
+  // A loopback bind is not a private deployment once a reverse proxy or a public origin is configured.
+  const bool exposed = !local || !o.public_origin.empty() || o.trust_proxy;
+  o.rate_limit = exposed;
   // Sign in with a username (guest) or a Sui wallet; --wallet-only allows wallets only.
   o.auth.required = a.has("wallet-only") && !a.has("no-auth");
   o.auth.secret = session_secret(std::filesystem::path(ho.keys_path).parent_path());
@@ -425,25 +454,12 @@ int cmd_serve(const Args& a) {
   }
   // An allowlist only means something if every request has to prove a wallet: it implies wallet-only.
   if (!o.auth.allowed.empty() && !a.has("no-auth")) o.auth.required = true;
-  // On the operator's accounts, anyone who signs in spends the operator's plans: a public bind then
-  // needs an allowlist of wallets. With per-user accounts + sandbox, open sign-up is fine.
-  if (!local && !ho.user_accounts && (o.auth.allowed.empty() || !o.auth.required)) {
+  if (exposed && (!ho.user_accounts || !o.auth.required || o.public_origin.empty())) {
     std::fprintf(stderr,
-                 "saga: refusing to bind %s on operator accounts without --allow 0x…,0x… — agents can edit "
-                 "files and run tools.\n",
-                 o.host.c_str());
+                 "saga: a public bind or a reverse proxy needs --accounts user --wallet-only --public-origin "
+                 "https://… — guest mode is only for this machine, with no public origin and no --trust-proxy.\n");
     return 1;
   }
-  if (!local && !o.auth.required)
-    std::fprintf(stderr,
-                 "saga: warning: username sign-in is on for %s — anyone who types a username gets that username's "
-                 "memory. Pass --wallet-only to allow wallets only.\n",
-                 o.host.c_str());
-  if (!local && !ho.user_accounts)
-    std::fprintf(stderr,
-                 "saga: warning: operator accounts on %s — every signed-in user's agents run as you, unsandboxed, "
-                 "and can read this host's files and each other's memory. Only let in people you trust.\n",
-                 o.host.c_str());
   return web::serve(h, o);
 }
 
@@ -453,6 +469,7 @@ void usage() {
       "usage: saga <command> [flags]\n"
       "  serve   [--host H --port P] [--no-memory]  web UI (default http://127.0.0.1:8080)\n"
       "          [--accounts host|user] [--wallet-only] [--allow 0x…,0x…] [--trace]\n"
+      "          [--public-origin URL] [--trust-proxy] [--secure-cookies] [--operator-budget N]\n"
       "  chat    [--user NAME] [--no-memory]         terminal chat\n"
       "  doctor                                      check credentials, agents, Walrus round-trip\n"
       "  stats   [user…]                             memories/blobs per namespace\n"

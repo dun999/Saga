@@ -14,6 +14,7 @@
 #include "core/crypto.h"
 #include "core/env.h"
 #include "core/secrets.h"
+#include "web/guard.h"
 
 namespace saga::web {
 
@@ -79,22 +80,6 @@ struct Hub {
   }
 };
 
-// Per-user counts of long-lived requests (live feeds, running chats).
-struct Slots {
-  std::mutex mu;
-  std::map<std::string, int> used;
-  bool take(const std::string& uid, int max) {
-    std::lock_guard lk(mu);
-    if (used[uid] >= max) return false;
-    ++used[uid];
-    return true;
-  }
-  void give(const std::string& uid) {
-    std::lock_guard lk(mu);
-    if (--used[uid] <= 0) used.erase(uid);
-  }
-};
-
 // The user's vault key: 32 bytes their browser derived from a wallet signature (base64url cookie).
 // It lives in this request only; the server never stores it.
 secrets::Key vault_of(const httplib::Request& req) {
@@ -121,18 +106,81 @@ bool visible_to(const memwal::WriteRecord& r, const std::string& uid) {
 int serve(harness::Harness& h, const ServerOptions& opt) {
   httplib::Server svr;
   svr.new_task_queue = [n = std::max(opt.threads, 8)] { return new httplib::ThreadPool(n); };
+  svr.set_payload_max_length(kMaxHttpBody);
   auto hub = std::make_shared<Hub>();
   auto feeds = std::make_shared<Slots>(), chats = std::make_shared<Slots>();
   Auth auth(opt.auth);
+  const std::string sec = opt.secure_cookies ? "; Secure" : "";
+  RateLimiter limiter(std::max(opt.rate_per_ip, 1), std::max(opt.rate_global, 1));
   h.store().add_listener([hub](const memwal::WriteRecord& r) { hub->push(r); });
 
-  // Identity gate.
+  auto client_ip = [&](const httplib::Request& req) {
+    const bool loop = req.remote_addr == "127.0.0.1" || req.remote_addr == "::1";
+    if (opt.trust_proxy && loop) {
+      std::string xff = req.get_header_value("X-Forwarded-For");
+      const auto comma = xff.find(',');
+      if (comma != std::string::npos) xff.resize(comma);
+      while (!xff.empty() && (xff.front() == ' ' || xff.front() == '\t')) xff.erase(xff.begin());
+      while (!xff.empty() && (xff.back() == ' ' || xff.back() == '\t')) xff.pop_back();
+      if (!xff.empty()) return xff;
+    }
+    return req.remote_addr;
+  };
+
+  // Headers are written after this runs, including on a 413 that never reached a handler.
+  svr.set_post_routing_handler([](const httplib::Request&, httplib::Response& res) {
+    res.set_header("X-Content-Type-Options", "nosniff");
+    res.set_header("X-Frame-Options", "DENY");
+    res.set_header("Referrer-Policy", "no-referrer");
+    if (!res.has_header("Content-Security-Policy"))
+      res.set_header("Content-Security-Policy", security_csp("", false));
+  });
+  svr.set_error_handler([](const httplib::Request&, httplib::Response& res) {
+    if (res.body.empty() && !res.content_provider_ && res.status == 413)
+      send_json(res, {{"error", "request body is too large"}}, 413);
+    return httplib::Server::HandlerResponse::Handled;
+  });
+
+  // Host and rate checks happen before the body is read. Auth does too, so a missing session
+  // is rejected without buffering. Mutation checks run after the body, in the pre-request handler.
   svr.set_pre_routing_handler([&](const httplib::Request& req, httplib::Response& res) {
+    if (!host_allowed(req.get_header_value("Host"), opt.public_origin, opt.host)) {
+      send_json(res, {{"error", "unexpected host"}}, 421);
+      res.set_header("Connection", "close");
+      return httplib::Server::HandlerResponse::Handled;
+    }
+    if (opt.rate_limit && !limiter.allow(client_ip(req))) {
+      send_json(res, {{"error", "too many requests"}}, 429);
+      res.set_header("Connection", "close");
+      return httplib::Server::HandlerResponse::Handled;
+    }
     if (!req.path.starts_with("/api/")) return httplib::Server::HandlerResponse::Unhandled;
-    if (req.path == "/api/login" || req.path.starts_with("/api/auth/")) return httplib::Server::HandlerResponse::Unhandled;
+    if (req.path == "/api/login" || req.path.starts_with("/api/auth/"))
+      return httplib::Server::HandlerResponse::Unhandled;
     // Sign-in with Sui: every other API call needs a verified wallet session.
     if (auth.config().required && auth.session_address(cookie(req, "saga_session")).empty()) {
       send_json(res, {{"error", "sign in required"}, {"login", true}}, 401);
+      return httplib::Server::HandlerResponse::Handled;
+    }
+    return httplib::Server::HandlerResponse::Unhandled;
+  });
+  svr.set_pre_request_handler([&](const httplib::Request& req, httplib::Response& res) {
+    Mutation m;
+    m.method = req.method;
+    m.content_type = req.get_header_value("Content-Type");
+    m.origin = req.get_header_value("Origin");
+    m.fetch_site = req.get_header_value("Sec-Fetch-Site");
+    m.body = req.body;
+    m.csrf_cookie = cookie(req, "saga_csrf");
+    m.csrf_header = req.get_header_value("X-CSRF-Token");
+    m.expected_origin = opt.public_origin;
+    if (m.expected_origin.empty()) {
+      const std::string host = req.get_header_value("Host");
+      if (!host.empty()) m.request_origin = (opt.secure_cookies ? "https://" : "http://") + host;
+    }
+    const Decision d = check_mutation(m);
+    if (!d.ok()) {
+      send_json(res, {{"error", d.error}}, d.status);
       return httplib::Server::HandlerResponse::Handled;
     }
     return httplib::Server::HandlerResponse::Unhandled;
@@ -150,7 +198,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
       send_json(res, {{"error", "internal error"}}, 500);
     }
   });
-  auto uid_of = [&auth](const httplib::Request& req, httplib::Response& res) {
+  auto uid_of = [&auth, &sec](const httplib::Request& req, httplib::Response& res) {
     // Signed in with a wallet (required, or chosen on the sign-in screen): the Sui address is the identity,
     // so memory follows the wallet anywhere.
     const std::string address = auth.session_address(cookie(req, "saga_session"));
@@ -158,15 +206,28 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     std::string uid = sanitize_uid(cookie(req, "saga_uid"));
     if (uid.empty() || looks_like_address(uid)) {
       uid = "anon-" + crypto::uuid4().substr(0, 8);
-      res.set_header("Set-Cookie", "saga_uid=" + uid + "; Path=/; Max-Age=31536000; SameSite=Lax");
+      res.set_header("Set-Cookie", "saga_uid=" + uid + "; Path=/; Max-Age=31536000; SameSite=Lax" + sec);
     }
     return uid;
   };
 
-  svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
-    res.set_header("Cache-Control", "no-cache");  // always serve the page this binary embeds
-    res.set_content(std::string(kLandingHtml), "text/html; charset=utf-8");
-  });
+  auto send_page = [&](const httplib::Request& req, httplib::Response& res, std::string_view page) {
+    const std::string nonce = crypto::random_hex(16);
+    std::string tok = cookie(req, "saga_csrf");
+    if (tok.size() != 32 || !std::all_of(tok.begin(), tok.end(), [](unsigned char c) { return std::isxdigit(c); }))
+      tok = crypto::random_hex(16);
+    // Same value on every page of an open tab, so one tab's load doesn't invalidate another's token.
+    res.headers.emplace("Set-Cookie", "saga_csrf=" + tok + "; Path=/; Max-Age=" + std::to_string(14 * 86400) +
+                                          "; SameSite=Strict" + sec);
+    std::string html(page);
+    const std::string ph = "__SAGA_CSRF__";
+    for (size_t at = 0; (at = html.find(ph, at)) != std::string::npos; at += tok.size())
+      html.replace(at, ph.size(), tok);
+    res.set_header("Content-Security-Policy", security_csp(nonce, true));
+    res.set_header("Cache-Control", "no-cache");
+    res.set_content(inject_nonce(std::move(html), nonce), "text/html; charset=utf-8");
+  };
+  svr.Get("/", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kLandingHtml); });
   svr.Get("/mascot.js", [](const httplib::Request&, httplib::Response& res) {
     res.set_header("Cache-Control", "no-cache");
     res.set_content(std::string(kMascotJs), "text/javascript; charset=utf-8");
@@ -179,14 +240,8 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     res.set_header("Cache-Control", "public, max-age=86400");
     res.set_content(std::string(kLogoPng), "image/png");
   });
-  svr.Get("/privacy", [](const httplib::Request&, httplib::Response& res) {
-    res.set_header("Cache-Control", "no-cache");
-    res.set_content(std::string(kPrivacyHtml), "text/html; charset=utf-8");
-  });
-  svr.Get("/app", [](const httplib::Request&, httplib::Response& res) {
-    res.set_header("Cache-Control", "no-cache");  // always serve the page this binary embeds
-    res.set_content(std::string(kIndexHtml), "text/html; charset=utf-8");
-  });
+  svr.Get("/privacy", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kPrivacyHtml); });
+  svr.Get("/app", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kIndexHtml); });
 
   svr.Post("/api/login", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
@@ -196,9 +251,9 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     if (looks_like_address(handle))
       return send_json(res, {{"error", "That looks like a wallet address. Use Connect wallet to sign in with it."}}, 400);
     if (!handle.empty()) {
-      res.headers.emplace("Set-Cookie", "saga_uid=" + handle + "; Path=/; Max-Age=31536000; SameSite=Lax");
+      res.headers.emplace("Set-Cookie", "saga_uid=" + handle + "; Path=/; Max-Age=31536000; SameSite=Lax" + sec);
       // Choosing a username leaves any wallet session, or the wallet would keep winning.
-      res.headers.emplace("Set-Cookie", "saga_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+      res.headers.emplace("Set-Cookie", "saga_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" + sec);
     }
     send_json(res, {{"ok", true}, {"uid", handle}});
   });
@@ -219,7 +274,9 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     auto j = json::parse(req.body, nullptr, false);
     const std::string address = normalize_address(j.is_object() ? j.value("address", "") : "");
     if (address.empty()) return send_json(res, {{"error", "a Sui address is required"}}, 400);
-    send_json(res, {{"message", auth.challenge(address, req.get_header_value("Host"))}});
+    // The name in the challenge is the configured origin. The request Host is not allowed to choose it.
+    const std::string who = opt.public_origin.empty() ? req.get_header_value("Host") : origin_host(opt.public_origin);
+    send_json(res, {{"message", auth.challenge(address, who)}});
   });
   svr.Post("/api/auth/verify", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
@@ -229,12 +286,12 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     const std::string token = auth.verify(address, j.value("signature", ""), &err);
     if (token.empty()) return send_json(res, {{"error", err}}, 401);
     res.set_header("Set-Cookie", "saga_session=" + token + "; Path=/; Max-Age=" +
-                                     std::to_string(auth.config().session_days * 86400) + "; HttpOnly; SameSite=Lax");
+                                     std::to_string(auth.config().session_days * 86400) + "; HttpOnly; SameSite=Lax" + sec);
     send_json(res, {{"ok", true}, {"address", address}});
   });
   svr.Post("/api/auth/logout", [&](const httplib::Request&, httplib::Response& res) {
-    res.set_header("Set-Cookie", "saga_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
-    res.headers.emplace("Set-Cookie", "saga_vault=; Path=/; Max-Age=0; SameSite=Strict");
+    res.set_header("Set-Cookie", "saga_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" + sec);
+    res.headers.emplace("Set-Cookie", "saga_vault=; Path=/; Max-Age=0; SameSite=Strict" + sec);
     send_json(res, {{"ok", true}});
   });
 
@@ -348,16 +405,16 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   });
   // "Connect GitHub": off to github.com to authorize, back via the callback, then the app finishes the
   // exchange in a same-site request, the only kind that carries the (SameSite=Strict) vault cookie.
-  auto site_of = [](const httplib::Request& req) {
-    // Behind a reverse proxy the forwarded headers carry the public scheme and host.
-    const std::string proto = req.get_header_value("X-Forwarded-Proto"), fwd = req.get_header_value("X-Forwarded-Host");
-    return (proto.empty() ? "http" : proto) + "://" + (fwd.empty() ? req.get_header_value("Host") : fwd);
+  auto site_of = [&](const httplib::Request& req) {
+    // Wallet challenges and the GitHub redirect use the configured origin, never a forwarded header.
+    if (!opt.public_origin.empty()) return opt.public_origin;
+    return std::string("http://") + req.get_header_value("Host");
   };
   svr.Get("/api/github/login", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string state = crypto::uuid4();
     const std::string url = h.github_authorize_url(site_of(req) + "/api/github/callback", state);
     if (url.empty()) return res.set_redirect("/app?gh_error=not_configured");
-    res.set_header("Set-Cookie", "saga_gh_state=" + state + "; Path=/; Max-Age=600; HttpOnly; SameSite=Lax");
+    res.set_header("Set-Cookie", "saga_gh_state=" + state + "; Path=/; Max-Age=600; HttpOnly; SameSite=Lax" + sec);
     res.set_redirect(url);
   });
   svr.Get("/api/github/callback", [&](const httplib::Request& req, httplib::Response& res) {
@@ -371,7 +428,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     const std::string state = cookie(req, "saga_gh_state");
     if (state.empty() || j.value("state", "") != state) return send_json(res, {{"error", "that GitHub sign-in expired — try Connect again"}}, 400);
     const std::string uid = uid_of(req, res);
-    res.set_header("Set-Cookie", "saga_gh_state=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax");
+    res.set_header("Set-Cookie", "saga_gh_state=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" + sec);
     reply(res, h.github_oauth_finish(uid, j.value("code", ""), site_of(req) + "/api/github/callback", vault_of(req)));
   });
   svr.Post("/api/github/disconnect", [&](const httplib::Request& req, httplib::Response& res) {
@@ -409,13 +466,17 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   svr.Post("/api/chat", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
     const std::string msg = j.is_object() ? j.value("message", "") : "";
-    if (msg.empty() || msg.size() > 20000) return send_json(res, {{"error", "message required (≤20k chars)"}}, 400);
+    if (msg.empty() || msg.size() > kMaxChatMessage)
+      return send_json(res, {{"error", "message required (≤20k chars)"}}, 400);
     const std::string uid = uid_of(req, res);
     std::string session = sanitize_uid(j.value("session", ""));
     if (session.empty()) session = uid;
-    if (!chats->take(uid, opt.chats_per_user))
-      return send_json(res, {{"error", "you already have " + std::to_string(opt.chats_per_user) +
-                                           " chats running — wait for one to finish"}}, 429);
+    if (const int slot = chats->take(uid, opt.chats_per_user, opt.chats_global))
+      return send_json(res, {{"error", slot == 1
+                                           ? "you already have " + std::to_string(opt.chats_per_user) +
+                                                 " chats running — wait for one to finish"
+                                           : "too many chats are running on this Saga — try again shortly"}},
+                       429);
 
     struct Stream {
       std::mutex mu;
@@ -475,7 +536,9 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     if (!j.is_object()) return send_json(res, {{"error", "bad json"}}, 400);
     const int rating = j.value("rating", 0);
     if (rating != 1 && rating != -1) return send_json(res, {{"error", "rating must be 1 or -1"}}, 400);
-    send_json(res, h.feedback(uid_of(req, res), j.value("turn_id", ""), rating, j.value("comment", "")));
+    const std::string comment = j.value("comment", "");
+    if (comment.size() > kMaxFeedback) return send_json(res, {{"error", "comment must be at most 4096 bytes"}}, 400);
+    send_json(res, h.feedback(uid_of(req, res), j.value("turn_id", ""), rating, comment));
   });
 
   svr.Post("/api/cancel", [&](const httplib::Request& req, httplib::Response& res) {
@@ -486,8 +549,10 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   // Live feed of Walrus writes (Server-Sent Events).
   svr.Get("/api/writes", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string uid = uid_of(req, res);
-    if (!feeds->take(uid, opt.feeds_per_user))
-      return send_json(res, {{"error", "too many open Saga tabs"}}, 429);
+    if (const int slot = feeds->take(uid, opt.feeds_per_user, opt.feeds_global))
+      return send_json(res, {{"error", slot == 1 ? "too many open Saga tabs"
+                                                 : "too many live tabs are open on this Saga — try again shortly"}},
+                       429);
     auto cursor = std::make_shared<uint64_t>(0);
     {
       std::lock_guard lk(hub->mu);

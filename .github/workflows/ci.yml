@@ -15,19 +15,35 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Fedora ships GCC 15, which implements the C++23 range-for lifetime rules Saga relies on (P2718).
-    container: registry.fedoraproject.org/fedora:43
+    # Fedora 43 image index (GCC 15, multi-arch). Pin the index, not one architecture's manifest.
+    container: registry.fedoraproject.org/fedora@sha256:f26286dae657dfce0fefcdca33d759fa565dbe772ed9f78e5608f1961dafc8cb
     steps:
       - name: Install toolchain
         run: dnf -y install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel git pkgconf
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       - name: Configure
         run: cmake -S . -B build -G Ninja
       - name: Build
         run: cmake --build build
       - name: Smoke test
         run: ./build/saga help
-      # tests/ is kept out of the repo; this runs once it is published.
       - name: Unit tests
-        if: hashFiles('tests/*.cpp') != ''
+        run: ./build/saga_tests
+
+  sanitize:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora@sha256:f26286dae657dfce0fefcdca33d759fa565dbe772ed9f78e5608f1961dafc8cb
+    steps:
+      - name: Install toolchain
+        run: dnf -y install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel git pkgconf
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DSAGA_SANITIZE=ON
+      - name: Build
+        run: cmake --build build
+      - name: Unit tests
         run: ./build/saga_tests

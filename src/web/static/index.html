@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="saga-csrf" content="__SAGA_CSRF__">
 <title>Saga</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -639,7 +640,8 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
   const registry = getWallets();
   const isSui = w => w.chains.some(c => c.startsWith("sui:")) && w.features["standard:connect"] && w.features["sui:signPersonalMessage"];
   const status = t => { document.querySelector("#siStatus").textContent = t; };
-  const post = (u, b) => fetch(u, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(b)}).then(async r => ({ok: r.ok, ...(await r.json())}));
+  const csrfToken = () => document.querySelector('meta[name="saga-csrf"]')?.content || "";
+  const post = (u, b) => fetch(u, {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify(b)}).then(async r => ({ok: r.ok, ...(await r.json())}));
 
   function render() {
     const list = registry.get().filter(isSui);
@@ -704,7 +706,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
   render();
 </script>
 <div class="cookie-note" id="cookieNote" role="region" aria-label="Cookie notice">
-  Saga uses only essential cookies — to keep you signed in and unlock your vault. No analytics, no ads. <a href="/privacy">Privacy &amp; cookies</a>
+  Saga uses only essential cookies — to keep you signed in, confirm your own requests, and unlock your vault. No analytics, no ads. <a href="/privacy">Privacy &amp; cookies</a>
   <div><button id="cookieOk">Got it</button></div>
 </div>
 <script>
@@ -732,6 +734,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 <script src="/mascot.js"></script>
 <script>
 const $ = s => document.querySelector(s);
+const csrfToken = () => document.querySelector('meta[name="saga-csrf"]')?.content || "";
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const WALRUSCAN = id => `https://walruscan.com/mainnet/blob/${encodeURIComponent(id)}`;
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
@@ -780,7 +783,7 @@ function md(src) {
 }
 
 async function api(path, body) {
-  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify(body)} : {});
   if (r.status === 401) {
     const j = await r.json().catch(() => ({}));
     if (j.login) $("#signin").classList.add("open"); else showGate(false);
@@ -844,7 +847,7 @@ function renderProfilePane() {
         u:${esc(uid)}:facts · :episodes · :chat · :checkpoints · :settings</div></details>
     </div>`;
   $("#pProfile").querySelectorAll(".seg button").forEach(b => b.onclick = () => { applyTheme(b.dataset.t); renderProfilePane(); });
-  $("#signOut")?.addEventListener("click", async () => { await fetch("/api/auth/logout", {method: "POST"}); location.reload(); });
+  $("#signOut")?.addEventListener("click", async () => { await fetch("/api/auth/logout", {method: "POST", headers: {"X-CSRF-Token": csrfToken()}}); location.reload(); });
   // Switching memory is a sign-in, never an edit: it goes through the username screen.
   $("#switchUser")?.addEventListener("click", () => { closeModal(); showGate(true); });
   $("#toWallet")?.addEventListener("click", openWallet);
@@ -1010,7 +1013,7 @@ async function refreshUsage() {
     const x = list.find(v => v.name === b.dataset.open), how = x.connect || [];
     if (how.includes("device") || how.includes("browser")) {
       connectState[x.name] = {mode: "busy"}; refreshUsage();
-      const r = await fetch("/api/agents/connect", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({agent: x.name})}).then(r => r.json());
+      const r = await fetch("/api/agents/connect", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({agent: x.name})}).then(r => r.json());
       connectState[x.name] = r.error ? {error: r.error} : (r.command ? {error: `Finish signing in in the browser window that opened on the Saga host (${r.command}).`} : null);
       if (!connectState[x.name]) delete connectState[x.name];
       refreshUsage(); poll();
@@ -1033,7 +1036,7 @@ async function refreshUsage() {
     const agent = f.dataset.cred, value = f.value.value.trim();
     // One field for Claude: a subscription token (sk-ant-oat…) or an API key (sk-ant-api…).
     const kind = f.dataset.kind !== "auto" ? f.dataset.kind : /^sk-ant-oat/.test(value) ? "oauth_token" : "api_key";
-    const r = await fetch("/api/agents/credential", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({agent, kind, value})}).then(r => r.json());
+    const r = await fetch("/api/agents/credential", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({agent, kind, value})}).then(r => r.json());
     if (r.error) { connectState[agent] = {...connectState[agent], error: r.error}; refreshUsage(); return; }
     delete connectState[agent]; refreshUsage();
   });
@@ -1087,7 +1090,7 @@ async function refreshUsage() {
       e.preventDefault();
       const body = Object.fromEntries(new FormData(f));
       body.name = body.name.replace(/^@/, "").trim().toLowerCase();
-      const r = await fetch("/api/agents", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)}).then(r => r.json());
+      const r = await fetch("/api/agents", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify(body)}).then(r => r.json());
       if (r.error) { $("#addErr").textContent = r.error; return; }
       addOpen = false; await reloadAgents(); refreshUsage();
     };
@@ -1122,7 +1125,7 @@ function renderGhPane() {
       <form class="token" id="ghTokenForm"><input name="token" type="password" placeholder="github_pat_…" autocomplete="off" required aria-label="GitHub token"><button class="btn-connect">Connect</button>
         <span class="m">A <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a> with Contents and Pull requests set to read &amp; write. <span class="off" id="ghErr"></span></span></form></details>`;
   $("#ghDevice")?.addEventListener("click", async () => {
-    const r = await fetch("/api/github/device", {method: "POST"}).then(r => r.json());
+    const r = await fetch("/api/github/device", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: "{}"}).then(r => r.json());
     if (r.error) { ghNotice = {error: r.error}; renderGhPane(); return; }
     await refreshGitHub();
     clearInterval(ghPoll); let n = 0;
@@ -1130,7 +1133,7 @@ function renderGhPane() {
   });
   $("#ghTokenForm").onsubmit = async e => {
     e.preventDefault();
-    const r = await fetch("/api/github/token", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({token: e.target.token.value.trim()})}).then(r => r.json());
+    const r = await fetch("/api/github/token", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({token: e.target.token.value.trim()})}).then(r => r.json());
     if (r.error) { $("#ghErr").textContent = r.error; return; }
     ghRepos = null; refreshGitHub(); refreshRepo();
   };
@@ -1164,7 +1167,7 @@ async function refreshRepo() {
   $("#prBtn").onclick = async () => {
     const b = $("#prBtn"); b.disabled = true; b.textContent = "Pushing…";
     const title = $("#title").textContent || "Changes from Saga";
-    const r = await fetch("/api/github/pr", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({session, title})}).then(r => r.json());
+    const r = await fetch("/api/github/pr", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({session, title})}).then(r => r.json());
     if (r.error) { $("#prOut").innerHTML = `<span class="off">${esc(r.error)}</span>`; b.disabled = false; b.textContent = "Open pull request"; return; }
     $("#prOut").innerHTML = `<a href="${esc(r.url)}" target="_blank" rel="noopener">PR #${r.number} ↗</a>`;
     b.textContent = r.created ? "Opened" : "Updated"; refreshRepo();
@@ -1197,7 +1200,7 @@ async function openRepoPicker() {
 }
 async function attachRepo(full) {
   $("#repoPop").innerHTML = `<div class="m" style="padding:10px">Cloning ${esc(full)}…</div>`;
-  const r = await fetch("/api/github/attach", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({session, repo: full})}).then(r => r.json());
+  const r = await fetch("/api/github/attach", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({session, repo: full})}).then(r => r.json());
   if (r.error) { $("#repoPop").innerHTML = `<div class="m off" style="padding:10px">${esc(r.error)}</div>`; return; }
   $("#repoPop").classList.remove("open");
   if (!$("#title").textContent) $("#title").textContent = full;
@@ -1669,7 +1672,7 @@ $("#f").addEventListener("submit", async e => {
   let turnId = "", recalled = 0;
   const lastLane = () => Object.values(lanes).pop()?.el;
   try {
-    const r = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message: text, session})});
+    const r = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({message: text, session})});
     if (!r.ok) throw new Error((await r.json()).error || r.statusText);
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
@@ -1789,7 +1792,7 @@ $("#gateForm").addEventListener("submit", async e => {
   const handle = $("#gHandle").value.trim();
   if (!handle) { $("#gErr").textContent = "Enter a username."; return; }
   if (handle === uid) { $("#gate").style.display = "none"; return; }
-  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({handle})});
+  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({handle})});
   const j = await r.json().catch(() => ({}));
   if (r.ok && j.uid) location.reload(); else $("#gErr").textContent = j.error || "That username can't be used. Try letters and numbers.";
 });

@@ -34,6 +34,7 @@ class Gate {
   void handle(int fd);
 
   Client& client_;
+  std::string dir_;   // 0700 directory this gate created; the socket lives inside it
   std::string path_;
   int listen_fd_ = -1;
   std::mutex mu_;

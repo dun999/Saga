@@ -42,6 +42,10 @@ struct Options {
   std::string github_client_id;           // OAuth App; empty = token paste only
   std::string github_client_secret;       // with the id: "Connect GitHub" redirects to github.com and back
   std::string mem_sock;                    // host-mode `saga mem` socket; delegate key stays here
+  // Runs of built-in agents that spend the operator's own keys, shared by every signed-in user.
+  // 0 disables the cap. A user's own OpenAI agent, and a user-mode CLI on their sandbox login, are not counted.
+  int operator_daily_runs = 1000;
+  int max_background = 32;                 // reflections, sign-ins, and evolution waiting to run
 };
 
 struct Step {
@@ -183,7 +187,18 @@ class Harness {
   mutable std::mutex mu_;
   std::map<std::string, std::shared_ptr<Turn>> turns_;  // this process only; Walrus is the record
   void prune_turns();  // caller holds mu_
-  std::vector<std::thread> background_;
+  struct BgJob {
+    std::thread thread;
+    std::shared_ptr<std::atomic<bool>> done;
+  };
+  // Caller holds mu_. Joins only jobs that have already finished, so a job blocked on mu_ is left alone.
+  void reap_background_locked();
+  bool spawn_locked(std::function<void()> fn);  // false when max_background jobs are still running
+  // False when this run would spend the operator's daily budget and that budget is used up.
+  bool take_operator_run(const agents::Agent& agent);
+  std::vector<BgJob> background_;
+  std::string operator_day_;
+  int operator_runs_ = 0;
   std::vector<std::future<void>> recalls_;  // in-flight memory reads (pruned as they finish)
   std::map<std::string, std::vector<std::string>> session_turns_;  // "<uid>/<session>" → turn ids, in order
   std::atomic<bool> evolving_{false};

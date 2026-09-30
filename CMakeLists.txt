@@ -19,11 +19,13 @@ endif()
 include(FetchContent)
 FetchContent_Declare(json
   URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+  URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+# Commit pins, not moving tags. A shallow clone cannot fetch an arbitrary commit.
 FetchContent_Declare(httplib
   GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-  GIT_TAG v0.26.0
-  GIT_SHALLOW TRUE)
+  GIT_TAG 89c932f313c6437c38f2982869beacc89c2f2246 # v0.26.0
+  GIT_SHALLOW OFF)
 set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
@@ -63,16 +65,17 @@ target_compile_options(saga_core PRIVATE -Wall -Wextra -Wno-missing-field-initia
 add_executable(saga src/main.cpp)
 target_link_libraries(saga PRIVATE saga_core)
 
-# Tests are local only (tests/ is not in the repo); built when the folder is present.
+# The suite is part of the build. A checkout without tests/ does not configure.
 file(GLOB SAGA_TEST_SOURCES CONFIGURE_DEPENDS tests/*.cpp)
-if(SAGA_TEST_SOURCES)
-  FetchContent_Declare(doctest
-    GIT_REPOSITORY https://github.com/doctest/doctest.git
-    GIT_TAG v2.4.12
-    GIT_SHALLOW TRUE)
-  FetchContent_MakeAvailable(doctest)
-  enable_testing()
-  add_executable(saga_tests ${SAGA_TEST_SOURCES})
-  target_link_libraries(saga_tests PRIVATE saga_core doctest::doctest)
-  add_test(NAME saga_tests COMMAND saga_tests)
+if(NOT SAGA_TEST_SOURCES)
+  message(FATAL_ERROR "tests/*.cpp is required; refusing to configure without the suite")
 endif()
+FetchContent_Declare(doctest
+  GIT_REPOSITORY https://github.com/doctest/doctest.git
+  GIT_TAG 1da23a3e8119ec5cce4f9388e91b065e20bf06f5 # v2.4.12
+  GIT_SHALLOW OFF)
+FetchContent_MakeAvailable(doctest)
+enable_testing()
+add_executable(saga_tests ${SAGA_TEST_SOURCES})
+target_link_libraries(saga_tests PRIVATE saga_core doctest::doctest)
+add_test(NAME saga_tests COMMAND saga_tests)

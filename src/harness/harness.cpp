@@ -102,20 +102,6 @@ json memories_json(const std::vector<memwal::Memory>& ms) {
   return arr;
 }
 
-// Quota / auth failures mean "this backend can't serve right now", not "the task is bad".
-// Background work runs on raw threads, where an escaped exception (e.g. a type error while parsing
-// the brain's JSON) would std::terminate the whole server. Log it instead.
-template <class F>
-auto guarded(F fn) {
-  return [fn = std::move(fn)]() mutable {
-    try {
-      fn();
-    } catch (const std::exception& e) {
-      std::fprintf(stderr, "[background] %s\n", e.what());
-    }
-  };
-}
-
 bool is_capacity_error(const std::string& e) {
   static const std::regex re("usage limit|balance exhausted|402|429|rate.?limit|quota|not supported|"
                              "not found on PATH|not set|unauthori[sz]ed|401|connect to server|resolve host|limit reached|not connected",
@@ -191,7 +177,8 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
       "Never put a secret in memory: no passwords, API keys, tokens, private keys, seed phrases or anything that "
       "grants access. Memory is recalled into future conversations, possibly by someone else using this identity. "
       "If the user shares one, use it only for the task at hand, don't repeat it back, don't #remember it, and "
-      "tell them it won't be kept. Saga also strips recognisable secrets before anything reaches Walrus.\n"
+      "tell them it won't be kept. Saga strips recognisable secrets before anything reaches Walrus, including "
+      "unlabelled 64-character hex strings. A wallet address already stored as an identity is kept.\n"
       "To save a NEW durable fact the user told you (preference, goal, constraint, name), write it on its own "
       "line as:\n#remember <one self-contained fact, third person, e.g. \"User deploys to Fly.io\">\n"
       "Use it sparingly, only for things worth knowing in a future conversation. Never store secrets, keys or "
@@ -211,15 +198,61 @@ Harness::Harness(agents::Registry& reg, memwal::Store& store, Options opt)
 Harness::~Harness() {
   // Background work can queue more of it (reflection → evolution), so drain until nothing is left.
   for (;;) {
-    std::vector<std::thread> bg;
+    std::vector<BgJob> bg;
     {
       std::lock_guard lk(mu_);
       bg.swap(background_);
     }
     if (bg.empty()) break;
-    for (auto& t : bg)
-      if (t.joinable()) t.join();
+    for (auto& j : bg)
+      if (j.thread.joinable()) j.thread.join();
   }
+}
+
+void Harness::reap_background_locked() {
+  for (auto it = background_.begin(); it != background_.end();) {
+    if (!it->done || !it->done->load()) {
+      ++it;
+      continue;
+    }
+    if (it->thread.joinable()) it->thread.join();
+    it = background_.erase(it);
+  }
+}
+
+bool Harness::spawn_locked(std::function<void()> fn) {
+  reap_background_locked();
+  if (static_cast<int>(background_.size()) >= std::max(opt_.max_background, 1)) return false;
+  auto done = std::make_shared<std::atomic<bool>>(false);
+  background_.push_back(BgJob{std::thread([fn = std::move(fn), done]() mutable {
+                                 try {
+                                   fn();
+                                 } catch (const std::exception& e) {
+                                   std::fprintf(stderr, "[background] %s\n", e.what());
+                                 } catch (...) {
+                                   std::fprintf(stderr, "[background] unknown error\n");
+                                 }
+                                 done->store(true);
+                               }),
+                               done});
+  return true;
+}
+
+bool Harness::take_operator_run(const agents::Agent& agent) {
+  // Empty owner is a built-in. In host mode every built-in spends the operator's login. In user
+  // mode only a built-in with an operator API key does — a user's sandbox login is their own bill.
+  if (!agent.spec().owner.empty()) return true;
+  if (opt_.user_accounts && agent.spec().api_key_env.empty()) return true;
+  if (opt_.operator_daily_runs <= 0) return true;
+  std::lock_guard lk(mu_);
+  const std::string day = today();
+  if (operator_day_ != day) {
+    operator_day_ = day;
+    operator_runs_ = 0;
+  }
+  if (operator_runs_ >= opt_.operator_daily_runs) return false;
+  ++operator_runs_;
+  return true;
 }
 
 void Harness::boot(const Emit& log) {
@@ -363,6 +396,10 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
     if (why.empty()) a->exhausted(sbp, &why);
     if (!why.empty()) {
       res.error = why;
+      return res;
+    }
+    if (a && !take_operator_run(*a)) {
+      res.error = "this Saga's daily budget for built-in agents is used up";
       return res;
     }
     res = run_on(a);
@@ -581,7 +618,8 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
                                   [](auto& s) { return !s.error.empty() && !is_capacity_error(s.error); });
   if (failed && !t->cancel->load()) {
     std::lock_guard lk(mu_);
-    background_.emplace_back(guarded([this, t] { reflect(*t, -1, "(automatic: an agent step failed)"); }));
+    if (!spawn_locked([this, t] { reflect(*t, -1, "(automatic: an agent step failed)"); }))
+      std::fprintf(stderr, "[background] dropped a reflection: the server is busy\n");
   }
 
   const std::string final_text = t->steps.empty() ? "" : t->steps.back().output;
@@ -686,6 +724,7 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment) {
 }
 
 json Harness::feedback(const std::string& uid, const std::string& turn_id, int rating, const std::string& comment) {
+  if (comment.size() > 4096) return {{"error", "comment must be at most 4096 bytes"}};
   std::shared_ptr<Turn> t;
   {
     std::lock_guard lk(mu_);
@@ -723,7 +762,8 @@ json Harness::rate(const std::shared_ptr<Turn>& t, int rating, const std::string
 
 void Harness::rate_later(const std::shared_ptr<Turn>& t, int rating, const std::string& why) {
   std::lock_guard lk(mu_);
-  background_.emplace_back(guarded([this, t, rating, why] { rate(t, rating, why, true); }));
+  if (!spawn_locked([this, t, rating, why] { rate(t, rating, why, true); }))
+    std::fprintf(stderr, "[background] dropped a rating: the server is busy\n");
 }
 
 // Finished turns stay in memory for a while so they can be rated and followed up; after that the
@@ -805,7 +845,7 @@ json Harness::evolve_now(const std::string& uid, const std::vector<std::string>&
 void Harness::evolve_in_background(const std::string& uid, const secrets::Key& vault) {
   if (evolving_.exchange(true)) return;  // one evolution at a time; critiques keep queueing
   std::lock_guard lk(mu_);
-  background_.emplace_back(guarded([this, uid, vault] {
+  if (!spawn_locked([this, uid, vault] {
     struct Done {
       std::atomic<bool>& flag;
       ~Done() { flag = false; }
@@ -838,7 +878,8 @@ void Harness::evolve_in_background(const std::string& uid, const secrets::Key& v
                  memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"uid", uid}, {"rating", 0},
                                                        {"result", {{"evolved", r}}}}),
                  "", uid);
-  }));
+  }))
+    evolving_ = false;
 }
 
 bool Harness::cancel(const std::string& uid, const std::string& turn_id) {
@@ -1098,7 +1139,7 @@ void Harness::seed_user(const std::string& uid) {
     agents::Spec spec = agents::spec_from_json(a);
     spec.kind = "openai";
     spec.owner = uid;
-    spec.public_only = opt_.user_accounts;
+    spec.public_only = true;
     reg_.add(spec);
   }
 }
@@ -1226,14 +1267,17 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
     std::lock_guard lk(mu_);
     if (connecting_.contains(a->name())) return {{"ok", true}, {"command", cmd}, {"already", true}};
     connecting_.insert(a->name());
-    background_.emplace_back(guarded([this, a] {
-      proc::Options o;
-      o.timeout_s = 600;
-      proc::run(a->login_argv(), o);
-      a->invalidate(nullptr);
-      std::lock_guard lk2(mu_);
+    if (!spawn_locked([this, a] {
+          proc::Options o;
+          o.timeout_s = 600;
+          proc::run(a->login_argv(), o);
+          a->invalidate(nullptr);
+          std::lock_guard lk2(mu_);
+          connecting_.erase(a->name());
+        })) {
       connecting_.erase(a->name());
-    }));
+      return {{"error", "the server is busy — try again shortly"}};
+    }
     return {{"ok", true}, {"command", cmd}};
   }
 
@@ -1253,7 +1297,7 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
   auto fut = ready->get_future();
   {
     std::lock_guard lk(mu_);
-    background_.emplace_back(guarded([this, a, st, sb = *sb, ready] {
+    if (!spawn_locked([this, a, st, sb = *sb, ready] {
       static const std::regex url_re(R"(https://[^\s]+)"), code_re(R"(\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b)");
       bool signalled = false;
       proc::Options o;
@@ -1282,7 +1326,11 @@ json Harness::connect_agent(const std::string& uid, const std::string& name, con
       st->status = p.exit_code == 0 ? "done" : "failed";
       if (p.exit_code != 0) st->error = p.timed_out ? "sign-in timed out" : strip_ansi(p.out).substr(0, 240);
       if (!signalled) ready->set_value();
-    }));
+    })) {
+      st->status = "failed";
+      st->error = "the server is busy — try again shortly";
+      ready->set_value();
+    }
   }
   // Hand the URL + code to the browser as soon as the CLI prints them; the CLI keeps waiting.
   fut.wait_for(std::chrono::seconds(25));
@@ -1447,7 +1495,7 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
   agents::Spec spec;
   spec.kind = "openai";
   spec.owner = uid;
-  spec.public_only = opt_.user_accounts;
+  spec.public_only = true;
   spec.name = body.value("name", "");
   // Handles are case-insensitive: store the key under the name the registry will look up.
   std::transform(spec.name.begin(), spec.name.end(), spec.name.begin(),
@@ -1732,8 +1780,8 @@ json Harness::github_device(const std::string& uid, const secrets::Key& vault) {
     std::lock_guard lk(mu_);
     gh_device_[keyring(uid, vault)] = st;
     // Poll until the user approves; the vault key lives only in this thread's memory meanwhile.
-    background_.emplace_back(guarded([this, uid, st, vault, device = start.value("device_code", ""),
-                              interval = start.value("interval", 5), expires = start.value("expires_in", 900)] {
+    if (!spawn_locked([this, uid, st, vault, device = start.value("device_code", ""),
+                       interval = start.value("interval", 5), expires = start.value("expires_in", 900)] {
       int wait = std::max(5, interval);
       for (int elapsed = 0; elapsed < expires; elapsed += wait) {
         std::this_thread::sleep_for(std::chrono::seconds(wait));
@@ -1754,7 +1802,11 @@ json Harness::github_device(const std::string& uid, const secrets::Key& vault) {
       std::lock_guard lk2(mu_);
       st->status = "failed";
       st->error = "the code expired";
-    }));
+    })) {
+      st->status = "failed";
+      st->error = "the server is busy — try again shortly";
+      return {{"error", st->error}};
+    }
   }
   return {{"ok", true}, {"url", st->url}, {"code", st->code}};
 }

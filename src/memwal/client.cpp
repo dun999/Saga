@@ -24,6 +24,13 @@ std::string describe(const http::Response& r) {
   return m;
 }
 
+// Redact, or refuse, before any byte is signed and sent. A refusal is a short error, never the input.
+std::string for_storage(const std::string& text) {
+  const StorageText r = prepare_for_storage(text);
+  if (!r.ok) throw Error(400, r.error.empty() ? "memory record refused" : r.error);
+  return r.text;
+}
+
 }  // namespace
 
 std::string canonical_message(const std::string& ts, const std::string& method, const std::string& path,
@@ -132,15 +139,19 @@ json Client::signed_request(const std::string& method, const std::string& path, 
 json Client::whoami() { return signed_request("GET", "/api/whoami", nullptr, false); }
 
 std::string Client::remember(const std::string& text, const std::string& ns) {
-  return signed_request("POST", "/api/remember", {{"text", redact_secrets(text)}, {"namespace", ns}}).value("job_id", "");
+  return signed_request("POST", "/api/remember", {{"text", for_storage(text)}, {"namespace", ns}}).value("job_id", "");
 }
 
 std::vector<std::string> Client::remember_bulk(const std::vector<std::pair<std::string, std::string>>& items) {
+  // Refuse the whole call before the first request, so one bad record can't ride along with the rest.
+  std::vector<std::pair<std::string, std::string>> clean;
+  clean.reserve(items.size());
+  for (auto& it : items) clean.emplace_back(for_storage(it.first), it.second);
   std::vector<std::string> ids;
-  for (size_t off = 0; off < items.size(); off += 20) {  // relayer cap: 20 per request
+  for (size_t off = 0; off < clean.size(); off += 20) {  // relayer cap: 20 per request
     json arr = json::array();
-    for (size_t i = off; i < std::min(items.size(), off + 20); ++i)
-      arr.push_back({{"text", redact_secrets(items[i].first)}, {"namespace", items[i].second}});
+    for (size_t i = off; i < std::min(clean.size(), off + 20); ++i)
+      arr.push_back({{"text", clean[i].first}, {"namespace", clean[i].second}});
     auto res = signed_request("POST", "/api/remember/bulk", {{"items", arr}});
     for (auto& id : res.value("job_ids", json::array())) ids.push_back(id.get<std::string>());
   }
@@ -204,7 +215,7 @@ std::vector<Memory> Client::recall(const std::string& query, const std::string& 
 }
 
 json Client::analyze(const std::string& text, const std::string& ns) {
-  return signed_request("POST", "/api/analyze", {{"text", redact_secrets(text)}, {"namespace", ns}}, true, 120);
+  return signed_request("POST", "/api/analyze", {{"text", for_storage(text)}, {"namespace", ns}}, true, 120);
 }
 
 json Client::restore(const std::string& ns, int limit) {

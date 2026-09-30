@@ -152,15 +152,16 @@ cp .env.example .env               # add your delegate key + account id from htt
   verified in C++. Every other scheme, including zkLogin ("Sign in with Google" in Slush), is verified by a
   Sui full node (`verifySignature` over GraphQL).
 * **Username = guest mode.** Quicker, but it proves nothing: anyone who types that username gets its
-  memory, and guests can't connect accounts. `--wallet-only` disables it, which you want on a public
-  deployment.
+  memory, and guests can't connect accounts. `--wallet-only` disables it. Guest mode starts only on
+  this machine, with no `--public-origin` and no `--trust-proxy`.
 * Sessions are stateless HMAC-signed cookies. The key is created once in `~/.config/saga/session-secret`,
   so restarts don't sign anyone out, and there is still no database.
 
 ### Bring your own accounts
 
-With `--host 0.0.0.0` (or `--accounts user`), each wallet user connects their **own** providers in
-**Agents**, and nothing runs on the operator's plans:
+With `--accounts user` (also the default when `--host` is not loopback), each wallet user connects their
+**own** providers in **Agents**, and nothing runs on the operator's plans. A public bind also needs
+`--wallet-only` and `--public-origin` — see [Deploying](#deploying).
 
 | Agent | How a user connects |
 |---|---|
@@ -168,7 +169,7 @@ With `--host 0.0.0.0` (or `--accounts user`), each wallet user connects their **
 | `@claude` | a token from `claude setup-token` (Claude subscription) or an Anthropic API key |
 | `@codex` | **Sign in with ChatGPT** (device code in the browser) or an OpenAI API key |
 | `@grok` | **Sign in with Grok** (device code) |
-| ＋ | any OpenAI-compatible API with their own key; on a shared server Saga won't connect to loopback, private or link-local addresses on a user's behalf |
+| ＋ | any OpenAI-compatible API with their own key. A user-owned agent reaches only public addresses, in host mode and in user mode. An agent configured in `saga.json` may still use a local model such as Ollama or llama.cpp |
 
 Reflection and prompt evolution run on the user's own Claude account too.
 
@@ -203,11 +204,32 @@ push or see the token.
 
 ### Deploying
 
-`--host 0.0.0.0` makes per-user accounts the default. Operator accounts (`--accounts host`) require
-`--allow 0x…,0x…`, and Saga refuses to bind a public interface without it. Those agents run as you **without
-a sandbox**, so they can read the host's files (including `.env`) and each other's memory. Use them only
-for people you trust. There, Connect and Disconnect run the CLIs' own sign-in and sign-out on the host,
-and only when Saga listens on loopback. Each user gets up to 4 live tabs and 3 running chats, on 256 worker threads.
+A public address, or a reverse proxy in front of a loopback bind, starts only with
+`--accounts user --wallet-only --public-origin https://your.host`. Guest mode is for this machine: no
+public origin, and no `--trust-proxy`.
+
+`--public-origin` is the one name Saga puts in wallet challenges and the GitHub OAuth callback. A request
+whose `Host` is something else is rejected. `X-Forwarded-For` is read only with `--trust-proxy`, and only
+when the connection itself comes from loopback. An `https://` origin marks the session and auth cookies
+`Secure`; `--secure-cookies` does the same on a TLS terminator you configured.
+
+User-owned agents open only public addresses, including when the operator runs host mode. Agents from
+`saga.json` can still reach a local Ollama or llama.cpp. Built-in agents that spend the operator's keys
+share one daily run budget (`--operator-budget`, default 1000, `0` for unlimited), so a new wallet does
+not receive a fresh operator quota.
+
+Each person still has 4 live tabs and 3 running chats. The process also caps live tabs, running chats,
+queued background work, and — once the server is exposed — requests per minute. `--allow 0x…,0x…` remains
+for an invite-only deployment and implies wallet sign-in.
+
+Operator accounts (`--accounts host`) run agents as you **without a sandbox**, so they can read the host's
+files (including `.env`) and each other's memory. Use them only for people you trust, on this machine.
+There, Connect and Disconnect run the CLIs' own sign-in and sign-out on the host, and only when Saga
+listens on loopback.
+
+Before a memory is written, keys, tokens, passwords, and unlabelled 64-character hex strings are replaced
+with `[redacted secret]`. A wallet address or content hash Saga already stores as a typed identifier is
+kept. The filter matches those recognisable shapes.
 
 ## Agents and LLMs
 

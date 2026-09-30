@@ -104,6 +104,8 @@ std::string Registry::add(const Spec& spec) {
   Spec s = spec;
   s.name = lower(s.name);
   if (s.owner.empty()) return "owned agents need an owner";
+  // Every call site, including agents restored from memory. Operator agents never come through here.
+  s.public_only = true;
   if (s.name.empty() || s.name.size() > 24 ||
       !std::all_of(s.name.begin(), s.name.end(), [](char c) { return std::isalnum((unsigned char)c) || c == '-' || c == '_'; }))
     return "name must be 1–24 letters, digits, - or _";
