@@ -2,12 +2,32 @@
 
 #include <cctype>
 #include <nlohmann/json.hpp>
+#include <mutex>
+#include <algorithm>
+#include "core/secrets.h"
 
 namespace saga::memwal {
 namespace {
 
 using std::string;
 using std::string_view;
+std::mutex credentials_mu;
+std::vector<std::weak_ptr<std::string>> credentials;
+
+string redact_active(string_view text, int& found) {
+  string out(text);
+  std::lock_guard lk(credentials_mu);
+  std::erase_if(credentials, [](const auto& value) { return value.expired(); });
+  for (const auto& weak : credentials) {
+    const auto value = weak.lock();
+    if (!value || value->empty()) continue;
+    for (size_t p = 0; (p = out.find(*value, p)) != string::npos; p += std::char_traits<char>::length(kRedacted)) {
+      out.replace(p, value->size(), kRedacted);
+      ++found;
+    }
+  }
+  return out;
+}
 
 constexpr size_t kMarkerLen = 17;  // strlen("[redacted secret]")
 
@@ -383,7 +403,8 @@ bool public_id_key(string_view key) {
 
 string redact_text(string_view text, int* found, bool keep_ids) {
   int n = 0;
-  string out = apply_pem(text, n);
+  string out = redact_active(text, n);
+  out = apply_pem(out, n);
   out = apply_tokens(out, n);
   if (!keep_ids) out = apply_hex(out, n);
   out = apply_at(out, n, match_seed);
@@ -410,6 +431,55 @@ bool redact_json(nlohmann::json& j, int* found, const string& key, int depth) {
 StorageText refuse(const string& error) { return {false, kNotStored, error, 0}; }
 
 }  // namespace
+
+void SecretScope::add(const string& value) {
+  if (value.empty()) return;
+  auto secret = std::shared_ptr<string>(new string(value), [](string* s) { secrets::clear(*s); delete s; });
+  std::lock_guard lk(credentials_mu);
+  credentials.push_back(secret);
+  values_.push_back(std::move(secret));
+}
+
+void SecretScope::add_json(const string& login) {
+  if (login.size() > kMaxStoredBytes || json_nesting(login) > kMaxJsonDepth) return;
+  auto j = nlohmann::json::parse(login, nullptr, false);
+  auto visit = [&](auto&& self, nlohmann::json& value, string field) -> void {
+    std::transform(field.begin(), field.end(), field.begin(), [](unsigned char c) { return std::tolower(c); });
+    if (value.is_string()) {
+      auto& text = value.get_ref<string&>();
+      if (field.find("token") != string::npos || field.find("key") != string::npos ||
+          field.find("secret") != string::npos || field.find("password") != string::npos) add(text);
+      secrets::clear(text);
+    } else if (value.is_object()) {
+      for (auto& [key, child] : value.items()) self(self, child, key);
+    } else if (value.is_array()) {
+      for (auto& child : value) self(self, child, field);
+    }
+  };
+  visit(visit, j, "");
+}
+
+SecretStream::~SecretStream() { secrets::clear(pending_); }
+
+string SecretStream::take(string_view piece, bool finish) {
+  pending_.append(piece);
+  int found = 0;
+  pending_ = redact_active(pending_, found);
+  size_t hold = 0;
+  if (!finish) {
+    std::lock_guard lk(credentials_mu);
+    for (const auto& weak : credentials) {
+      const auto value = weak.lock();
+      if (!value || value->empty()) continue;
+      for (size_t n = std::min(value->size() - 1, pending_.size()); n > hold; --n)
+        if (pending_.compare(pending_.size() - n, n, *value, 0, n) == 0) { hold = n; break; }
+    }
+  }
+  const size_t ready = pending_.size() - hold;
+  string out = redact_secrets(pending_.substr(0, ready));
+  pending_.erase(0, ready);
+  return out;
+}
 
 int json_nesting(string_view text, int limit) {
   int depth = 0, max_depth = 0;

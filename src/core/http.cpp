@@ -22,6 +22,11 @@ struct Ctx {
   std::string error;
 };
 
+int on_progress(void* data, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+  const auto& cancelled = *static_cast<const CancelFn*>(data);
+  try { return cancelled && cancelled() ? 1 : 0; } catch (...) { return 1; }
+}
+
 // Runs before every connect (redirects and happy-eyeballs attempts included), so a refused address
 // is never connected to — not even to learn whether a port is open.
 curl_socket_t open_public(void* ud, curlsocktype, curl_sockaddr* a) {
@@ -150,7 +155,7 @@ int connect_public(const std::string& host, int port) {
 
 Response request(const std::string& method, const std::string& url, const Headers& headers,
                  const std::string& body, long timeout_s, const ChunkFn& on_chunk, bool public_only,
-                 size_t max_response_bytes) {
+                 size_t max_response_bytes, const CancelFn& cancelled) {
   static GlobalInit g;
   Response resp;
   CURL* c = curl_easy_init();
@@ -172,6 +177,11 @@ Response request(const std::string& method, const std::string& url, const Header
   curl_easy_setopt(c, CURLOPT_TIMEOUT, timeout_s);
   curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
   curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+  if (cancelled) {
+    curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, on_progress);
+    curl_easy_setopt(c, CURLOPT_XFERINFODATA, &cancelled);
+  }
   curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, public_only ? 0L : 1L);
   if (public_only) {
     curl_easy_setopt(c, CURLOPT_PROTOCOLS_STR, "http,https");

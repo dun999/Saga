@@ -2,6 +2,7 @@
 // local verifier is checked against exactly what Sui wallets send.
 #include <doctest/doctest.h>
 
+#include "core/crypto.h"
 #include "web/auth.h"
 
 using namespace saga::web;
@@ -31,19 +32,29 @@ TEST_CASE("address normalisation") {
   CHECK(normalize_address("").empty());
 }
 
-TEST_CASE("session tokens round-trip and resist tampering") {
+TEST_CASE("short opaque sessions unlock a vault only with the owning wallet and revoke on logout") {
   AuthConfig cfg;
-  cfg.secret = "test-secret";
   Auth auth(cfg);
-  // Drive the real flow with the SDK signature: the challenge text must equal what was signed,
-  // so check the token format directly through a verified session instead.
-  const std::string msg = auth.challenge(kAddr, "localhost");
-  CHECK(msg.find(kAddr) != std::string::npos);
+  const auto wallet = saga::crypto::Ed25519Key::from_seed(saga::crypto::Bytes(32, 7));
+  const std::string address = wallet.sui_address();
+  const std::string msg = auth.challenge(address, "localhost");
+  CHECK(msg.find(address) != std::string::npos);
   std::string err;
-  CHECK(auth.verify(kAddr, kSig, &err).empty());  // signature is over a different text → rejected
-  CHECK_FALSE(err.empty());
-  CHECK(auth.verify(kAddr, kSig, &err).empty());  // challenge is single-use
+  CHECK(auth.verify(address, kSig, &err).empty());  // another wallet's signature is rejected
+  CHECK(auth.verify(address, kSig, &err).empty());  // challenge is single-use
   CHECK(err.find("expired") != std::string::npos);
-  CHECK(auth.session_address("v1." + kAddr + ".9999999999.deadbeef").empty());
+  const std::string challenge = auth.challenge(address, "localhost");
+  const std::string token = auth.verify(address, wallet.sign_personal_message(challenge), &err);
+  REQUIRE(token.size() == 64);
+  CHECK(token.find(address) == std::string::npos);
+  CHECK(auth.session_address(token) == address);
+  CHECK(auth.vault_key(token).empty());
+  CHECK_FALSE(auth.unlock(token, kSig, &err));
+  CHECK(auth.vault_key(token).empty());
+  REQUIRE(auth.unlock(token, wallet.sign_personal_message(vault_message(address)), &err));
+  CHECK(auth.vault_key(token).size() == 32);
+  CHECK(auth.logout(token) == address);
+  CHECK(auth.session_address(token).empty());
+  CHECK(auth.vault_key(token).empty());
   CHECK(auth.session_address("garbage").empty());
 }

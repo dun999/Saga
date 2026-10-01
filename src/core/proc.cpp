@@ -1,4 +1,5 @@
 #include "core/proc.h"
+#include "core/secrets.h"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -15,6 +16,10 @@
 #include <string_view>
 
 namespace saga::proc {
+Options::~Options() {
+  secrets::clear(stdin_data);
+  for (auto& [_, value] : env) secrets::clear(value);
+}
 namespace {
 
 // Server credentials. Agents run untrusted instructions, so a child must not inherit these even
@@ -40,6 +45,10 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
   static const bool sigpipe_ignored = (signal(SIGPIPE, SIG_IGN), true);
   (void)sigpipe_ignored;
   Result res;
+  if ((opt.cancel && opt.cancel->load()) || (opt.session_cancel && opt.session_cancel->load())) {
+    res.cancelled = true;
+    return res;
+  }
   if (argv.empty()) return res;
   int out_p[2]{-1,-1}, err_p[2]{-1,-1}, in_p[2]{-1,-1}, start_p[2]{-1,-1};
   if (pipe2(out_p, O_CLOEXEC) || pipe2(err_p, O_CLOEXEC) || pipe2(in_p, O_CLOEXEC) || pipe2(start_p, O_CLOEXEC)) {
@@ -137,6 +146,7 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
     if (reaped && open_fds == 0) break;
     if (std::chrono::steady_clock::now() > deadline) res.timed_out = true;
     if (opt.cancel && opt.cancel->load()) res.cancelled = true;
+    if (opt.session_cancel && opt.session_cancel->load()) res.cancelled = true;
     if (res.timed_out || res.cancelled || res.output_limited) {
       kill(-pid, SIGTERM);
       usleep(300'000);

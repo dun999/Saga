@@ -7,29 +7,38 @@
 #include <cstdint>
 
 #include "core/proc.h"
+#include "core/secrets.h"
 #include <map>
 #include <string>
+#include <memory>
+#include <atomic>
+
+namespace saga::memwal { class SecretScope; }
 #include <vector>
 
 namespace saga::sandbox {
 
 struct Sandbox {
-  std::string home;       // host path of this user's agent home → /mnt/home
+  std::string home;       // host path of this user's provider home → /mnt/home
   std::string workspace;  // host path of the chat workspace → /mnt/work
   std::map<std::string, std::string> env;  // provider credentials (e.g. CLAUDE_CODE_OAUTH_TOKEN)
-  std::vector<uint8_t> vault;              // the user's vault key for this request (never stored)
+  secrets::Key vault;                      // provider-specific key for a CLI login file
   std::string runner;                     // trusted Saga binary for the in-namespace proxy launcher
+  std::string login_file;                 // the sole login file this worker may unseal
+  std::shared_ptr<std::atomic<bool>> cancel;  // session cancellation, including learning jobs
+  std::shared_ptr<memwal::SecretScope> sensitive;
+  ~Sandbox();
 };
 
 constexpr const char* kHome = "/mnt/home";
 constexpr const char* kWork = "/mnt/work";
 
 // CLI login files that hold a user's provider credentials, relative to their agent home. They are
-// sealed at rest with the user's vault key (core/secrets.h) and only exist in plaintext while a
+// sealed at rest with a provider key (core/secrets.h) and only exist in plaintext while a
 // Lease on that home is held — i.e. while one of that user's own requests is running.
 extern const std::vector<std::string> kLoginFiles;
 
-// RAII around every sandboxed call: unseal the user's login files for the call; the last lease out
+// RAII around every sandboxed call: unseal only the required provider login; the last lease out
 // re-seals them (CLIs refresh tokens during a run, so what gets sealed is the latest version) and
 // scrubs the home of everything else the CLIs wrote.
 class Lease {
@@ -41,14 +50,20 @@ class Lease {
 
  private:
   std::string home_;
-  std::vector<uint8_t> key_;
+  std::shared_ptr<memwal::SecretScope> sensitive_;
 };
 
 // Delete everything in an agent home except its sealed logins and Saga's own .saga files.
-void scrub_home(const std::string& home);
+void scrub_home(const std::string& home, bool provider_root = false);
 
 // Does the user have this login file, sealed or not?
 bool has_login(const Sandbox& sb, const std::string& rel);
+// Disconnect may race a running CLI. Mark its login as revoked so the last lease deletes any
+// refreshed file the CLI wrote after the first removal.
+bool forget_login(const Sandbox& sb, const std::string& rel);
+// A session-only login is sealed into server memory instead of a durable file between calls.
+void remember_login(const Sandbox& sb, bool remember);
+void end_session(const std::string& home_root);
 
 bool available();  // bubblewrap is installed
 void verify(const std::string& runner);  // fail at startup if namespaces or the broker cannot run

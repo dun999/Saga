@@ -34,6 +34,11 @@ struct Task {
   const sandbox::Sandbox* sandbox = nullptr;
   std::string api_key;  // a user's own API key, unsealed for this call only
   std::string model;    // the user's pick for this agent; empty = the configured default
+  std::shared_ptr<memwal::SecretScope> sensitive;
+  ~Task() {
+    secrets::clear(api_key);
+    for (auto& [_, value] : env) secrets::clear(value);
+  }
 };
 
 struct Result {
@@ -102,7 +107,7 @@ class Agent {
   // Tool-free single completion, used by the harness "brain" for reflection/evolution.
   virtual Result complete(const std::string& system, const std::string& prompt,
                           const sandbox::Sandbox* sb = nullptr) {
-    Task t{prompt, system, sb ? sandbox::kWork : "", nullptr, 300, {}, sb};
+    Task t{prompt, system, sb ? sandbox::kWork : "", sb && sb->cancel ? sb->cancel.get() : nullptr, 300, {}, sb};
     return run(t, nullptr);
   }
 

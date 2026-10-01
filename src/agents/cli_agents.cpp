@@ -76,6 +76,8 @@ proc::Result exec(const std::vector<std::string>& argv, proc::Options o, const s
   sandbox::Lease lease(sb);  // logins are plaintext only while calls run; the home is scrubbed after
   auto r = sandbox::run(*sb, argv, std::move(o));
   keep_codex_usage(sb->home);  // before the scrub takes the session files it was read from
+  r.out = memwal::redact_secrets(r.out);
+  r.err = memwal::redact_secrets(r.err);
   return r;
 }
 
@@ -176,6 +178,7 @@ class CliAgent : public Agent {
     const auto t0 = std::chrono::steady_clock::now();
     Result r;
     auto emit = [&](Event e) {
+      e.text = memwal::redact_secrets(e.text);
       if (e.type == "tool") r.tools_used.push_back(e.text);
       if (on_event) on_event(e);
     };
@@ -190,6 +193,10 @@ class CliAgent : public Agent {
       if (memwal::json_nesting(line) > memwal::kMaxJsonDepth)
         throw std::runtime_error("agent event exceeded its JSON depth limit");
       auto j = json::parse(line, nullptr, false);
+      if (j.is_discarded()) return;
+      const auto safe = memwal::prepare_for_storage("SAGA:event " + line);
+      if (!safe.ok) return;
+      j = json::parse(safe.text.substr(11), nullptr, false);
       if (j.is_discarded()) return;
       try {
         parse(j, r, emit);

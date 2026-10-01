@@ -659,18 +659,15 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
       box.appendChild(b);
     }
   }
-  // The vault key: SHA-256 of the wallet's signature over a fixed message. Standard (Ed25519)
-  // wallets sign deterministically, so the same wallet recreates the same key on any device; the
-  // server only ever sees it per request and never stores it.
+  // The wallet signature recreates the same vault key; it is sent only to the unlock endpoint.
   const vaultMessage = addr => `Unlock your Saga vault\n\nThis signature creates the key that encrypts the accounts you connect to Saga (Claude, ChatGPT, Grok and API keys). Saga never stores it. It does not send a transaction or cost gas.\n\nAddress: ${addr}\nVersion: 1`;
-  async function unlockVault(w, account) {
+  const walletAddress = addr => "0x" + addr.replace(/^0x/i, "").toLowerCase().padStart(64, "0");
+  async function unlockVault(w, account, address) {
     status("Approve the vault message in your wallet (2 of 2)…");
     const { signature } = await w.features["sui:signPersonalMessage"].signPersonalMessage({
-      message: new TextEncoder().encode(vaultMessage(account.address)), account, chain: "sui:mainnet"});
-    const sig = Uint8Array.from(atob(signature), c => c.charCodeAt(0));
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([...new TextEncoder().encode("saga-vault-v1"), ...sig])));
-    const key = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    document.cookie = `saga_vault=${key}; Path=/; Max-Age=${14 * 86400}; SameSite=Strict${location.protocol === "https:" ? "; Secure" : ""}`;
+      message: new TextEncoder().encode(vaultMessage(address)), account, chain: "sui:mainnet"});
+    const unlocked = await post("/api/vault/unlock", {signature});
+    if (unlocked.error) throw new Error(unlocked.error);
   }
   async function signIn(w, btn) {
     document.querySelectorAll(".wallet").forEach(x => x.disabled = true);
@@ -681,8 +678,8 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
       const account = accounts.find(a => a.chains.some(c => c.startsWith("sui:"))) || accounts[0];
       if (!account) throw new Error("the wallet returned no account");
       if (unlockOnly) {
-        if (account.address !== window.sagaAddress) throw new Error("Use the wallet you signed in with (" + window.sagaAddress.slice(0, 8) + "…).");
-        await unlockVault(w, account);
+        if (walletAddress(account.address) !== window.sagaAddress) throw new Error("Use the wallet you signed in with (" + window.sagaAddress.slice(0, 8) + "…).");
+        await unlockVault(w, account, window.sagaAddress);
         location.reload();
         return;
       }
@@ -694,7 +691,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
       status("Verifying…");
       const v = await post("/api/auth/verify", {address: account.address, signature});
       if (!v.ok) throw new Error(v.error);
-      await unlockVault(w, account);
+      await unlockVault(w, account, v.address);
       location.reload();
     } catch (e) {
       status(e && e.message ? e.message.replace(/^.*rejected.*$/i, "Sign-in was cancelled in the wallet.") : "Sign-in failed.");
@@ -706,7 +703,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
   render();
 </script>
 <div class="cookie-note" id="cookieNote" role="region" aria-label="Cookie notice">
-  Saga uses only essential cookies — to keep you signed in, confirm your own requests, and unlock your vault. No analytics, no ads. <a href="/privacy">Privacy &amp; cookies</a>
+  Saga uses only essential cookies — to keep you signed in and confirm your own requests. Your vault key stays in server memory for this session. No analytics, no ads. <a href="/privacy">Privacy &amp; cookies</a>
   <div><button id="cookieOk">Got it</button></div>
 </div>
 <script>
@@ -874,7 +871,7 @@ async function boot() {
       const si = $("#signin");
       si.dataset.mode = "unlock";
       $("#siTitle").textContent = "Unlock your vault";
-      $("#siBody").textContent = "Sign once with the wallet you signed in with. Your vault key encrypts the accounts you connect, and Saga never stores it.";
+      $("#siBody").textContent = "Sign once with the wallet you signed in with. Saga keeps your vault key only in this server session.";
       si.classList.add("open");
     }
   }
@@ -924,7 +921,7 @@ async function refreshUsage() {
     const heat = pct => pct >= 100 ? "full" : pct >= 90 ? "hot" : "";
     const how = me.auth || state.accounts !== "user" ? x.connect || [] : [];
     const cs = connectState[x.name] || {};
-    const connecting = (!!x.device && cs.mode !== "closed") || ["token", "api_key", "busy", "confirm"].includes(cs.mode);
+    const connecting = (!!x.device && cs.mode !== "closed") || ["token", "api_key", "choose", "busy", "confirm"].includes(cs.mode);
     const box = connectBox(x, how);
     const usage = connected && (ws.length || a.windows_hint) ? ws.map(w => `<div class="win"><div class="win-h"><span><b>${esc(w.label)}</b> limit</span><span>${Math.round(w.pct)}% used · ${until(w.resets_at)}</span></div><div class="meter"><i class="${heat(w.pct)}" style="width:${w.pct}%"></i></div></div>`).join("")
       + (ws.length ? "" : `<div class="m">${esc(a.windows_hint)}</div>`) : "";
@@ -960,6 +957,8 @@ async function refreshUsage() {
     const keyLink = how.includes("api_key") && st.mode !== "api_key"
       ? `<button type="button" class="linkish" data-mode="api_key" data-agent="${esc(x.name)}">Use an API key</button>` : "";
     const copy = v => `<button type="button" class="btn-ghost copy" data-copy="${esc(v)}">Copy</button>`;
+    const remember = `<label class="m" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" name="remember" ${st.remember ? "checked" : ""} style="width:auto">Remember this account on this server</label>`;
+    if (st.mode === "choose") return `<div class="connect-box" data-choice="${esc(x.name)}">${remember}<div class="cmd"><button class="btn-connect" data-start="${esc(x.name)}">Continue to sign in</button><button class="btn-ghost" data-close="${esc(x.name)}">Cancel</button></div>${keyLink}</div>`;
     if (x.device && st.mode !== "closed" && st.mode !== "api_key") {
       const prefilled = /[?&]user_code=/.test(x.device.url);
       return `<div class="connect-box">
@@ -972,10 +971,10 @@ async function refreshUsage() {
         <div class="m">Run this in a terminal, then paste the token it prints.</div>
         <div class="cmd"><code>claude setup-token</code>${copy("claude setup-token")}</div>
         <div class="cmd"><input name="value" type="password" placeholder="sk-ant-oat… or sk-ant-api…" autocomplete="off" required><button class="btn-connect">Save</button></div>
-        ${err}</form>`;
+        ${remember}${err}</form>`;
     if (st.mode === "api_key") return `<form class="connect-box" data-cred="${esc(x.name)}" data-kind="api_key">
         <div class="cmd"><input name="value" type="password" placeholder="${x.kind === "codex" ? "OpenAI API key, sk-…" : "Anthropic API key, sk-ant-…"}" autocomplete="off" required><button class="btn-connect">Save</button></div>
-        ${err}</form>`;
+        ${remember}${err}</form>`;
     if (st.mode === "busy") return `<div class="connect-box"><div class="m">Starting sign-in…</div></div>`;
     // On operator accounts the login is this machine's own CLI login, so say so before signing it out.
     if (st.mode === "confirm") return `<div class="connect-box">
@@ -993,6 +992,7 @@ async function refreshUsage() {
         <input name="base_url" class="full" placeholder="base URL, e.g. https://openrouter.ai/api/v1" required>
         ${me.auth ? `<input name="api_key" class="full" type="password" placeholder="API key (leave empty for local Ollama)" autocomplete="off">` : `<div class="m full">Guests can only add keyless endpoints (like local Ollama). Connect a wallet to use an API key.</div>`}
       </div>
+      ${me.auth ? `<label class="m" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" name="remember" style="width:auto">Remember this API key on this server</label>` : ""}
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn-connect">Add agent</button><button type="button" class="btn-ghost" id="addCancel">Cancel</button><span class="m off" id="addErr"></span></div>
     </form>`;
   const addTile = `<div class="tile add-tile" id="addTile"><div class="plus">+</div><div><b style="color:var(--ink);font-size:13.5px;font-weight:500">Add an agent with your own API key</b><div class="m">OpenRouter, xAI, Groq, OpenAI, Ollama…</div></div></div>`;
@@ -1000,7 +1000,7 @@ async function refreshUsage() {
   const vaultNote = guestNote + (vault.state === "mismatch"
     ? `<div class="tile" style="background:rgba(180,81,59,.10)"><b style="font-size:13.5px">Your saved accounts are locked with a different key</b><div class="m" style="display:block;line-height:1.6">This happens with some wallets (like Google sign-in) on a new device or session: the vault key can't be recreated, so Saga can't open what you connected before. Reset to delete the old, unreadable credentials and connect again here.</div><div style="margin-top:10px"><button class="btn-connect" id="vaultReset">Reset and reconnect</button></div></div>`
     : "");
-  const foot = me.auth && vault.state !== "mismatch" ? `<div class="foot">${icon("save", 12)} Sealed with your vault key. Disconnect deletes it. <a href="/privacy" target="_blank">Privacy</a></div>` : "";
+  const foot = me.auth && vault.state !== "mismatch" ? `<div class="foot">${icon("save", 12)} Connections last until sign-out unless you choose to remember them. Disconnect deletes them. <a href="/privacy" target="_blank">Privacy</a></div>` : "";
   $("#agents").innerHTML = vaultNote + `<div class="deck">${list.map(tile).join("")}${addOpen ? addForm : addTile}</div>` + foot;
   $("#agWallet")?.addEventListener("click", openWallet);
   $("#vaultReset")?.addEventListener("click", async () => { await api("/api/vault/reset", {}); vault = {state: "ok"}; refreshUsage(); });
@@ -1011,6 +1011,9 @@ async function refreshUsage() {
   };
   $("#agents").querySelectorAll("[data-open]").forEach(b => b.onclick = async () => {
     const x = list.find(v => v.name === b.dataset.open), how = x.connect || [];
+    if (state.accounts === "user" && how.includes("device")) {
+      connectState[x.name] = {mode: "choose"}; refreshUsage(); return;
+    }
     if (how.includes("device") || how.includes("browser")) {
       connectState[x.name] = {mode: "busy"}; refreshUsage();
       const r = await fetch("/api/agents/connect", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({agent: x.name})}).then(r => r.json());
@@ -1020,6 +1023,17 @@ async function refreshUsage() {
     } else {
       connectState[x.name] = {mode: how[0]}; refreshUsage();
     }
+  });
+  $("#agents").querySelectorAll("[data-start]").forEach(b => b.onclick = async () => {
+    const agent = b.dataset.start, remember = b.closest("[data-choice]").querySelector('[name="remember"]').checked;
+    connectState[agent] = {mode: "busy"}; refreshUsage();
+    const r = await api("/api/agents/connect", {agent, remember});
+    connectState[agent] = r.error ? {error: r.error} : {};
+    refreshUsage(); poll();
+  });
+  $("#agents").querySelectorAll('[name="remember"]').forEach(input => input.onchange = () => {
+    const name = input.closest("[data-cred]")?.dataset.cred || input.closest("[data-choice]")?.dataset.choice;
+    if (name) connectState[name] = {...connectState[name], remember: input.checked};
   });
   $("#agents").querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { connectState[b.dataset.agent] = {mode: b.dataset.mode}; refreshUsage(); });
   $("#agents").querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
@@ -1036,7 +1050,9 @@ async function refreshUsage() {
     const agent = f.dataset.cred, value = f.value.value.trim();
     // One field for Claude: a subscription token (sk-ant-oat…) or an API key (sk-ant-api…).
     const kind = f.dataset.kind !== "auto" ? f.dataset.kind : /^sk-ant-oat/.test(value) ? "oauth_token" : "api_key";
-    const r = await fetch("/api/agents/credential", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({agent, kind, value})}).then(r => r.json());
+    const remember = f.querySelector('[name="remember"]').checked;
+    f.value.value = "";
+    const r = await fetch("/api/agents/credential", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({agent, kind, value, remember})}).then(r => r.json());
     if (r.error) { connectState[agent] = {...connectState[agent], error: r.error}; refreshUsage(); return; }
     delete connectState[agent]; refreshUsage();
   });
@@ -1089,6 +1105,8 @@ async function refreshUsage() {
     f.onsubmit = async e => {
       e.preventDefault();
       const body = Object.fromEntries(new FormData(f));
+      body.remember = f.querySelector('[name="remember"]')?.checked || false;
+      if (f.api_key) f.api_key.value = "";
       body.name = body.name.replace(/^@/, "").trim().toLowerCase();
       const r = await fetch("/api/agents", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify(body)}).then(r => r.json());
       if (r.error) { $("#addErr").textContent = r.error; return; }
@@ -1097,7 +1115,7 @@ async function refreshUsage() {
   }
 }
 // ---------- GitHub ----------
-let gh = {connected: false}, ghRepos = null, repo = null, ghPoll = null, ghNotice = null;
+let gh = {connected: false}, ghRepos = null, repo = null, ghPoll = null, ghNotice = null, ghRemember = false;
 async function refreshGitHub() {
   gh = await api("/api/github").catch(() => ({connected: false}));
   renderGhPane();
@@ -1108,7 +1126,13 @@ function renderGhPane() {
   const note = ghNotice ? `<div class="notice ${ghNotice.error ? "bad" : ""}">${esc(ghNotice.error || ghNotice.ok)}</div>` : "";
   if (gh.connected) {
     box.innerHTML = note + `<div class="list"><div class="row">${icon("gh", 22)}<div class="l"><b>@${esc(gh.login)}</b><span>${gh.unlocked ? "Connected. Agents commit to a saga/… branch; you open the pull request." : "Connected, but locked on this device. Unlock your vault to use it."}</span></div><button class="btn-ghost" id="ghOff">Disconnect</button></div></div>`;
-    $("#ghOff").onclick = async () => { await api("/api/github/disconnect", {}); ghRepos = null; ghNotice = null; refreshGitHub(); };
+    $("#ghOff").onclick = async () => {
+      const result = await api("/api/github/disconnect", {});
+      ghRepos = null;
+      ghNotice = result.error ? {error: result.error}
+        : result.revocation_error ? {error: result.revocation_error} : null;
+      refreshGitHub();
+    };
     return;
   }
   if (!me.auth) {
@@ -1118,22 +1142,26 @@ function renderGhPane() {
   }
   const signIn = gh.oauth_available || gh.device_available;
   box.innerHTML = note + `<div class="list"><div class="row">${icon("gh", 22)}<div class="l"><b>GitHub</b><span>Let agents work on your repos and open pull requests.</span></div>
-      ${gh.oauth_available ? `<a class="btn-connect" href="/api/github/login">Connect GitHub</a>` : gh.device_available && !dev ? `<button class="btn-connect" id="ghDevice">Connect GitHub</button>` : ""}</div>
+      ${gh.oauth_available ? `<a class="btn-connect" id="ghOAuth" href="/api/github/login">Connect GitHub</a>` : gh.device_available && !dev ? `<button class="btn-connect" id="ghDevice">Connect GitHub</button>` : ""}</div>
       ${dev ? `<div class="tile"><div class="m">Open <a href="${esc(dev.url)}" target="_blank" rel="noopener">${esc(dev.url.replace(/^https:\/\//, ""))}</a> and enter:</div><div class="device-code">${esc(dev.code)}</div><div class="m">Waiting for you to approve it…</div></div>` : ""}</div>
     ${signIn ? "" : `<div class="foot">GitHub sign-in isn't set up on this server yet (SAGA_GITHUB_CLIENT_ID and SAGA_GITHUB_CLIENT_SECRET). You can use a token meanwhile.</div>`}
+    <label class="m" style="display:flex;align-items:center;gap:8px;margin:10px 0"><input type="checkbox" id="ghRemember" ${ghRemember ? "checked" : ""} style="width:auto">Remember this account on this server</label>
     <details class="alt" ${signIn ? "" : "open"}><summary>Use a token instead</summary>
       <form class="token" id="ghTokenForm"><input name="token" type="password" placeholder="github_pat_…" autocomplete="off" required aria-label="GitHub token"><button class="btn-connect">Connect</button>
         <span class="m">A <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a> with Contents and Pull requests set to read &amp; write. <span class="off" id="ghErr"></span></span></form></details>`;
   $("#ghDevice")?.addEventListener("click", async () => {
-    const r = await fetch("/api/github/device", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: "{}"}).then(r => r.json());
+    const r = await api("/api/github/device", {remember: $("#ghRemember").checked});
     if (r.error) { ghNotice = {error: r.error}; renderGhPane(); return; }
     await refreshGitHub();
     clearInterval(ghPoll); let n = 0;
     ghPoll = setInterval(async () => { await refreshGitHub(); if (gh.connected || ++n > 180) clearInterval(ghPoll); }, 5000);
   });
+  $("#ghOAuth")?.addEventListener("click", e => { e.currentTarget.href = "/api/github/login?remember=" + ($("#ghRemember").checked ? "1" : "0"); });
+  $("#ghRemember").onchange = e => { ghRemember = e.target.checked; };
   $("#ghTokenForm").onsubmit = async e => {
     e.preventDefault();
-    const r = await fetch("/api/github/token", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({token: e.target.token.value.trim()})}).then(r => r.json());
+    const token = e.target.token.value.trim(); e.target.token.value = "";
+    const r = await api("/api/github/token", {token, remember: $("#ghRemember").checked});
     if (r.error) { $("#ghErr").textContent = r.error; return; }
     ghRepos = null; refreshGitHub(); refreshRepo();
   };

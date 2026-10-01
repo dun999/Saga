@@ -14,9 +14,12 @@
 #include <mutex>
 #include <sstream>
 #include <fstream>
+#include <set>
+#include <sodium.h>
 
 #include "core/proc.h"
 #include "core/secrets.h"
+#include "memwal/redact.h"
 
 namespace saga::sandbox {
 namespace fs = std::filesystem;
@@ -78,20 +81,33 @@ std::string resolve(const std::string& cmd) {
 
 const std::vector<std::string> kLoginFiles = {".codex/auth.json", ".grok/auth.json"};
 
+Sandbox::~Sandbox() {
+  secrets::clear(vault);
+  for (auto& [_, value] : env)
+    if (!value.empty()) sodium_memzero(value.data(), value.size());
+}
+
 namespace {
 std::mutex lease_mu;
 struct HomeUse {
   int count = 0;
   secrets::Key key;  // the key its logins were unsealed with, if any
+  std::set<std::string> files;
+  std::set<std::string> revoked;
 };
 std::map<std::string, HomeUse> leases;  // home -> calls running in it
+struct LoginStorage {
+  bool remember = true;  // existing stored connections retain their previous choice
+  std::map<std::string, std::string> sealed;
+};
+std::map<std::string, LoginStorage> login_storage;
 }  // namespace
 
 // The agent home is scratch space. Between calls it keeps only the user's sealed provider logins and
 // Saga's own small files (.saga: a call's context while it runs, cached usage numbers); everything a
 // CLI leaves behind (session transcripts with the prompt and recalled memories, its own memory
 // databases, logs, caches) is deleted. Nothing in it is followed: links are removed, not traversed.
-void scrub_home(const std::string& home) {
+void scrub_home(const std::string& home, bool provider_root) {
   std::error_code ec;
   const fs::path root(home);
   auto keep_only = [&](const fs::path& dir, auto&& keep) {
@@ -100,6 +116,10 @@ void scrub_home(const std::string& home) {
   };
   keep_only(root, [&](const std::string& name, fs::file_status st) {
     if (!fs::is_directory(st)) return false;
+    if (provider_root && (name == "claude" || name == "codex" || name == "grok" || name == "git" || name == "utility")) {
+      scrub_home((root / name).string());
+      return true;
+    }
     if (name == ".codex" || name == ".grok") {
       keep_only(root / name, [](const std::string& n, fs::file_status s) { return n == "auth.json.sealed" && fs::is_regular_file(s); });
       return true;
@@ -121,16 +141,29 @@ void scrub_home(const std::string& home) {
 Lease::Lease(const Sandbox* sb) {
   if (!sb || sb->home.empty()) return;
   home_ = sb->home;
+  sensitive_ = sb->sensitive ? sb->sensitive : std::make_shared<memwal::SecretScope>();
+  for (const auto& [name, value] : sb->env)
+    if (name.find("TOKEN") != std::string::npos || name.find("KEY") != std::string::npos ||
+        name.find("SECRET") != std::string::npos || name.find("AUTH") != std::string::npos) sensitive_->add(value);
   std::lock_guard lk(lease_mu);
   HomeUse& use = leases[home_];
   ++use.count;
-  if (use.key.empty() && sb->vault.size() == 32) {
-    use.key = sb->vault;
-    for (auto& rel : kLoginFiles) {
-      try {
-        secrets::unseal_file(use.key, home_, rel);
-      } catch (...) {  // sealed under another key (vault mismatch): leave it sealed
-      }
+  if (use.key.empty() && sb->vault.size() == 32) use.key = sb->vault;
+  for (auto& rel : sb->login_file.empty() ? std::vector<std::string>{} : std::vector<std::string>{sb->login_file}) {
+    const bool first = use.files.insert(rel).second;
+    if (use.key.empty() || use.revoked.contains(rel)) continue;
+    if (first) try {
+      const auto storage = login_storage.find(home_);
+      if (storage != login_storage.end() && storage->second.sealed.contains(rel)) {
+        std::string plain = secrets::open(use.key, storage->second.sealed.at(rel));
+        secrets::WipeString wipe{plain};
+        secrets::write_private_file(home_, rel, plain);
+      } else secrets::unseal_file(use.key, home_, rel);
+    } catch (...) {  // sealed under another key (vault mismatch): leave it sealed
+    }
+    if (auto plain = secrets::read_private_file(home_, rel)) {
+      sensitive_->add_json(*plain);
+      secrets::clear(*plain);
     }
   }
 }
@@ -140,20 +173,69 @@ Lease::~Lease() {
   std::lock_guard lk(lease_mu);
   HomeUse& use = leases[home_];
   if (--use.count > 0) return;
-  for (auto& rel : kLoginFiles) {
+  for (auto& rel : use.files) {
     try {
-      if (!use.key.empty()) secrets::seal_file(use.key, home_, rel);
+      if (use.revoked.contains(rel)) secrets::erase_file(home_, rel);
+      else if (!use.key.empty()) {
+        auto storage = login_storage.find(home_);
+        if (storage != login_storage.end() && !storage->second.remember) {
+          auto plain = secrets::read_private_file(home_, rel);
+          if (plain) {
+            secrets::WipeString wipe{*plain};
+            storage->second.sealed[rel] = secrets::seal(use.key, *plain);
+          }
+          secrets::erase_file(home_, rel);
+        } else {
+          secrets::seal_file(use.key, home_, rel);
+          if (storage != login_storage.end()) storage->second.sealed.erase(rel);
+        }
+      } else secrets::erase_file(home_, rel);
     } catch (...) {
+      secrets::erase_file(home_, rel);  // never leave plaintext behind after a failed seal
     }
   }
   scrub_home(home_);
+  secrets::clear(use.key);
   leases.erase(home_);
 }
 
 bool has_login(const Sandbox& sb, const std::string& rel) {
-  std::error_code ec;
-  const fs::path p = fs::path(sb.home) / rel;
-  return (fs::exists(p, ec) && fs::file_size(p, ec) > 2) || fs::exists(p.string() + ".sealed", ec);
+  std::lock_guard lk(lease_mu);
+  if (auto it = login_storage.find(sb.home); it != login_storage.end() && it->second.sealed.contains(rel)) return true;
+  auto plain = secrets::read_private_file(sb.home, rel);
+  if (plain) { const bool present = plain->size() > 2; secrets::clear(*plain); if (present) return true; }
+  return secrets::read_private_file(sb.home, rel + ".sealed").has_value();
+}
+
+bool forget_login(const Sandbox& sb, const std::string& rel) {
+  std::lock_guard lk(lease_mu);
+  if (auto it = leases.find(sb.home); it != leases.end()) it->second.revoked.insert(rel);
+  bool had = false;
+  if (auto it = login_storage.find(sb.home); it != login_storage.end()) had = it->second.sealed.erase(rel) > 0;
+  return secrets::erase_file(sb.home, rel) || had;
+}
+
+void remember_login(const Sandbox& sb, bool remember) {
+  std::lock_guard lk(lease_mu);
+  auto& storage = login_storage[sb.home];
+  storage.remember = remember;
+  if (!remember) {
+    if (auto sealed = secrets::read_private_file(sb.home, sb.login_file + ".sealed"))
+      storage.sealed[sb.login_file] = *sealed;
+    // Keep any live worker's plaintext until it exits; its lease will remove it.
+    if (!leases.contains(sb.home)) secrets::erase_file(sb.home, sb.login_file);
+  }
+}
+
+void end_session(const std::string& home_root) {
+  std::lock_guard lk(lease_mu);
+  for (auto it = login_storage.begin(); it != login_storage.end();) {
+    if (!it->first.starts_with(home_root + "/") || it->second.remember) { ++it; continue; }
+    if (auto live = leases.find(it->first); live != leases.end())
+      for (const auto& rel : live->second.files) live->second.revoked.insert(rel);
+    for (const auto& rel : kLoginFiles) secrets::erase_file(it->first, rel);
+    it = login_storage.erase(it);
+  }
 }
 
 bool available() { return proc::on_path("bwrap"); }
@@ -255,6 +337,7 @@ std::map<std::string, std::string> environment(const Sandbox& sb) {
 }
 
 proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::Options o) {
+  o.session_cancel = sb.cancel.get();
   o.cwd.clear();  // bwrap --chdir sets it
   o.env = environment(sb);
   o.inherit_env = false;  // bwrap passes exactly this on; nothing of the server's

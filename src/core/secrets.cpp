@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sodium.h>
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -13,6 +14,42 @@
 
 namespace saga::secrets {
 namespace fs = std::filesystem;
+
+Key::~Key() { secrets::clear(*this); }
+Key& Key::operator=(const Key& value) {
+  if (this != &value) { secrets::clear(*this); crypto::Bytes::operator=(value); }
+  return *this;
+}
+Key& Key::operator=(Key&& value) noexcept {
+  if (this != &value) { secrets::clear(*this); crypto::Bytes::operator=(std::move(value)); }
+  return *this;
+}
+
+void clear(Key& key) {
+  if (!key.empty()) sodium_memzero(key.data(), key.size());
+  key.clear();
+}
+void clear(crypto::Bytes& bytes) {
+  if (!bytes.empty()) sodium_memzero(bytes.data(), bytes.size());
+  bytes.clear();
+}
+void clear(std::string& text) {
+  if (!text.empty()) sodium_memzero(text.data(), text.size());
+  text.clear();
+}
+
+Key derive_key(const Key& vault, const std::string& uid, const std::string& provider) {
+  if (vault.size() != crypto_generichash_KEYBYTES)
+    throw std::invalid_argument("vault key must be 32 bytes");
+  crypto::init();
+  const std::string context = "saga-credential-v2:" + uid + ":" + provider;
+  Key out(crypto_generichash_BYTES);
+  if (crypto_generichash(out.data(), out.size(),
+                         reinterpret_cast<const unsigned char*>(context.data()), context.size(),
+                         vault.data(), vault.size()) != 0)
+    throw std::runtime_error("could not derive provider key");
+  return out;
+}
 namespace {
 constexpr std::string_view kPrefix = "SAGA1:";
 constexpr size_t kMaxPrivateFile = 4 * 1024 * 1024;
@@ -127,7 +164,10 @@ void write_private_file(const std::string& root, const std::string& rel, const s
 void seal_file(const Key& k, const std::string& root, const std::string& rel) {
   const Parent p(root, rel);
   if (!p || !present(p, p.name)) return;
-  if (auto plain = read_at(p, p.name)) write_at(p, p.name + ".sealed", seal(k, *plain));
+  if (auto plain = read_at(p, p.name)) {
+    WipeString wipe{*plain};
+    write_at(p, p.name + ".sealed", seal(k, *plain));
+  }
   shred_at(p, p.name);
 }
 void unseal_file(const Key& k, const std::string& root, const std::string& rel) {
@@ -135,7 +175,9 @@ void unseal_file(const Key& k, const std::string& root, const std::string& rel) 
   if (!p) return;
   const auto text = read_at(p, p.name + ".sealed");
   if (!text) return;
-  write_at(p, p.name, open(k, *text));
+  std::string plain = open(k, *text);
+  WipeString wipe{plain};
+  write_at(p, p.name, plain);
   ::unlinkat(p.fd.n, (p.name + ".sealed").c_str(), 0);
 }
 bool erase_file(const std::string& root, const std::string& rel) {

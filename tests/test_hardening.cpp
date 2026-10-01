@@ -325,6 +325,7 @@ TEST_CASE("the last call out seals the login and clears what the CLI wrote") {
   fs::create_directories(home / ".codex/sessions");
   const secrets::Key k(32, 9);
   sandbox::Sandbox sb{home.string(), (root / "work").string(), {}, k};
+  sb.login_file = ".codex/auth.json";
   {
     sandbox::Lease lease(&sb);
     std::ofstream(home / ".codex/auth.json") << R"({"tokens":"refresh-me"})";  // a sign-in during the call

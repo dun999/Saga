@@ -69,7 +69,9 @@ struct Turn {
   // Playbook rules and lessons that were in the agents' context, as credit ids ("b3", "lesson:<blob>")
   // with their text, so reflection can say which ones helped or hurt.
   std::vector<std::pair<std::string, std::string>> in_context;
-  secrets::Key vault;  // the user's vault key for this turn (memory only; also used by reflection)
+  secrets::Key vault;  // cleared when the turn finishes
+  std::shared_ptr<memwal::SecretScope> sensitive;
+  std::shared_ptr<std::atomic<bool>> session_cancel;
   std::shared_ptr<std::atomic<bool>> cancel = std::make_shared<std::atomic<bool>>(false);
 };
 
@@ -90,8 +92,11 @@ class Harness {
   std::string chat(const std::string& uid, const std::string& session, const std::string& message,
                    const Emit& emit, const secrets::Key& vault = {});       // returns turn id
   // Only the user who ran a turn can rate or cancel it.
-  json feedback(const std::string& uid, const std::string& turn_id, int rating, const std::string& comment);
+  json feedback(const std::string& uid, const std::string& turn_id, int rating, const std::string& comment,
+                const secrets::Key& vault = {});
   bool cancel(const std::string& uid, const std::string& turn_id);
+  void cancel_active(const std::string& uid);  // logout: stop this user's live turns and sign-ins
+  void end_session(const std::string& uid);  // also discard connections the user did not remember
   // Queue critiques and run one evolution now, replayed on this user's rated turns (`saga evolve`).
   json evolve_now(const std::string& uid, const std::vector<std::string>& critiques);
 
@@ -109,10 +114,10 @@ class Harness {
     seed_user(uid);
     return reg_.roster(uid);
   }
-  json connect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault);
+  json connect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault, bool remember = true);
   json connect_status(const std::string& uid, const std::string& name, const secrets::Key& vault);
   json set_credential(const std::string& uid, const std::string& name, const std::string& kind,
-                      const std::string& value, const secrets::Key& vault);  // token / API key
+                      const std::string& value, const secrets::Key& vault, bool remember = true);  // token / API key
   json disconnect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault);
   json probe_agent(const std::string& uid, const std::string& name, const secrets::Key& vault);
   json add_agent(const std::string& uid, const json& body, const secrets::Key& vault);  // own API key
@@ -121,11 +126,13 @@ class Harness {
   json models_view(const std::string& uid);  // per agent: default, the user's pick, suggestions
   // GitHub: connect (token or device flow), pick a repo per chat, open a PR from the agents' work.
   json github_status(const std::string& uid, const secrets::Key& vault);
-  json github_set_token(const std::string& uid, const std::string& token, const secrets::Key& vault);
-  json github_device(const std::string& uid, const secrets::Key& vault);
+  json github_set_token(const std::string& uid, const std::string& token, const secrets::Key& vault,
+                        const std::string& source = "pat", const std::atomic<bool>* cancelled = nullptr,
+                        bool remember = true);
+  json github_device(const std::string& uid, const secrets::Key& vault, bool remember = true);
   std::string github_authorize_url(const std::string& redirect_uri, const std::string& state) const;  // "" = not set up
   json github_oauth_finish(const std::string& uid, const std::string& code, const std::string& redirect_uri,
-                           const secrets::Key& vault);
+                           const secrets::Key& vault, bool remember = true);
   json github_disconnect(const std::string& uid, const secrets::Key& vault);
   json github_repos(const std::string& uid, const secrets::Key& vault);
   json github_attach(const std::string& uid, const std::string& session, const std::string& full_name,
@@ -155,11 +162,20 @@ class Harness {
   std::shared_ptr<PendingRecall> recall_async(std::string query, std::string ns, memwal::RecallOptions opt);
   void run_step(Turn& t, Step& s, const std::string& context, const Emit& emit);
   void apply_directives(Turn& t, const Step& s, const Emit& emit);
-  json reflect(const Turn& t, int rating, const std::string& comment);
+  json reflect(const Turn& t, int rating, const std::string& comment, const secrets::Key& vault,
+               const std::shared_ptr<std::atomic<bool>>& cancelled);
   // One learning signal on a finished turn: scores its prompt version, keeps it as a replay case, reflects.
-  json rate(const std::shared_ptr<Turn>& t, int rating, const std::string& comment, bool implicit);
-  void rate_later(const std::shared_ptr<Turn>& t, int rating, const std::string& why);  // implicit signal
-  void evolve_in_background(const std::string& uid, const secrets::Key& vault);
+  json rate(const std::shared_ptr<Turn>& t, int rating, const std::string& comment, bool implicit,
+            const secrets::Key& vault, const std::shared_ptr<std::atomic<bool>>& cancelled);
+  void rate_later(const std::shared_ptr<Turn>& t, int rating, const std::string& why,
+                  const secrets::Key& vault);  // implicit signal
+  void evolve_in_background(const std::string& uid, const secrets::Key& vault,
+                            const std::shared_ptr<std::atomic<bool>>& cancelled);
+  std::shared_ptr<std::atomic<bool>> operation_cancel(const std::string& uid);
+  json account_keys();
+  bool save_connection(const std::string& uid, const std::string& provider, const json& slot,
+                       bool remember, bool api = false, const std::atomic<bool>* cancelled = nullptr);
+  bool forget_connection(const std::string& uid, const std::string& provider, bool api = false);
   std::vector<ReplayCase> replay_cases(const std::string& uid);
   std::shared_ptr<Turn> last_turn(const std::string& uid, const std::string& session);
   std::string session_history(const std::string& uid, const std::string& session);
@@ -174,7 +190,7 @@ class Harness {
   std::string repo_context(const Turn& t);
   // The user's sandbox when running on their own accounts; nullopt = operator mode.
   std::optional<sandbox::Sandbox> sandbox_for(const std::string& uid, const std::string& workspace,
-                                              const secrets::Key& vault);
+                                              const secrets::Key& vault, const std::string& provider = "");
   void persist_user_agents(const std::string& uid);
   void record_usage(const std::string& uid, const std::string& agent, const agents::Result& r);
   std::vector<json> recall_records(const std::string& ns, const std::string& kind, const std::string& query,
@@ -193,6 +209,9 @@ class Harness {
   std::mutex learning_mu_;
   std::map<std::string, std::unique_ptr<Learning>> learning_;
   mutable std::mutex mu_;
+  std::map<std::string, std::shared_ptr<std::atomic<bool>>> active_contexts_;
+  std::mutex credentials_mu_;
+  json session_keys_ = json::object();  // encrypted session-only connections; never written to disk
   std::map<std::string, std::shared_ptr<Turn>> turns_;  // this process only; Walrus is the record
   void prune_turns();  // caller holds mu_
   struct BgJob {

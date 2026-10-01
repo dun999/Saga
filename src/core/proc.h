@@ -20,6 +20,8 @@ struct Options {
   size_t max_output_bytes = 8 * 1024 * 1024;  // combined stdout/stderr; cannot be disabled
   size_t max_line_bytes = 1024 * 1024;
   std::string cgroup_procs;  // trusted cgroup v2 membership file, joined before exec
+  const std::atomic<bool>* session_cancel = nullptr;
+  ~Options();
 };
 
 struct Result {

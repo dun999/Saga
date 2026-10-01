@@ -3,6 +3,7 @@
 
 #include "core/crypto.h"
 #include "core/http.h"
+#include "memwal/redact.h"
 
 namespace saga::github {
 namespace {
@@ -17,22 +18,25 @@ http::Headers headers(const std::string& token) {
 
 }  // namespace
 
-json api(const std::string& token, const std::string& method, const std::string& path, const json& body) {
+json api(const std::string& token, const std::string& method, const std::string& path, const json& body,
+         const std::atomic<bool>* cancelled) {
+  memwal::SecretScope sensitive(token);
   auto h = headers(token);
   if (!body.is_null()) h["Content-Type"] = "application/json";
-  auto r = http::request(method, std::string(kApi) + path, h, body.is_null() ? "" : body.dump(), 30);
+  auto r = http::request(method, std::string(kApi) + path, h, body.is_null() ? "" : body.dump(), 30,
+                          nullptr, false, 8 * 1024 * 1024, [cancelled] { return cancelled && cancelled->load(); });
   auto j = json::parse(r.body.empty() ? "null" : r.body, nullptr, false);
   if (!r.ok()) {
     std::string msg = r.error.empty() ? "GitHub " + std::to_string(r.status) : r.error;
     if (j.is_object() && j.contains("message")) msg += ": " + j.value("message", "");
     if (j.is_object() && j.contains("errors") && j["errors"].is_array() && !j["errors"].empty())
       msg += " (" + j["errors"][0].value("message", j["errors"][0].dump()) + ")";
-    throw Error(msg);
+    throw Error(memwal::redact_secrets(msg));
   }
   return j;
 }
 
-json user(const std::string& token) { return api(token, "GET", "/user"); }
+json user(const std::string& token, const std::atomic<bool>* cancelled) { return api(token, "GET", "/user", nullptr, cancelled); }
 
 json repos(const std::string& token) {
   json out = json::array();
@@ -84,13 +88,15 @@ json device_start(const std::string& client_id) {
   return j;
 }
 
-json device_poll(const std::string& client_id, const std::string& device_code) {
-  auto r = http::post_json("https://github.com/login/oauth/access_token",
+json device_poll(const std::string& client_id, const std::string& device_code, const std::atomic<bool>* cancelled) {
+  auto r = http::request("POST", "https://github.com/login/oauth/access_token",
+                           {{"Accept", "application/json"}, {"Content-Type", "application/json"}},
                            json{{"client_id", client_id},
                                 {"device_code", device_code},
                                 {"grant_type", "urn:ietf:params:oauth:grant-type:device_code"}}
                                .dump(),
-                           {{"Accept", "application/json"}});
+                           30, nullptr, false, 8 * 1024 * 1024,
+                           [cancelled] { return cancelled && cancelled->load(); });
   auto j = json::parse(r.body, nullptr, false);
   return j.is_object() ? j : json{{"error", "bad_response"}};
 }
@@ -123,6 +129,17 @@ json exchange_code(const std::string& client_id, const std::string& client_secre
                            {{"Accept", "application/json"}});
   auto j = json::parse(r.body, nullptr, false);
   return j.is_object() ? j : json{{"error", "bad_response"}};
+}
+
+void revoke_grant(const std::string& client_id, const std::string& client_secret,
+                  const std::string& access_token) {
+  const auto response = http::request("DELETE", std::string(kApi) + "/applications/" + client_id + "/grant",
+      {{"Accept", "application/vnd.github+json"},
+       {"Authorization", "Basic " + crypto::b64_encode(client_id + ":" + client_secret)},
+       {"Content-Type", "application/json"}},
+      json{{"access_token", access_token}}.dump(), 30);
+  if (!response.ok())
+    throw Error("GitHub did not revoke the OAuth authorization (HTTP " + std::to_string(response.status) + ")");
 }
 
 }  // namespace saga::github

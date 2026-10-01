@@ -81,19 +81,6 @@ struct Hub {
   }
 };
 
-// The user's vault key: 32 bytes their browser derived from a wallet signature (base64url cookie).
-// It lives in this request only; the server never stores it.
-secrets::Key vault_of(const httplib::Request& req) {
-  std::string v = cookie(req, "saga_vault");
-  for (auto& c : v) c = c == '-' ? '+' : c == '_' ? '/' : c;
-  try {
-    auto k = crypto::b64_decode(v);
-    return k.size() == 32 ? k : secrets::Key{};
-  } catch (...) {
-    return {};
-  }
-}
-
 // A write is shown to the user it belongs to: their own namespaces, or shared-namespace writes their
 // turns produced (blackboard, lessons, skills, improvements). Only content-free harness writes
 // (prompt versions, scores) are public.
@@ -111,6 +98,19 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   auto hub = std::make_shared<Hub>();
   auto feeds = std::make_shared<Slots>(), chats = std::make_shared<Slots>();
   Auth auth(opt.auth);
+  // Expiry also clears idle keys and stops workers when no further browser request arrives.
+  std::jthread session_expiry([&](std::stop_token stop) {
+    std::mutex expiry_mu;
+    std::condition_variable_any expiry_cv;
+    std::unique_lock lk(expiry_mu);
+    while (!stop.stop_requested()) {
+      for (const auto& uid : auth.expired_sessions()) h.end_session(uid);
+      expiry_cv.wait_for(lk, stop, std::chrono::seconds(1), [] { return false; });
+    }
+  });
+  auto vault_of = [&auth](const httplib::Request& req) {
+    return auth.vault_key(cookie(req, "saga_session"));
+  };
   const std::string sec = opt.secure_cookies ? "; Secure" : "";
   RateLimiter limiter(std::max(opt.rate_per_ip, 1), std::max(opt.rate_global, 1));
   h.store().add_listener([hub](const memwal::WriteRecord& r) { hub->push(r); });
@@ -193,7 +193,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     } catch (const nlohmann::json::exception&) {
       send_json(res, {{"error", "bad request: a field has the wrong type"}}, 400);
     } catch (const std::exception& e) {
-      std::fprintf(stderr, "saga: request failed: %s\n", e.what());
+      std::fprintf(stderr, "saga: request failed\n");
       send_json(res, {{"error", "internal error"}}, 500);
     } catch (...) {
       send_json(res, {{"error", "internal error"}}, 500);
@@ -220,6 +220,8 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     // Same value on every page of an open tab, so one tab's load doesn't invalidate another's token.
     res.headers.emplace("Set-Cookie", "saga_csrf=" + tok + "; Path=/; Max-Age=" + std::to_string(14 * 86400) +
                                           "; SameSite=Strict" + sec);
+    if (!cookie(req, "saga_vault").empty())
+      res.headers.emplace("Set-Cookie", "saga_vault=; Path=/; Max-Age=0; SameSite=Strict" + sec);
     std::string html(page);
     const std::string ph = "__SAGA_CSRF__";
     for (size_t at = 0; (at = html.find(ph, at)) != std::string::npos; at += tok.size())
@@ -252,6 +254,8 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     if (looks_like_address(handle))
       return send_json(res, {{"error", "That looks like a wallet address. Use Connect wallet to sign in with it."}}, 400);
     if (!handle.empty()) {
+      if (const std::string address = auth.logout(cookie(req, "saga_session")); !address.empty())
+        h.end_session(address);
       res.headers.emplace("Set-Cookie", "saga_uid=" + handle + "; Path=/; Max-Age=31536000; SameSite=Lax" + sec);
       // Choosing a username leaves any wallet session, or the wallet would keep winning.
       res.headers.emplace("Set-Cookie", "saga_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" + sec);
@@ -286,12 +290,19 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     std::string err;
     const std::string token = auth.verify(address, j.value("signature", ""), &err);
     if (token.empty()) return send_json(res, {{"error", err}}, 401);
+    if (const std::string previous = auth.logout(cookie(req, "saga_session")); !previous.empty() && previous != address)
+      h.end_session(previous);
+    h.end_session(address);
     res.set_header("Set-Cookie", "saga_session=" + token + "; Path=/; Max-Age=" +
-                                     std::to_string(auth.config().session_days * 86400) + "; HttpOnly; SameSite=Lax" + sec);
+                                     std::to_string(auth.config().session_ttl_s) + "; HttpOnly; SameSite=Lax" + sec);
+    res.headers.emplace("Set-Cookie", "saga_vault=; Path=/; Max-Age=0; SameSite=Strict" + sec);
     send_json(res, {{"ok", true}, {"address", address}});
   });
-  svr.Post("/api/auth/logout", [&](const httplib::Request&, httplib::Response& res) {
+  svr.Post("/api/auth/logout", [&](const httplib::Request& req, httplib::Response& res) {
+    if (const std::string address = auth.logout(cookie(req, "saga_session")); !address.empty())
+      h.end_session(address);
     res.set_header("Set-Cookie", "saga_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" + sec);
+    // Remove the old browser-held key from deployments that used the legacy cookie.
     res.headers.emplace("Set-Cookie", "saga_vault=; Path=/; Max-Age=0; SameSite=Strict" + sec);
     send_json(res, {{"ok", true}});
   });
@@ -344,7 +355,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     // Operator mode signs in the *host's* CLIs, so it is only offered when Saga serves this machine alone.
     if (!h.user_accounts() && opt.host != "127.0.0.1" && opt.host != "localhost")
       return send_json(res, {{"error", "connect provider accounts on the Saga host"}}, 403);
-    auto r = h.connect_agent(uid_of(req, res), agent, vault_of(req));
+    auto r = h.connect_agent(uid_of(req, res), agent, vault_of(req), j.value("remember", false));
     send_json(res, r, r.contains("error") ? 400 : 200);
   });
   svr.Get("/api/agents/connect", [&](const httplib::Request& req, httplib::Response& res) {
@@ -354,7 +365,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     auto j = json::parse(req.body, nullptr, false);
     if (!j.is_object()) return send_json(res, {{"error", "bad json"}}, 400);
     auto r = h.set_credential(uid_of(req, res), j.value("agent", ""), j.value("kind", ""), j.value("value", ""),
-                              vault_of(req));
+                              vault_of(req), j.value("remember", false));
     send_json(res, r, r.contains("error") ? 400 : 200);
   });
   svr.Post("/api/agents/disconnect", [&](const httplib::Request& req, httplib::Response& res) {
@@ -372,6 +383,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   svr.Post("/api/agents", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
     if (!j.is_object()) return send_json(res, {{"error", "bad json"}}, 400);
+    if (!j.contains("remember")) j["remember"] = false;
     auto r = h.add_agent(uid_of(req, res), j, vault_of(req));
     send_json(res, r, r.contains("error") ? 400 : 200);
   });
@@ -399,23 +411,24 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     send_json(res, h.github_status(uid_of(req, res), vault_of(req)));
   });
   svr.Post("/api/github/token", [&](const httplib::Request& req, httplib::Response& res) {
-    reply(res, h.github_set_token(uid_of(req, res), body_of(req).value("token", ""), vault_of(req)));
+    reply(res, h.github_set_token(uid_of(req, res), body_of(req).value("token", ""), vault_of(req), "pat", nullptr, body_of(req).value("remember", false)));
   });
   svr.Post("/api/github/device", [&](const httplib::Request& req, httplib::Response& res) {
-    reply(res, h.github_device(uid_of(req, res), vault_of(req)));
+    reply(res, h.github_device(uid_of(req, res), vault_of(req), body_of(req).value("remember", false)));
   });
   // "Connect GitHub": off to github.com to authorize, back via the callback, then the app finishes the
-  // exchange in a same-site request, the only kind that carries the (SameSite=Strict) vault cookie.
+  // exchange in a same-site request with the original session and one-time state cookie.
   auto site_of = [&](const httplib::Request& req) {
     // Wallet challenges and the GitHub redirect use the configured origin, never a forwarded header.
     if (!opt.public_origin.empty()) return opt.public_origin;
     return std::string("http://") + req.get_header_value("Host");
   };
   svr.Get("/api/github/login", [&](const httplib::Request& req, httplib::Response& res) {
-    const std::string state = crypto::uuid4();
+    const std::string nonce = crypto::uuid4();
+    const std::string state = nonce + "-" + crypto::hmac_sha256_hex(cookie(req, "saga_session"), nonce);
     const std::string url = h.github_authorize_url(site_of(req) + "/api/github/callback", state);
     if (url.empty()) return res.set_redirect("/app?gh_error=not_configured");
-    res.set_header("Set-Cookie", "saga_gh_state=" + state + "; Path=/; Max-Age=600; HttpOnly; SameSite=Lax" + sec);
+    res.set_header("Set-Cookie", std::string("saga_gh_state=") + (req.get_param_value("remember") == "1" ? "1:" : "0:") + state + "; Path=/; Max-Age=600; HttpOnly; SameSite=Lax" + sec);
     res.set_redirect(url);
   });
   svr.Get("/api/github/callback", [&](const httplib::Request& req, httplib::Response& res) {
@@ -427,10 +440,13 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   svr.Post("/api/github/finish", [&](const httplib::Request& req, httplib::Response& res) {
     const json j = body_of(req);
     const std::string state = cookie(req, "saga_gh_state");
-    if (state.empty() || j.value("state", "") != state) return send_json(res, {{"error", "that GitHub sign-in expired — try Connect again"}}, 400);
+    const std::string nonce = state.size() == 103 ? state.substr(2, 36) : "";
+    if (nonce.empty() || j.value("state", "") != state.substr(2) ||
+        state.substr(39) != crypto::hmac_sha256_hex(cookie(req, "saga_session"), nonce))
+      return send_json(res, {{"error", "that GitHub sign-in expired — try Connect again"}}, 400);
     const std::string uid = uid_of(req, res);
     res.set_header("Set-Cookie", "saga_gh_state=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax" + sec);
-    reply(res, h.github_oauth_finish(uid, j.value("code", ""), site_of(req) + "/api/github/callback", vault_of(req)));
+    reply(res, h.github_oauth_finish(uid, j.value("code", ""), site_of(req) + "/api/github/callback", vault_of(req), state.starts_with("1:")));
   });
   svr.Post("/api/github/disconnect", [&](const httplib::Request& req, httplib::Response& res) {
     send_json(res, h.github_disconnect(uid_of(req, res), vault_of(req)));
@@ -456,7 +472,16 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     reply(res, h.github_open_pr(uid_of(req, res), session, j.value("title", ""), vault_of(req)));
   });
 
-  // Vault: is the key this browser holds the one this user's secrets are sealed with?
+  // The wallet proves the fixed vault message once per session. The signature and key never enter a cookie.
+  svr.Post("/api/vault/unlock", [&](const httplib::Request& req, httplib::Response& res) {
+    const json j = json::parse(req.body, nullptr, false);
+    if (!j.is_object()) return send_json(res, {{"error", "bad json"}}, 400);
+    std::string err;
+    if (!auth.unlock(cookie(req, "saga_session"), j.value("signature", ""), &err))
+      return send_json(res, {{"error", err}}, 401);
+    send_json(res, h.vault_status(uid_of(req, res), vault_of(req)));
+  });
+  // Is this session's key the one this user's secrets are sealed with?
   svr.Get("/api/vault", [&](const httplib::Request& req, httplib::Response& res) {
     send_json(res, h.vault_status(uid_of(req, res), vault_of(req)));
   });
@@ -554,7 +579,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     if (rating != 1 && rating != -1) return send_json(res, {{"error", "rating must be 1 or -1"}}, 400);
     const std::string comment = j.value("comment", "");
     if (comment.size() > kMaxFeedback) return send_json(res, {{"error", "comment must be at most 4096 bytes"}}, 400);
-    send_json(res, h.feedback(uid_of(req, res), j.value("turn_id", ""), rating, comment));
+    send_json(res, h.feedback(uid_of(req, res), j.value("turn_id", ""), rating, comment, vault_of(req)));
   });
 
   svr.Post("/api/cancel", [&](const httplib::Request& req, httplib::Response& res) {

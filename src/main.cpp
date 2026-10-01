@@ -366,27 +366,6 @@ int cmd_mem(const Args& a) {
   return 2;
 }
 
-// Sign-in sessions are HMAC cookies. Their key is made once and kept next to the keys file (0600), so
-// restarting the server doesn't sign everyone out.
-std::string session_secret(const std::filesystem::path& dir) {
-  const auto path = dir / "session-secret";
-  {
-    std::ifstream in(path);
-    std::string s;
-    if (in >> s && s.size() >= 32) return s;
-  }
-  const std::string s = crypto::random_hex(32);
-  std::error_code ec;
-  std::filesystem::create_directories(dir, ec);
-  {
-    std::ofstream(path, std::ios::trunc);
-  }
-  std::filesystem::permissions(path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
-                               std::filesystem::perm_options::replace, ec);
-  std::ofstream(path, std::ios::trunc) << s;
-  return s;
-}
-
 bool loopback_host(const std::string& host) {
   return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]";
 }
@@ -425,7 +404,6 @@ int cmd_serve(const Args& a) {
   o.rate_limit = exposed;
   // Sign in with a username (guest) or a Sui wallet; --wallet-only allows wallets only.
   o.auth.required = a.has("wallet-only") && !a.has("no-auth");
-  o.auth.secret = session_secret(std::filesystem::path(ho.keys_path).parent_path());
   for (std::stringstream ss(a.get("allow")); ss.good();) {
     std::string addr;
     std::getline(ss, addr, ',');

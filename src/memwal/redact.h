@@ -13,8 +13,31 @@
 // owner, wallet, blob_id, job_id, sha256 — are kept. That drops wallet addresses mentioned in prose.
 #include <string>
 #include <string_view>
+#include <memory>
+#include <vector>
 
 namespace saga::memwal {
+
+// Exact credentials currently in use are redacted even when they have no recognizable prefix.
+// Registrations are scoped to an operation and their copies are wiped on release.
+class SecretScope {
+ public:
+  SecretScope() = default;
+  explicit SecretScope(const std::string& value) { add(value); }
+  void add(const std::string& value);
+  void add_json(const std::string& login);
+ private:
+  std::vector<std::shared_ptr<std::string>> values_;
+};
+
+// Keep a possible credential prefix until the next SSE piece resolves it.
+class SecretStream {
+ public:
+  ~SecretStream();
+  std::string take(std::string_view piece, bool finish = false);
+ private:
+  std::string pending_;
+};
 
 inline constexpr const char* kRedacted = "[redacted secret]";
 inline constexpr const char* kNotStored = "[not stored]";

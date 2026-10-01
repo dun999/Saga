@@ -154,8 +154,9 @@ cp .env.example .env               # add your delegate key + account id from htt
 * **Username = guest mode.** Quicker, but it proves nothing: anyone who types that username gets its
   memory, and guests can't connect accounts. `--wallet-only` disables it. Guest mode starts only on
   this machine, with no `--public-origin` and no `--trust-proxy`.
-* Sessions are stateless HMAC-signed cookies. The key is created once in `~/.config/saga/session-secret`,
-  so restarts don't sign anyone out, and there is still no database.
+* Wallet sessions use a random, opaque `HttpOnly` cookie that expires after one hour. Logout revokes it
+  immediately; restarting the server also ends all sessions. Public HTTPS deployments mark it `Secure`.
+  Vault keys and provider credentials are never put in the session cookie.
 
 ### Bring your own accounts
 
@@ -174,16 +175,21 @@ With `--accounts user` (also the default when `--host` is not loopback), each wa
 Reflection and prompt evolution run on the user's own Claude account too.
 
 **Credentials are sealed with the user's vault key.** At sign-in the wallet signs a fixed "Unlock your Saga
-vault" message, and the browser hashes the signature into a 32-byte key kept in a cookie. Tokens, API keys,
-Codex/Grok login files, key hints and the GitHub username are stored only as XSalsa20-Poly1305 ciphertext
-under that key. The server never writes the key down, so a copied disk or backup is useless, and a user's
-secrets open only during that user's requests. Standard wallets sign deterministically, so the same wallet
-recreates the key on any device. If one can't (for example, rotating-key Google wallets), Saga detects the
-mismatch and asks the user to reconnect. **Disconnect deletes** the credential. See `/privacy`.
+vault" message. Saga verifies that signature, derives the 32-byte key, and holds it only in the active server
+session. A separate key derived for each user and provider encrypts tokens, API keys, Codex/Grok login files,
+key hints and the GitHub username as XSalsa20-Poly1305 ciphertext. The server never writes the vault key
+down. Standard wallets sign deterministically, so the same wallet recreates it on another device. If one
+can't (for example, rotating-key Google wallets), Saga detects the mismatch and asks the user to reconnect.
+**Disconnect deletes** the credential. GitHub OAuth connections are also revoked through GitHub when this
+server has the OAuth app secret. See `/privacy`.
+New connections last only for the current session unless the user selects **Remember this account on this
+server**. Session-only credentials stay encrypted in server memory between operations and are discarded
+on logout or expiry. Remembered connections stay encrypted on disk; temporary plaintext CLI files are
+removed when the worker exits. Logout and expiry also cancel background learning jobs.
 
 **Every user's agents run in a bubblewrap sandbox** (`bwrap` is required in this mode):
 
-* Only system binaries, libraries, CA certificates, the user's own agent home and chat workspace enter
+* Only system binaries, libraries, CA certificates, the user's provider-specific agent home and chat workspace enter
   the sandbox. Host runtime sockets, the operator's files and other users' homes are absent.
 * Each call has its own network namespace. HTTPS passes through a CONNECT broker that checks the actual
   destination IP and refuses private, loopback and metadata addresses. Direct networking is disabled.
@@ -191,7 +197,7 @@ mismatch and asks the user to reconnect. **Disconnect deletes** the credential. 
 * The environment is cleared, so the Walrus delegate key never reaches an agent. Provider tokens enter
   through the sandbox environment and prompts through stdin or a 0600 file. Neither goes on a command line,
   which any local user could read with `ps`.
-* Provider logins live in the user's home (mode 0700), sealed except while one of their calls runs, and are
+* Provider logins live in separate 0700 homes, sealed except while that provider's call runs, and are
   never written to Walrus. When the last call ends, everything the CLIs wrote (transcripts with prompts
   and recalled memories, their memory files, logs, caches) is deleted. Only the sealed logins and Codex's
   plan-usage numbers remain.

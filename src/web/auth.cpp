@@ -5,6 +5,7 @@
 #include <ctime>
 
 #include <nlohmann/json.hpp>
+#include <sodium.h>
 
 #include "core/crypto.h"
 #include "core/http.h"
@@ -25,7 +26,7 @@ std::string normalize_address(const std::string& a) {
 Verified verify_personal_message(const std::string& message, const std::string& signature_b64,
                                  const std::string& address, const std::string& graphql_url) {
   Verified v;
-  crypto::Bytes sig;
+  secrets::Key sig;
   try {
     sig = crypto::b64_decode(signature_b64);
   } catch (const std::exception&) {
@@ -80,8 +81,23 @@ Verified verify_personal_message(const std::string& message, const std::string& 
   return v;
 }
 
-Auth::Auth(AuthConfig cfg) : cfg_(std::move(cfg)) {
-  if (cfg_.secret.empty()) cfg_.secret = crypto::random_hex(32);  // sessions end when the process does
+std::string vault_message(const std::string& address) {
+  // Do not change these bytes: existing vault ciphertext depends on the wallet's signature.
+  return "Unlock your Saga vault\n\nThis signature creates the key that encrypts the accounts you connect to "
+         "Saga (Claude, ChatGPT, Grok and API keys). Saga never stores it. It does not send a "
+         "transaction or cost gas.\n\nAddress: " + address + "\nVersion: 1";
+}
+
+Auth::Auth(AuthConfig cfg) : cfg_(std::move(cfg)) {}
+
+void Auth::prune_locked() const {
+  const auto now = std::chrono::steady_clock::now();
+  for (auto it = sessions_.begin(); it != sessions_.end();) {
+    if (it->second.expires > now) { ++it; continue; }
+    expired_.insert(it->second.address);
+    secrets::clear(it->second.vault);
+    it = sessions_.erase(it);
+  }
 }
 
 std::string Auth::challenge(const std::string& address, const std::string& host) {
@@ -122,29 +138,74 @@ std::string Auth::verify(const std::string& address, const std::string& signatur
     if (error) *error = v.error;
     return "";
   }
-  const long expires = std::time(nullptr) + cfg_.session_days * 86400L;
-  const std::string payload = "v1." + address + "." + std::to_string(expires);
-  return payload + "." + crypto::hmac_sha256_hex(cfg_.secret, payload);
+  const std::string token = crypto::random_hex(32);
+  std::lock_guard lk(mu_);
+  prune_locked();
+  expired_.erase(address);  // the sign-in handler ends this user's old context before issuing the cookie
+  sessions_[token] = {address, std::chrono::steady_clock::now() +
+                                  std::chrono::seconds(std::max(1, cfg_.session_ttl_s)), {}};
+  return token;
 }
 
 std::string Auth::session_address(const std::string& token) const {
-  const auto last = token.rfind('.');
-  if (last == std::string::npos) return "";
-  const std::string payload = token.substr(0, last), mac = token.substr(last + 1);
-  if (!crypto::constant_time_equal(mac, crypto::hmac_sha256_hex(cfg_.secret, payload))) return "";
-  // payload = v1.<address>.<expires>
-  const auto a = payload.find('.'), b = payload.rfind('.');
-  if (a == std::string::npos || b == a || payload.substr(0, a) != "v1") return "";
-  long expires = 0;
-  try {
-    expires = std::stol(payload.substr(b + 1));
-  } catch (...) {
-    return "";
+  std::lock_guard lk(mu_);
+  prune_locked();
+  auto it = sessions_.find(token);
+  return it == sessions_.end() ? "" : it->second.address;
+}
+
+bool Auth::unlock(const std::string& token, const std::string& signature_b64, std::string* error) {
+  const std::string address = session_address(token);
+  if (address.empty()) { if (error) *error = "sign in required"; return false; }
+  const auto v = verify_personal_message(vault_message(address), signature_b64, address, cfg_.graphql_url);
+  if (!v.ok) { if (error) *error = v.error; return false; }
+  secrets::Key sig;
+  try { sig = crypto::b64_decode(signature_b64); }
+  catch (...) { if (error) *error = "signature is not base64"; return false; }
+  static constexpr std::string_view prefix = "saga-vault-v1";
+  crypto::Bytes material(prefix.begin(), prefix.end());
+  material.insert(material.end(), sig.begin(), sig.end());
+  secrets::Key key(crypto_hash_sha256_BYTES);
+  crypto::init();
+  crypto_hash_sha256(key.data(), material.data(), material.size());
+  secrets::clear(material);
+  secrets::clear(sig);
+  std::lock_guard lk(mu_);
+  prune_locked();
+  auto it = sessions_.find(token);
+  if (it == sessions_.end() || it->second.address != address) {
+    secrets::clear(key);
+    if (error) *error = "session expired — sign in again";
+    return false;
   }
-  if (expires < std::time(nullptr)) return "";
-  const std::string address = payload.substr(a + 1, b - a - 1);
-  if (!cfg_.allowed.empty() && !cfg_.allowed.contains(address)) return "";
+  secrets::clear(it->second.vault);
+  it->second.vault = std::move(key);
+  return true;
+}
+
+secrets::Key Auth::vault_key(const std::string& token) const {
+  std::lock_guard lk(mu_);
+  prune_locked();
+  auto it = sessions_.find(token);
+  return it == sessions_.end() ? secrets::Key{} : it->second.vault;
+}
+
+std::string Auth::logout(const std::string& token) {
+  std::lock_guard lk(mu_);
+  auto it = sessions_.find(token);
+  if (it == sessions_.end()) return "";
+  std::string address = it->second.address;
+  secrets::clear(it->second.vault);
+  sessions_.erase(it);
   return address;
+}
+
+std::vector<std::string> Auth::expired_sessions() {
+  std::lock_guard lk(mu_);
+  prune_locked();
+  std::vector<std::string> out(expired_.begin(), expired_.end());
+  expired_.clear();
+  return out;
 }
 
 }  // namespace saga::web

@@ -42,15 +42,20 @@ class OpenAIAgent : public Agent {
     const json body = {{"model", model_for(task)}, {"messages", messages}, {"stream", true}};
 
     http::Headers h = {{"Content-Type", "application/json"}, {"Accept", "text/event-stream"}};
-    if (const std::string k = task.api_key.empty() ? key() : task.api_key; !k.empty())
-      h["Authorization"] = "Bearer " + k;
+    std::string credential = task.api_key.empty() ? key() : task.api_key;
+    secrets::WipeString wipe{credential};
+    memwal::SecretScope sensitive(credential);
+    if (task.sensitive) task.sensitive->add(credential);
+    if (!credential.empty()) h["Authorization"] = "Bearer " + credential;
 
     Result r;
     std::string pending;
+    memwal::SecretStream safe_stream;
     auto resp = http::request(
         "POST", spec_.base_url + "/chat/completions", h, body.dump(), task.timeout_s,
         [&](std::string_view chunk) {
           if (task.cancel && task.cancel->load()) return false;
+          if (task.sandbox && task.sandbox->cancel && task.sandbox->cancel->load()) return false;
           if (chunk.size() > 1024 * 1024 - std::min<size_t>(pending.size(), 1024 * 1024)) {
             r.error = "provider stream line exceeded its byte limit";
             return false;
@@ -72,18 +77,27 @@ class OpenAIAgent : public Agent {
             if (d.contains("content") && d["content"].is_string()) {
               const std::string piece = d["content"];
               r.text += piece;
-              if (on_event && !piece.empty()) on_event({"delta", piece});
+              const std::string safe = safe_stream.take(piece);
+              if (on_event && !safe.empty()) on_event({"delta", safe});
             }
           }
           return true;
         },
-        spec_.public_only);
+        spec_.public_only, 8 * 1024 * 1024, [&] {
+          return (task.cancel && task.cancel->load()) ||
+                 (task.sandbox && task.sandbox->cancel && task.sandbox->cancel->load());
+        });
     r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!resp.ok() && r.error.empty()) {
       r.error = resp.error.empty() ? "HTTP " + std::to_string(resp.status) + ": " + resp.body.substr(0, 300)
                                    : resp.error;
     }
     r.ok = r.error.empty();
+    r.text = memwal::redact_secrets(r.text);
+    r.error = memwal::redact_secrets(r.error);
+    const std::string remaining = safe_stream.take("", true);
+    if (on_event && !remaining.empty()) on_event({"delta", remaining});
+    if (h.contains("Authorization")) secrets::clear(h["Authorization"]);
     return r;
   }
 
