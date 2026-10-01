@@ -24,7 +24,7 @@ FetchContent_Declare(json
 # Commit pins, not moving tags. A shallow clone cannot fetch an arbitrary commit.
 FetchContent_Declare(httplib
   GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
-  GIT_TAG 89c932f313c6437c38f2982869beacc89c2f2246 # v0.26.0
+  GIT_TAG 4f3f9ef19be83ae97a5d9a059432dc00e445b7ab # v0.58.0
   GIT_SHALLOW OFF)
 set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
@@ -79,3 +79,7 @@ enable_testing()
 add_executable(saga_tests ${SAGA_TEST_SOURCES})
 target_link_libraries(saga_tests PRIVATE saga_core doctest::doctest)
 add_test(NAME saga_tests COMMAND saga_tests)
+
+# Real namespaces and cgroup delegation are required; CI runs this executable separately.
+add_executable(saga_sandbox_tests tests/sandbox/integration.cpp)
+target_link_libraries(saga_sandbox_tests PRIVATE saga_core doctest::doctest)

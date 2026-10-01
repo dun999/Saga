@@ -12,6 +12,7 @@
 #include "core/crypto.h"
 #include "core/env.h"
 #include "core/sandbox.h"
+#include "core/proxy.h"
 #include "harness/harness.h"
 #include "memwal/client.h"
 #include "memwal/gate.h"
@@ -138,8 +139,11 @@ int cmd_stats(const Args& a) {
   if (nss.empty()) {
     nss = {"harness:prompts", "harness:scores", "harness:skills", "harness:improvements", "saga:doctor"};
     for (auto* ag : reg.all()) nss.push_back("agent:" + ag->name() + ":lessons");
-    for (auto& u : a.pos)
-      for (const char* k : {"facts", "episodes", "chat", "checkpoints", "cases"}) nss.push_back(harness::ns_user(u, k));
+    for (auto& u : a.pos) {
+      for (const char* k : {"facts", "episodes", "chat", "checkpoints", "cases", "skills", "improvements",
+                            "learning:prompts", "learning:scores"}) nss.push_back(harness::ns_user(u, k));
+      for (auto* ag : reg.all()) nss.push_back(harness::ns_lessons(ag->name(), u));
+    }
   }
   long total = 0, bytes = 0;
   std::printf("%-40s %8s %10s\n", "namespace", "memories", "bytes");
@@ -412,31 +416,6 @@ int cmd_serve(const Args& a) {
   harness::Options ho = harness_options(a);
   const std::string accounts = a.get("accounts", local ? "host" : "user");
   ho.user_accounts = accounts == "user";
-  if (a.has("operator-budget")) {
-    ho.operator_daily_runs = std::stoi(a.get("operator-budget"));
-    if (ho.operator_daily_runs < 0) throw std::runtime_error("--operator-budget must be 0 or greater");
-  }
-  if (ho.user_accounts) {
-    if (!sandbox::available()) {
-      std::fprintf(stderr, "saga: --accounts user runs each user's agents in a bubblewrap sandbox — install bwrap\n");
-      return 1;
-    }
-    std::error_code ec;
-    std::filesystem::create_directories(ho.homes_dir, ec);
-    std::filesystem::create_directories(ho.workspaces_dir, ec);
-    // Nothing of the operator's, Saga's data, or other users may be visible from inside a sandbox.
-    sandbox::set_hidden({env::get("HOME"), std::filesystem::current_path().string(), ho.workspaces_dir, ho.homes_dir,
-                         std::filesystem::path(ho.keys_path).parent_path().string()});
-  }
-
-  std::unique_ptr<memwal::Client> mw;
-  if (!a.has("no-memory")) mw = std::make_unique<memwal::Client>(memwal_config());
-  auto gate = open_gate(mw.get(), ho);
-  memwal::Store store(mw.get(), mw != nullptr);
-  auto reg = agents::Registry::load(a.get("config", "saga.json"));
-  harness::Harness h(reg, store, ho);
-  (void)gate;
-  h.boot(print_event);
   o.port = std::stoi(a.get("port", std::to_string(o.port)));
   if (a.has("public-origin")) o.public_origin = canonical_origin(a.get("public-origin"));
   o.trust_proxy = a.has("trust-proxy");
@@ -454,12 +433,43 @@ int cmd_serve(const Args& a) {
   }
   // An allowlist only means something if every request has to prove a wallet: it implies wallet-only.
   if (!o.auth.allowed.empty() && !a.has("no-auth")) o.auth.required = true;
-  if (exposed && (!ho.user_accounts || !o.auth.required || o.public_origin.empty())) {
+  if (exposed && (!ho.user_accounts || !o.auth.required || !o.public_origin.starts_with("https://"))) {
     std::fprintf(stderr,
                  "saga: a public bind or a reverse proxy needs --accounts user --wallet-only --public-origin "
                  "https://… — guest mode is only for this machine, with no public origin and no --trust-proxy.\n");
     return 1;
   }
+  if (exposed && a.get("agent-cgroups").empty()) {
+    std::fprintf(stderr, "saga: public serving requires --agent-cgroups PATH to an empty delegated cgroup v2 subtree\n");
+    return 1;
+  }
+  sandbox::set_cgroup_root(a.get("agent-cgroups"));
+  if (a.has("operator-budget")) {
+    ho.operator_daily_runs = std::stoi(a.get("operator-budget"));
+    if (ho.operator_daily_runs < 0) throw std::runtime_error("--operator-budget must be 0 or greater");
+  }
+  if (ho.user_accounts) {
+    if (!sandbox::available()) {
+      std::fprintf(stderr, "saga: --accounts user runs each user's agents in a bubblewrap sandbox — install bwrap\n");
+      return 1;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(ho.homes_dir, ec);
+    std::filesystem::create_directories(ho.workspaces_dir, ec);
+    // Nothing of the operator's, Saga's data, or other users may be visible from inside a sandbox.
+    sandbox::set_hidden({env::get("HOME"), std::filesystem::current_path().string(), ho.workspaces_dir, ho.homes_dir,
+                         std::filesystem::path(ho.keys_path).parent_path().string()});
+    sandbox::verify(ho.saga_bin);
+  }
+
+  std::unique_ptr<memwal::Client> mw;
+  if (!a.has("no-memory")) mw = std::make_unique<memwal::Client>(memwal_config());
+  auto gate = open_gate(mw.get(), ho);
+  memwal::Store store(mw.get(), mw != nullptr);
+  auto reg = agents::Registry::load(a.get("config", "saga.json"));
+  harness::Harness h(reg, store, ho);
+  (void)gate;
+  h.boot(print_event);
   return web::serve(h, o);
 }
 
@@ -470,6 +480,7 @@ void usage() {
       "  serve   [--host H --port P] [--no-memory]  web UI (default http://127.0.0.1:8080)\n"
       "          [--accounts host|user] [--wallet-only] [--allow 0x…,0x…] [--trace]\n"
       "          [--public-origin URL] [--trust-proxy] [--secure-cookies] [--operator-budget N]\n"
+      "          [--agent-cgroups PATH]  delegated cgroup v2 subtree (required for public serving)\n"
       "  chat    [--user NAME] [--no-memory]         terminal chat\n"
       "  doctor                                      check credentials, agents, Walrus round-trip\n"
       "  stats   [user…]                             memories/blobs per namespace\n"
@@ -483,6 +494,8 @@ void usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc > 3 && std::string_view(argv[1]) == "sandbox-exec")
+    return proxy::exec(argv[2], std::vector<std::string>(argv + 3, argv + argc));
   env::load_dotenv();
   const Args a = parse_args(argc, argv);
   try {

@@ -17,12 +17,16 @@ struct Options {
   const std::atomic<bool>* cancel = nullptr;
   std::function<void(const std::string&)> on_stdout_line;
   bool merge_stderr = false;  // deliver stderr through stdout (CLIs that print prompts on stderr)
+  size_t max_output_bytes = 8 * 1024 * 1024;  // combined stdout/stderr; cannot be disabled
+  size_t max_line_bytes = 1024 * 1024;
+  std::string cgroup_procs;  // trusted cgroup v2 membership file, joined before exec
 };
 
 struct Result {
   int exit_code = -1;
   bool timed_out = false;
   bool cancelled = false;
+  bool output_limited = false;
   std::string out, err;
 };
 

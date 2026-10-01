@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 // Encryption at rest for everything that can act as a user: provider tokens, API keys and the
 // CLI login files in each user's agent home.
 //
@@ -27,5 +28,10 @@ void seal_file(const Key& k, const std::string& root, const std::string& rel);
 void unseal_file(const Key& k, const std::string& root, const std::string& rel);
 // Remove a secret file in either form. True if anything was deleted.
 bool erase_file(const std::string& root, const std::string& rel);
+
+// Descriptor-relative access in an agent-owned home. No directory or file symlinks are followed.
+// Writes create missing real directories with 0700 and replace the file atomically with 0600.
+std::optional<std::string> read_private_file(const std::string& root, const std::string& rel);
+void write_private_file(const std::string& root, const std::string& rel, const std::string& data);
 
 }  // namespace saga::secrets

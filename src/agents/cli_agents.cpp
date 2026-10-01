@@ -15,6 +15,8 @@
 #include "agents/agent.h"
 #include "core/crypto.h"
 #include "core/proc.h"
+#include "core/secrets.h"
+#include "memwal/redact.h"
 
 namespace saga::agents {
 namespace fs = std::filesystem;
@@ -89,14 +91,15 @@ class ContextFile {
     std::error_code ec;
     fs::create_directories(dir, ec);
     host_ = dir / name;
-    { std::ofstream(host_, std::ios::trunc); }
-    fs::permissions(host_, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace, ec);
-    std::ofstream(host_, std::ios::binary | std::ios::trunc) << text;
+    root_ = sb ? sb->home : dir.string();
+    rel_ = sb ? ".saga/" + name : name;
+    secrets::write_private_file(root_, rel_, text);
     path_ = sb ? std::string(sandbox::kHome) + "/.saga/" + name : host_.string();
   }
   ~ContextFile() {
-    std::error_code ec;
-    if (!host_.empty()) fs::remove(host_, ec);
+    if (!host_.empty()) {
+      try { secrets::erase_file(root_, rel_); } catch (...) {}
+    }
   }
   ContextFile(const ContextFile&) = delete;
   ContextFile& operator=(const ContextFile&) = delete;
@@ -105,6 +108,7 @@ class ContextFile {
  private:
   fs::path host_;
   std::string path_;
+  std::string root_, rel_;
 };
 
 // Small TTL cache so account() can be polled by the UI without re-running CLIs each time.
@@ -183,6 +187,8 @@ class CliAgent : public Agent {
     tl_account = key_of(task.sandbox);
     o.on_stdout_line = [&](const std::string& line) {
       if (line.empty() || line[0] != '{') return;
+      if (memwal::json_nesting(line) > memwal::kMaxJsonDepth)
+        throw std::runtime_error("agent event exceeded its JSON depth limit");
       auto j = json::parse(line, nullptr, false);
       if (j.is_discarded()) return;
       try {
@@ -194,7 +200,8 @@ class CliAgent : public Agent {
     const ContextFile ctx(system_in_file() ? task.system : "", task.sandbox);
     auto p = exec(argv(task, ctx.path()), o, task.sandbox);
     r.seconds = since(t0);
-    if (p.timed_out) r.error = "timed out after " + std::to_string(task.timeout_s) + "s";
+    if (p.output_limited) r.error = "agent output exceeded its limit";
+    else if (p.timed_out) r.error = "timed out after " + std::to_string(task.timeout_s) + "s";
     else if (p.cancelled) r.error = "cancelled";
     else if (r.error.empty() && p.exit_code != 0 && r.text.empty())
       r.error = "exit " + std::to_string(p.exit_code) + ": " + p.err.substr(0, 400);
@@ -255,6 +262,14 @@ class ClaudeCodeAgent : public CliAgent {
     auto p = exec(a, o, sb);
     Result r;
     r.seconds = since(t0);
+    if (p.output_limited || p.timed_out || p.cancelled) {
+      r.error = p.output_limited ? "brain output exceeded its limit" : "brain timed out or was cancelled";
+      return r;
+    }
+    if (memwal::json_nesting(p.out) > memwal::kMaxJsonDepth) {
+      r.error = "brain response exceeded its JSON depth limit";
+      return r;
+    }
     auto j = json::parse(p.out, nullptr, false);
     if (j.is_object() && !j.value("is_error", false) && j.contains("result")) {
       r.text = j["result"].get<std::string>();

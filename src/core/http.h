@@ -1,6 +1,7 @@
 #pragma once
 // Thin libcurl wrapper. One easy handle per call; thread-safe after global init.
 #include <functional>
+#include <cstddef>
 #include <map>
 #include <string>
 
@@ -23,10 +24,15 @@ using ChunkFn = std::function<bool(std::string_view)>;
 // redirects aren't followed.
 Response request(const std::string& method, const std::string& url, const Headers& headers = {},
                  const std::string& body = "", long timeout_s = 60, const ChunkFn& on_chunk = nullptr,
-                 bool public_only = false);
+                 bool public_only = false, size_t max_response_bytes = 8 * 1024 * 1024);
 
 // A globally routable unicast IPv4/IPv6 address (text form)?
 bool is_public_address(const std::string& ip);
+// Remote provider URLs require TLS, a host, and no embedded credentials, query or fragment.
+bool is_https_url(const std::string& url);
+// Connect a raw TCP tunnel to a public HTTPS peer. DNS and the connected IP are both checked.
+// The caller owns the returned nonblocking descriptor; -1 means refused/failed.
+int connect_public(const std::string& host, int port = 443);
 
 inline Response get(const std::string& url, const Headers& h = {}, long timeout_s = 30) {
   return request("GET", url, h, "", timeout_s);

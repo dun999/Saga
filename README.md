@@ -25,12 +25,12 @@ list (see [Research lineage](#research-lineage)).
 | `u:<you>:facts` | every message (relayer-side extraction, `/api/analyze`), and 👍/👎 comments | every agent, so preferences apply without being restated |
 | `u:<you>:episodes`, `u:<you>:chat` | end of every turn | every agent, for continuity ("last time we built X…") |
 | `task:<turn>` | after every agent step | every agent in the turn: a **blackboard**, so `@codex` sees what `@claude` built and why |
-| `agent:<name>:lessons` | reflection after 👍/👎 or an automatic failure | only that `@name` (Reflexion) |
-| `harness:skills` | 👍 on a successful multi-step turn | every agent, recalled for similar requests (Voyager) |
-| `harness:prompts`, `harness:scores` | prompt evolution; every rating and credit tag | the system prompt (base + playbook rules), Thompson-sampled from the live versions |
+| `u:<you>:lessons:<name>` | reflection after 👍/👎 or an automatic failure | only your `@name` (Reflexion) |
+| `u:<you>:skills` | 👍 on a successful multi-step turn | your agents, recalled for similar requests (Voyager) |
+| `u:<you>:learning:prompts`, `u:<you>:learning:scores` | prompt evolution; every rating and credit tag | your system prompt (base + playbook rules), Thompson-sampled from your live versions |
 | `u:<you>:cases` | every rated turn, explicit or implicit | the replay gate that tests a new prompt version |
 
-At boot Saga calls `restore()` on the hot namespaces. The relayer's vector index is only a cache, and Walrus
+Saga restores each user's learning namespaces when that user first needs them. The relayer's vector index is only a cache, and Walrus
 is the source of truth.
 
 ### Every answer waits for its memory
@@ -114,8 +114,8 @@ keyed by `@name`. Swap the model behind `@codex` and they carry over.
   helps, is retired.
 * **Playbook, not rewrites (ACE).** The system prompt is a fixed base plus short rules. Every 3 critiques the
   brain proposes at most three add/edit/remove edits, so working rules aren't lost in a rewrite.
-* **Replay gate (Darwin Gödel Machine, GEPA).** Before a new version serves anyone, it answers rated past
-  messages from every user whose critique it responds to, next to its parent. A judge sees both answers
+* **Replay gate (Darwin Gödel Machine, GEPA).** Before a new version serves its owner, it answers that user's rated past
+  messages next to its parent. A judge sees both answers
   in shuffled order, without knowing which is which, and picks the better one. A version that loses more
   than it wins is kept as `rejected` and never served, and one with nothing to replay isn't created at all.
   Thompson sampling over 👍/👎 then splits traffic among the live versions. `saga evolve "<critique>"
@@ -183,8 +183,11 @@ mismatch and asks the user to reconnect. **Disconnect deletes** the credential. 
 
 **Every user's agents run in a bubblewrap sandbox** (`bwrap` is required in this mode):
 
-* The host filesystem is read-only, and the operator's home, Saga's data, other users' homes and every key
-  file are hidden. Only the user's own agent home and chat workspace are writable.
+* Only system binaries, libraries, CA certificates, the user's own agent home and chat workspace enter
+  the sandbox. Host runtime sockets, the operator's files and other users' homes are absent.
+* Each call has its own network namespace. HTTPS passes through a CONNECT broker that checks the actual
+  destination IP and refuses private, loopback and metadata addresses. Direct networking is disabled.
+  CLIs must support `HTTPS_PROXY`; the broker supports HTTPS on port 443 and preserves TLS verification.
 * The environment is cleared, so the Walrus delegate key never reaches an agent. Provider tokens enter
   through the sandbox environment and prompts through stdin or a 0600 file. Neither goes on a command line,
   which any local user could read with `ps`.
@@ -192,7 +195,8 @@ mismatch and asks the user to reconnect. **Disconnect deletes** the credential. 
   never written to Walrus. When the last call ends, everything the CLIs wrote (transcripts with prompts
   and recalled memories, their memory files, logs, caches) is deleted. Only the sealed logins and Codex's
   plan-usage numbers remain.
-* Restoring a checkpoint never follows a link an agent left in the workspace.
+* Restoring a checkpoint and reading, sealing or deleting credentials use pinned directory descriptors
+  and never follow a link an agent left behind.
 
 **GitHub.** Connect a fine-grained token, or "Sign in with GitHub" when `SAGA_GITHUB_CLIENT_ID` points at an
 OAuth App with device flow, then pick a repo from the chat bar. Saga clones it into that chat's sandboxed
@@ -205,15 +209,27 @@ push or see the token.
 ### Deploying
 
 A public address, or a reverse proxy in front of a loopback bind, starts only with
-`--accounts user --wallet-only --public-origin https://your.host`. Guest mode is for this machine: no
+`--accounts user --wallet-only --public-origin https://your.host --agent-cgroups PATH`. Guest mode is for this machine: no
 public origin, and no `--trust-proxy`.
+
+Public serving needs Linux cgroup v2, kernel 5.14 or newer, bubblewrap 0.9 or newer, and an empty delegated
+subtree separate from the server process. Startup verifies namespaces, the broker, resource controls and
+process migration before accepting requests. An example service is in [deploy/saga.service](deploy/saga.service);
+edit its host name and paths before installing it. The service uses systemd 254 or newer to place the
+server in its own subgroup. Run Saga as a dedicated unprivileged user and terminate TLS at the reverse proxy.
+
+Each CLI call is limited to 2 GiB of memory, 64 processes and two CPUs. All calls together share a 4 GiB,
+256-process, two-CPU budget. Calls stop at their deadline, on cancellation, or after 8 MiB of combined
+output; unfinished stream lines stop at 1 MiB. Provider responses and browser event queues are bounded too.
+The workspace and agent-home filesystem also needs an operator-configured disk quota; cgroups do not
+limit persistent disk usage. Choose quota sizes for the projects the deployment accepts.
 
 `--public-origin` is the one name Saga puts in wallet challenges and the GitHub OAuth callback. A request
 whose `Host` is something else is rejected. `X-Forwarded-For` is read only with `--trust-proxy`, and only
 when the connection itself comes from loopback. An `https://` origin marks the session and auth cookies
 `Secure`; `--secure-cookies` does the same on a TLS terminator you configured.
 
-User-owned agents open only public addresses, including when the operator runs host mode. Agents from
+User-owned API agents require HTTPS and open only public addresses, including when the operator runs host mode. Agents from
 `saga.json` can still reach a local Ollama or llama.cpp. Built-in agents that spend the operator's keys
 share one daily run budget (`--operator-budget`, default 1000, `0` for unlimited), so a new wallet does
 not receive a fresh operator quota.
@@ -280,9 +296,10 @@ src/web/       cpp-httplib server (NDJSON chat stream, SSE write feed), wallet a
   `restore()` rebuilds it from Walrus, which is what makes Walrus the durable record.
 * With relayer-managed decryption (the MemWal default), the relayer sees plaintext while it serves a recall.
   Client-side SEAL mode isn't implemented yet.
-* All users of a deployment share one MemWal account, isolated by namespace. Per-user accounts are future
-  work. Lessons, skills and the playbook are shared on purpose, so every user's agents improve. They can
-  echo details of the conversation they came from.
+* All users of a deployment share one MemWal account, isolated by namespace. Per-user relayer accounts are
+  future work. Lessons, skills, critiques, prompt versions and replay cases stay in their owner's namespaces.
+  Legacy shared lessons and playbooks are no longer read or replayed. Existing personal facts, chats and
+  checkpoints remain available; private learning starts from the seed prompt after this upgrade.
 * When the hosted relayer stalls, the chat stalls with it (see
   [Every answer waits for its memory](#every-answer-waits-for-its-memory)).
 

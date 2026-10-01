@@ -16,8 +16,6 @@ const char* kSeedPrompt =
     "the most recent. Be concise and concrete. When you build something, say where the files are.";
 
 namespace {
-constexpr const char* kPromptNs = "harness:prompts";
-constexpr const char* kScoreNs = "harness:scores";
 constexpr size_t kMaxRules = 20;
 constexpr size_t kMaxRuleChars = 240;
 
@@ -88,7 +86,7 @@ int followup_signal(const std::string& next_message) {
 
 void PromptPool::load() {
   std::map<int, PromptVersion> found;
-  for (auto& m : store_.recall("Saga system prompt version", kPromptNs, {.limit = 50, .recent = true})) {
+  for (auto& m : store_.recall("Saga system prompt version", scope_ + ":prompts", {.limit = 50, .recent = true})) {
     if (auto j = memwal::decode_record(m.text, "prompt")) {
       PromptVersion p;
       p.v = j->value("v", 0);
@@ -107,7 +105,7 @@ void PromptPool::load() {
   std::map<std::string, Credit> credit;
   // Rolling window of the most recent ratings: a non-stationary bandit, which suits a
   // harness whose users and models drift. Credit tags share the namespace.
-  for (auto& m : store_.recall("Saga prompt score rating", kScoreNs, {.limit = 200, .recent = true})) {
+  for (auto& m : store_.recall("Saga prompt score rating", scope_ + ":scores", {.limit = 200, .recent = true})) {
     if (auto j = memwal::decode_record(m.text, "score")) {
       auto it = found.find(j->value("v", -1));
       if (it != found.end()) (j->value("r", 0) > 0 ? it->second.wins : it->second.losses)++;
@@ -134,7 +132,7 @@ void PromptPool::load() {
 void PromptPool::persist(const PromptVersion& p) {
   json rules = json::array();
   for (auto& r : p.rules) rules.push_back({{"id", r.id}, {"text", r.text}});
-  store_.put(kPromptNs, "prompt",
+  store_.put(scope_ + ":prompts", "prompt",
              memwal::encode_record("prompt", {{"v", p.v}, {"parent", p.parent}, {"base", p.base}, {"rules", rules},
                                               {"why", p.why}, {"status", p.status}, {"eval", p.eval}}));
 }
@@ -176,7 +174,7 @@ void PromptPool::score(int v, int rating, bool implicit) {
     if (it == versions_.end()) return;
     (rating > 0 ? it->second.wins : it->second.losses)++;
   }
-  store_.put(kScoreNs, "score",
+  store_.put(scope_ + ":scores", "score",
              memwal::encode_record("score", {{"v", v}, {"r", rating > 0 ? 1 : -1}, {"src", implicit ? "implicit" : "user"}}));
 }
 
@@ -187,7 +185,7 @@ void PromptPool::credit(const std::string& id, bool helpful) {
     auto& c = credit_[id];
     (helpful ? c.helpful : c.harmful)++;
   }
-  store_.put(kScoreNs, "credit", memwal::encode_record("credit", {{"id", id}, {"helpful", helpful}}));
+  store_.put(scope_ + ":scores", "credit", memwal::encode_record("credit", {{"id", id}, {"helpful", helpful}}));
 }
 
 Credit PromptPool::credit_of(const std::string& id) const {
@@ -198,7 +196,10 @@ Credit PromptPool::credit_of(const std::string& id) const {
 
 void PromptPool::add_critique(const std::string& c) {
   std::lock_guard lk(mu_);
-  if (!c.empty()) critiques_.push_back(c);
+  if (!c.empty()) {
+    if (critiques_.size() >= 32) critiques_.erase(critiques_.begin());
+    critiques_.push_back(c.substr(0, 8192));
+  }
 }
 
 size_t PromptPool::pending_critiques() const {
@@ -222,6 +223,7 @@ json PromptPool::evolve(agents::Agent& brain, const std::vector<ReplayCase>& cas
   auto requeue = [&] {
     std::lock_guard lk(mu_);
     critiques_.insert(critiques_.begin(), crit.begin(), crit.end());
+    if (critiques_.size() > 32) critiques_.erase(critiques_.begin(), critiques_.end() - 32);
   };
 
   // Rules that keep hurting are dropped before the brain sees the playbook.
@@ -270,8 +272,7 @@ json PromptPool::evolve(agents::Agent& brain, const std::vector<ReplayCase>& cas
   child.prompt = render_prompt(child.base, child.rules);
   if (child.prompt == parent.prompt) return {{"error", "no change proposed"}};
 
-  // The gate: replay rated turns under both versions; the child must not lose. The playbook is shared
-  // by every user, so an edit nobody could test never goes live.
+  // Replay the owner's rated turns under both versions; an untested edit never goes live.
   if (cases.empty()) {
     requeue();
     return {{"error", "no rated turns to replay yet"}};

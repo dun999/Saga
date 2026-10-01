@@ -1,4 +1,5 @@
 #include "harness/harness.h"
+#include "core/http.h"
 #include "memwal/redact.h"
 
 #include <fcntl.h>
@@ -51,8 +52,6 @@ std::string clip(const std::string& s, size_t n) {
   return s.substr(0, cut) + "…";
 }
 
-constexpr const char* kSkillsNs = "harness:skills";
-constexpr const char* kImprovementsNs = "harness:improvements";
 constexpr size_t kCheckpointBudget = 40'000;  // bytes of file content per checkpoint blob
 constexpr size_t kCheckpointFileMax = 16'000;
 
@@ -156,7 +155,9 @@ bool write_in_workspace(const std::string& root, const std::string& rel, const s
 }
 
 std::string ns_user(const std::string& uid, const char* what) { return "u:" + uid + ":" + what; }
-std::string ns_lessons(const std::string& agent) { return "agent:" + agent + ":lessons"; }
+std::string ns_lessons(const std::string& agent, const std::string& uid) {
+  return ns_user(uid, "lessons") + ":" + agent;
+}
 
 // Injected into every agent's context: what Saga's memory is and how to use it.
 std::string memory_protocol(const std::string& uid, const std::string& agent, bool can_run_shell,
@@ -170,8 +171,9 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
       "- " + ns_user(uid, "episodes") + " — summaries of past turns\n"
       "- " + ns_user(uid, "chat") + " — full chat transcripts\n"
       "- " + ns_user(uid, "checkpoints") + " — snapshots of files you change (restorable)\n"
-      "- " + ns_lessons(agent) + " — lessons learned about how you should work\n"
-      "- harness:skills, harness:prompts, harness:improvements — how Saga improves itself\n"
+      "- " + ns_lessons(agent, uid) + " — lessons learned about how you should work\n"
+      "- " + ns_user(uid, "skills") + ", " + ns_user(uid, "learning") + ":prompts, " +
+      ns_user(uid, "improvements") + " — how Saga improves for this user\n"
       "- task:<turn> — the blackboard shared with teammates this turn\n"
       "Transcripts, checkpoints and episodes are saved automatically; you never need to save your own output.\n"
       "Never put a secret in memory: no passwords, API keys, tokens, private keys, seed phrases or anything that "
@@ -193,7 +195,27 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
 }
 
 Harness::Harness(agents::Registry& reg, memwal::Store& store, Options opt)
-    : reg_(reg), store_(store), opt_(std::move(opt)), prompts_(store) {}
+    : reg_(reg), store_(store), opt_(std::move(opt)) {}
+
+Harness::Learning& Harness::learning_for(const std::string& uid) {
+  Learning* learning;
+  {
+    std::lock_guard lk(learning_mu_);
+    auto& slot = learning_[uid];
+    if (!slot) slot = std::make_unique<Learning>(store_, uid);
+    learning = slot.get();
+  }
+  std::call_once(learning->loaded, [&] {
+    if (store_.enabled())
+      for (const char* suffix : {":prompts", ":scores"}) {
+        try { store_.client()->restore(ns_user(uid, "learning") + suffix, 50); } catch (...) {}
+      }
+    learning->pool.load();
+  });
+  return *learning;
+}
+
+PromptPool& Harness::prompts(const std::string& uid) { return learning_for(uid).pool; }
 
 Harness::~Harness() {
   // Background work can queue more of it (reflection → evolution), so drain until nothing is left.
@@ -275,27 +297,7 @@ void Harness::boot(const Emit& log) {
     for (auto it = fs::directory_iterator(opt_.homes_dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
       if (fs::is_directory(fs::symlink_status(it->path(), ec))) sandbox::scrub_home(it->path().string());
   }
-  if (store_.enabled()) {
-    // The relayer's vector index is a cache; Walrus is the source of truth. Rebuild anything missing
-    // for the namespaces every turn depends on.
-    std::vector<std::string> hot = {"harness:prompts", "harness:scores", kSkillsNs};
-    for (auto* a : reg_.all()) hot.push_back(ns_lessons(a->name()));
-    std::vector<std::future<void>> jobs;
-    for (auto& ns : hot) {
-      jobs.push_back(std::async(std::launch::async, [&, ns] {
-        try {
-          auto r = store_.client()->restore(ns, 50);
-          if (r.value("restored", 0) > 0) say("restored " + std::to_string(r.value("restored", 0)) + " from Walrus → " + ns);
-        } catch (const std::exception& e) {
-          say("restore " + ns + " skipped: " + clip(e.what(), 120));
-        }
-      }));
-    }
-    for (auto& j : jobs) j.get();
-  }
-  prompts_.load();
-  const auto s = prompts_.summary();
-  say("prompt population: " + std::to_string(s["versions"].size()) + " version(s)");
+  say("learning namespaces load privately for each user");
 }
 
 std::string Harness::build_context(Turn& t, const agents::Agent& agent, const std::string& instruction,
@@ -305,12 +307,12 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
                                    const Emit& emit) {
   (void)instruction;
   // A lesson that keeps hurting stays on Walrus but stops being used.
-  std::erase_if(lessons, [&](const memwal::Memory& m) { return prompts_.credit_of("lesson:" + m.blob_id).muted(); });
+  std::erase_if(lessons, [&](const memwal::Memory& m) { return prompts(t.uid).credit_of("lesson:" + m.blob_id).muted(); });
   if (lessons.size() > 4) lessons.resize(4);
   if (!lessons.empty() && emit)
-    emit({{"type", "recall"}, {"ns", ns_lessons(agent.name())}, {"items", memories_json(lessons)}});
+    emit({{"type", "recall"}, {"ns", ns_lessons(agent.name(), t.uid)}, {"items", memories_json(lessons)}});
 
-  const PromptVersion& pv = prompts_.get(t.prompt_version);
+  const PromptVersion& pv = prompts(t.uid).get(t.prompt_version);
   auto note = [&](const std::string& id, const std::string& text) {
     if (std::none_of(t.in_context.begin(), t.in_context.end(), [&](auto& x) { return x.first == id; }))
       t.in_context.push_back({id, text});
@@ -468,7 +470,7 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   t->message = message;
   t->workspace = workspace_for(uid, session);
   fs::create_directories(t->workspace);
-  t->prompt_version = prompts_.choose().v;
+  t->prompt_version = prompts(uid).choose().v;
   t->started = std::time(nullptr);
   // Implicit feedback: the next message often says how the last answer went ("no, that's wrong", "thanks").
   if (auto prev = last_turn(uid, session); prev && prev->done)
@@ -493,11 +495,11 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   // while the previous agent is still working), so they overlap instead of queueing one after another.
   auto facts_r = recall_async(message, ns_user(uid, "facts"), {.limit = 10, .max_distance = 0.75, .recency_weight = 0.2});
   auto episodes_r = recall_async(message, ns_user(uid, "episodes"), {.limit = 3, .max_distance = 0.7});
-  auto skills_r = recall_async(message, kSkillsNs, {.limit = 2, .max_distance = 0.55});
+  auto skills_r = recall_async(message, ns_user(uid, "skills"), {.limit = 2, .max_distance = 0.55});
   std::map<std::string, std::shared_ptr<PendingRecall>> lessons_r;
   auto want_lessons = [&](const std::string& agent, const std::string& instruction) {
     if (!lessons_r.contains(agent))
-      lessons_r[agent] = recall_async(instruction, ns_lessons(agent), {.limit = 6, .max_distance = 0.7});
+      lessons_r[agent] = recall_async(instruction, ns_lessons(agent, uid), {.limit = 6, .max_distance = 0.7});
   };
   auto await = [](const std::shared_ptr<PendingRecall>& r) {
     std::unique_lock lk(r->mu);
@@ -531,7 +533,7 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   if (emit) {
     if (!facts.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "facts")}, {"items", memories_json(facts)}});
     if (!episodes.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "episodes")}, {"items", memories_json(episodes)}});
-    if (!skills.empty()) emit({{"type", "recall"}, {"ns", kSkillsNs}, {"items", memories_json(skills)}});
+    if (!skills.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "skills")}, {"items", memories_json(skills)}});
   }
 
   t->steps.reserve(opt_.max_steps);
@@ -683,7 +685,7 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment) {
       const size_t i = label.size() > 1 ? std::strtoul(label.c_str() + 1, nullptr, 10) : 0;
       if (i == 0 || i > t.in_context.size() || !verdict.is_string()) continue;
       const bool helpful = verdict.get<std::string>() == "helpful";
-      prompts_.credit(t.in_context[i - 1].first, helpful);
+      prompts(t.uid).credit(t.in_context[i - 1].first, helpful);
       out["credit"].push_back({{"text", clip(t.in_context[i - 1].second, 160)}, {"helpful", helpful}});
     }
   for (auto& l : j->value("lessons", json::array())) {
@@ -692,31 +694,27 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment) {
     if (!reg_.find(agent, t.uid)) agent = reg_.primary()->name();
     const std::string lesson = l.value("lesson", "");
     if (lesson.empty()) continue;
-    store_.put(ns_lessons(agent), "lesson", "Lesson for @" + agent + " (" + today() + "): " + lesson, t.id, t.uid);
+    store_.put(ns_lessons(agent, t.uid), "lesson", "Lesson for @" + agent + " (" + today() + "): " + lesson, t.id, t.uid);
     out["lessons"].push_back({{"agent", agent}, {"lesson", lesson}});
   }
   if (rating > 0 && j->contains("skill") && (*j)["skill"].is_object()) {
     const json& sk = (*j)["skill"];
     const std::string text = "Skill \"" + sk.value("name", "unnamed") + "\" — use when: " + sk.value("when", "") +
                              ". How: " + sk.value("how", "");
-    store_.put(kSkillsNs, "skill", text, t.id, t.uid);
+    store_.put(ns_user(t.uid, "skills"), "skill", text, t.id, t.uid);
     out["skill"] = sk;
   }
   const std::string critique = j->value("critique", "");
   if (rating < 0 && !critique.empty()) {
-    prompts_.add_critique(critique);
-    {
-      std::lock_guard lk(mu_);
-      critics_.insert(t.uid);
-    }
+    prompts(t.uid).add_critique(critique);
     out["critique"] = critique;
-    if (static_cast<int>(prompts_.pending_critiques()) >= opt_.evolve_every) {
+    if (static_cast<int>(prompts(t.uid).pending_critiques()) >= opt_.evolve_every) {
       evolve_in_background(t.uid, t.vault);
       out["evolving"] = true;
     }
   }
   // The improvement itself is part of the record: what the harness learned, from which turn.
-  store_.put(kImprovementsNs, "improvement",
+  store_.put(ns_user(t.uid, "improvements"), "improvement",
              memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"uid", t.uid}, {"turn", t.id},
                                                    {"rating", rating}, {"comment", clip(comment, 300)}, {"result", out}}),
              t.id, t.uid);
@@ -745,7 +743,7 @@ json Harness::rate(const std::shared_ptr<Turn>& t, int rating, const std::string
     t->rating = rating;
     t->user_rated = !implicit;
   }
-  prompts_.score(t->prompt_version, rating, implicit);
+  prompts(t->uid).score(t->prompt_version, rating, implicit);
   // Every rated turn becomes a replay case: a new prompt version has to handle it at least as well.
   std::string memory, answer;
   for (size_t i = 0; i < t->recalled.size() && i < 8; ++i) memory += "- " + clip(t->recalled[i], 300) + "\n";
@@ -829,12 +827,12 @@ std::vector<ReplayCase> Harness::replay_cases(const std::string& uid) {
 json Harness::evolve_now(const std::string& uid, const std::vector<std::string>& critiques) {
   agents::Agent* brain = reg_.brain();
   if (!brain) return {{"error", "no brain configured"}};
-  for (auto& c : critiques) prompts_.add_critique(c);
+  for (auto& c : critiques) prompts(uid).add_critique(c);
   const auto cases = replay_cases(uid);
   const auto sb = sandbox_for(uid, "", {});
-  json r = prompts_.evolve(*brain, cases, sb ? &*sb : nullptr);
+  json r = prompts(uid).evolve(*brain, cases, sb ? &*sb : nullptr);
   if (!r.contains("error"))
-    store_.put(kImprovementsNs, "improvement",
+    store_.put(ns_user(uid, "improvements"), "improvement",
                memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"uid", uid}, {"rating", 0},
                                                      {"result", {{"evolved", r}}}}),
                "", uid);
@@ -843,43 +841,26 @@ json Harness::evolve_now(const std::string& uid, const std::vector<std::string>&
 }
 
 void Harness::evolve_in_background(const std::string& uid, const secrets::Key& vault) {
-  if (evolving_.exchange(true)) return;  // one evolution at a time; critiques keep queueing
+  Learning& learning = learning_for(uid);
+  if (learning.evolving.exchange(true)) return;
   std::lock_guard lk(mu_);
-  if (!spawn_locked([this, uid, vault] {
+  if (!spawn_locked([this, uid, vault, &learning] {
     struct Done {
       std::atomic<bool>& flag;
       ~Done() { flag = false; }
-    } done{evolving_};  // even if evolution throws, the next one may run
-    // The edit is tested on the rated turns of everyone whose critique it answers, so one user's
-    // complaints can't reshape the shared playbook against their own turns alone.
-    std::set<std::string> critics;
-    {
-      std::lock_guard lk(mu_);
-      critics.swap(critics_);
-    }
-    critics.insert(uid);
-    std::vector<ReplayCase> cases;
-    const size_t each = critics.size() > 1 ? 3 : 5;
-    for (auto& c : critics) {
-      auto mine = replay_cases(c);
-      for (size_t i = 0; i < mine.size() && i < each && cases.size() < 8; ++i) cases.push_back(std::move(mine[i]));
-    }
+    } done{learning.evolving};
+    const auto cases = replay_cases(uid);
     json r = {{"error", "no brain configured"}};
     if (agents::Agent* brain = reg_.brain()) {
       const auto sb = sandbox_for(uid, "", vault);
-      r = prompts_.evolve(*brain, cases, sb ? &*sb : nullptr);
-    }
-    if (r.contains("error")) {  // critiques were requeued; so are their authors
-      std::lock_guard lk(mu_);
-      critics_.insert(critics.begin(), critics.end());
+      r = learning.pool.evolve(*brain, cases, sb ? &*sb : nullptr);
     }
     if (!r.contains("error"))
-      store_.put(kImprovementsNs, "improvement",
+      store_.put(ns_user(uid, "improvements"), "improvement",
                  memwal::encode_record("improvement", {{"ts", std::time(nullptr)}, {"uid", uid}, {"rating", 0},
-                                                       {"result", {{"evolved", r}}}}),
-                 "", uid);
+                                                       {"result", {{"evolved", r}}}}), "", uid);
   }))
-    evolving_ = false;
+    learning.evolving = false;
 }
 
 bool Harness::cancel(const std::string& uid, const std::string& turn_id) {
@@ -894,21 +875,21 @@ json Harness::memory_view(const std::string& uid, const std::string& query) {
   const std::string q = query.empty() ? "what matters about this user and how Saga should behave" : query;
   json lessons = json::array();
   for (auto* a : reg_.visible(uid))
-    for (auto& m : store_.recall(q, ns_lessons(a->name()), {.limit = 5}))
+    for (auto& m : store_.recall(q, ns_lessons(a->name(), uid), {.limit = 5}))
       lessons.push_back({{"agent", a->name()}, {"text", m.text}, {"blob_id", m.blob_id}, {"distance", m.distance}});
   return {
       {"facts", memories_json(store_.recall(q, ns_user(uid, "facts"), {.limit = 20}))},
       {"episodes", memories_json(store_.recall(q, ns_user(uid, "episodes"), {.limit = 8, .recent = true}))},
       {"lessons", lessons},
-      {"skills", memories_json(store_.recall(q, kSkillsNs, {.limit = 8}))},
+      {"skills", memories_json(store_.recall(q, ns_user(uid, "skills"), {.limit = 8}))},
       {"improvements", [&] {
          json arr = json::array();
          // Improvements quote the user's own comments, so each user sees only the ones their turns caused.
-         for (auto& r : recall_records(kImprovementsNs, "improvement", "harness improvement lesson critique", 30))
+         for (auto& r : recall_records(ns_user(uid, "improvements"), "improvement", "harness improvement lesson critique", 30))
            if (r.value("uid", "") == uid && arr.size() < 15) arr.push_back(r);
          return arr;
        }()},
-      {"prompts", prompts_.summary()},
+      {"prompts", prompts(uid).summary()},
   };
 }
 
@@ -1192,6 +1173,7 @@ std::optional<sandbox::Sandbox> Harness::sandbox_for(const std::string& uid, con
   fs::permissions(sb.home, fs::perms::owner_all, fs::perm_options::replace);
   sb.workspace = workspace;
   sb.vault = vault;
+  sb.runner = opt_.saga_bin;
   const json cred = read_keys(opt_.keys_path).value(kCreds, json::object()).value(ring, json::object())
                         .value("claude", json::object());
   const std::string value = open_slot(cred.value("secret", json()), vault);
@@ -1507,8 +1489,8 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
   const std::string key = body.value("api_key", "");
   spec.key_hint = hint(key);
   if (spec.description.empty()) spec.description = spec.model + " via own API key";
-  if (!spec.base_url.starts_with("http://") && !spec.base_url.starts_with("https://"))
-    return {{"error", "base URL must start with http:// or https://"}};
+  if (!http::is_https_url(spec.base_url))
+    return {{"error", "remote API base URL must use HTTPS with no credentials, query or fragment"}};
   if (spec.model.empty()) return {{"error", "model is required"}};
   // A key is only kept sealed, under a wallet's vault.
   if (!key.empty() && !is_wallet(uid)) return kWalletOnly;

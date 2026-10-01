@@ -4,6 +4,7 @@
 #include "agents/agent.h"
 #include "core/env.h"
 #include "core/http.h"
+#include "memwal/redact.h"
 
 namespace saga::agents {
 namespace {
@@ -29,6 +30,11 @@ class OpenAIAgent : public Agent {
   }
 
   Result run(const Task& task, const EventFn& on_event) override {
+    if (spec_.public_only && !http::is_https_url(spec_.base_url)) {
+      Result refused;
+      refused.error = "remote provider requires an HTTPS base URL";
+      return refused;
+    }
     const auto t0 = std::chrono::steady_clock::now();
     json messages = json::array();
     if (!task.system.empty()) messages.push_back({{"role", "system"}, {"content", task.system}});
@@ -45,6 +51,10 @@ class OpenAIAgent : public Agent {
         "POST", spec_.base_url + "/chat/completions", h, body.dump(), task.timeout_s,
         [&](std::string_view chunk) {
           if (task.cancel && task.cancel->load()) return false;
+          if (chunk.size() > 1024 * 1024 - std::min<size_t>(pending.size(), 1024 * 1024)) {
+            r.error = "provider stream line exceeded its byte limit";
+            return false;
+          }
           pending.append(chunk);
           for (size_t nl; (nl = pending.find('\n')) != std::string::npos;) {
             std::string line = pending.substr(0, nl);
@@ -52,6 +62,10 @@ class OpenAIAgent : public Agent {
             if (!line.starts_with("data:")) continue;
             line.erase(0, 5);
             if (line.find("[DONE]") != std::string::npos) continue;
+            if (memwal::json_nesting(line) > memwal::kMaxJsonDepth) {
+              r.error = "provider response exceeded its JSON depth limit";
+              return false;
+            }
             auto j = json::parse(line, nullptr, false);
             if (j.is_discarded() || !j.contains("choices") || j["choices"].empty()) continue;
             const json d = j["choices"][0].value("delta", json::object());
@@ -65,7 +79,7 @@ class OpenAIAgent : public Agent {
         },
         spec_.public_only);
     r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    if (!resp.ok() && r.text.empty()) {
+    if (!resp.ok() && r.error.empty()) {
       r.error = resp.error.empty() ? "HTTP " + std::to_string(resp.status) + ": " + resp.body.substr(0, 300)
                                    : resp.error;
     }

@@ -58,7 +58,8 @@ int followup_signal(const std::string& next_message);
 
 class PromptPool {
  public:
-  explicit PromptPool(memwal::Store& store) : store_(store) {}
+  explicit PromptPool(memwal::Store& store, std::string scope = "harness")
+      : store_(store), scope_(std::move(scope)) {}
 
   void load();                        // pull versions, scores and credit from Walrus
   const PromptVersion& choose();      // Thompson sample over live versions
@@ -81,6 +82,7 @@ class PromptPool {
   void persist(const PromptVersion& p);
 
   memwal::Store& store_;
+  const std::string scope_;
   mutable std::mutex mu_;
   std::map<int, PromptVersion> versions_;
   std::map<std::string, Credit> credit_;

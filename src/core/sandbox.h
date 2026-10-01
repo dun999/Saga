@@ -1,11 +1,9 @@
 #pragma once
 // Per-user isolation for agent CLIs on a shared host (bubblewrap).
 //
-// Inside the sandbox the filesystem is the host's, read-only, with the operator's home, Saga's own
-// data (workspaces, other users' agent homes, API keys, .env) hidden behind empty tmpfs mounts. The
-// user's agent home is mounted at /mnt/home and the chat workspace at /mnt/work — the only writable
-// places. The environment is cleared; only PATH/HOME/locale and that user's provider credentials
-// are set. Network stays on (agents need their providers).
+// Mount only system binaries/libraries/certificates and this user's home/workspace. Isolate the
+// network namespace; provider HTTPS goes through a broker that checks each actual public peer.
+// The environment is cleared and credentials belong to this user only.
 #include <cstdint>
 
 #include "core/proc.h"
@@ -20,6 +18,7 @@ struct Sandbox {
   std::string workspace;  // host path of the chat workspace → /mnt/work
   std::map<std::string, std::string> env;  // provider credentials (e.g. CLAUDE_CODE_OAUTH_TOKEN)
   std::vector<uint8_t> vault;              // the user's vault key for this request (never stored)
+  std::string runner;                     // trusted Saga binary for the in-namespace proxy launcher
 };
 
 constexpr const char* kHome = "/mnt/home";
@@ -52,8 +51,11 @@ void scrub_home(const std::string& home);
 bool has_login(const Sandbox& sb, const std::string& rel);
 
 bool available();  // bubblewrap is installed
+void verify(const std::string& runner);  // fail at startup if namespaces or the broker cannot run
 // Paths no sandboxed process may see (operator home, Saga data dirs, key files…).
 void set_hidden(std::vector<std::string> paths);
+// Public serving requires an empty delegated cgroup v2 subtree with cpu/memory/pids controllers.
+void set_cgroup_root(const std::string& path);
 // Wrap `argv` (argv[0] is a command on PATH) so it runs inside `sb`.
 std::vector<std::string> wrap(const Sandbox& sb, const std::vector<std::string>& argv);
 // The sandbox's whole environment. It is given to bwrap as its own environment, not as --setenv

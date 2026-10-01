@@ -1,4 +1,5 @@
 #include "web/server.h"
+#include "web/event_queue.h"
 
 #include <httplib.h>
 
@@ -105,7 +106,7 @@ bool visible_to(const memwal::WriteRecord& r, const std::string& uid) {
 
 int serve(harness::Harness& h, const ServerOptions& opt) {
   httplib::Server svr;
-  svr.new_task_queue = [n = std::max(opt.threads, 8)] { return new httplib::ThreadPool(n); };
+  svr.new_task_queue = [n = std::max(opt.threads, 8)] { return new httplib::ThreadPool(n, n, 256); };
   svr.set_payload_max_length(kMaxHttpBody);
   auto hub = std::make_shared<Hub>();
   auto feeds = std::make_shared<Slots>(), chats = std::make_shared<Slots>();
@@ -481,18 +482,29 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     struct Stream {
       std::mutex mu;
       std::condition_variable cv;
-      std::deque<std::string> lines;
+      EventQueue lines;
       bool done = false;
+      bool overflow = false;
       std::string turn_id;
     };
     auto st = std::make_shared<Stream>();
     const secrets::Key vault = vault_of(req);
     std::thread([&h, st, uid, session, msg, vault, chats] {
-      auto emit = [st](const json& e) {
-        std::lock_guard lk(st->mu);
-        if (e.value("type", "") == "turn") st->turn_id = e.value("turn_id", "");
-        st->lines.push_back(e.dump() + "\n");
-        st->cv.notify_all();
+      auto emit = [&h, st, uid](const json& e) {
+        std::string cancel;
+        {
+          std::lock_guard lk(st->mu);
+          if (st->overflow) return;
+          if (e.value("type", "") == "turn") st->turn_id = e.value("turn_id", "");
+          if (!st->lines.push(e.dump() + "\n")) {
+            st->overflow = true;
+            st->lines.clear();
+            st->lines.push("{\"type\":\"error\",\"text\":\"Browser stream exceeded its buffer limit\"}\n");
+            cancel = st->turn_id;
+          }
+          st->cv.notify_all();
+        }
+        if (!cancel.empty()) h.cancel(uid, cancel);
       };
       try {
         h.chat(uid, session, msg, emit, vault);
@@ -511,17 +523,21 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
       std::unique_lock lk(st->mu);
       st->cv.wait_for(lk, std::chrono::seconds(15), [&] { return st->done || !st->lines.empty(); });
       if (st->lines.empty() && !st->done) {
+        const std::string turn = st->turn_id;
         lk.unlock();
         const std::string ping = "{\"type\":\"ping\"}\n";
-        if (!sink.write(ping.data(), ping.size()) && !st->turn_id.empty()) h.cancel(uid, st->turn_id);
+        if (!sink.write(ping.data(), ping.size())) {
+          if (!turn.empty()) h.cancel(uid, turn);
+          return false;
+        }
         return true;
       }
       while (!st->lines.empty()) {
-        std::string line = std::move(st->lines.front());
-        st->lines.pop_front();
+        std::string line = st->lines.pop();
+        const std::string turn = st->turn_id;
         lk.unlock();
         if (!sink.write(line.data(), line.size())) {  // browser went away → stop the agents
-          if (!st->turn_id.empty()) h.cancel(uid, st->turn_id);
+          if (!turn.empty()) h.cancel(uid, turn);
           return false;
         }
         lk.lock();

@@ -4,9 +4,11 @@
 #include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <chrono>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -39,9 +41,11 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
   (void)sigpipe_ignored;
   Result res;
   if (argv.empty()) return res;
-  int out_p[2], err_p[2], in_p[2];
-  if (pipe2(out_p, O_CLOEXEC) || pipe2(err_p, O_CLOEXEC) || pipe2(in_p, O_CLOEXEC)) {
+  int out_p[2]{-1,-1}, err_p[2]{-1,-1}, in_p[2]{-1,-1}, start_p[2]{-1,-1};
+  if (pipe2(out_p, O_CLOEXEC) || pipe2(err_p, O_CLOEXEC) || pipe2(in_p, O_CLOEXEC) || pipe2(start_p, O_CLOEXEC)) {
     res.err = std::strerror(errno);
+    for (int fd : {out_p[0], out_p[1], err_p[0], err_p[1], in_p[0], in_p[1], start_p[0], start_p[1]})
+      if (fd >= 0) close(fd);
     return res;
   }
 
@@ -67,23 +71,46 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
   const pid_t pid = fork();
   if (pid == 0) {
     setpgid(0, 0);  // own process group so we can kill the whole tree
+    close(start_p[1]);
+    char ready = 0;
+    ssize_t n;
+    do { n = read(start_p[0], &ready, 1); } while (n < 0 && errno == EINTR);
+    if (n != 1 || ready != 1) _exit(126);
+    close(start_p[0]);
     dup2(in_p[0], 0);
     dup2(out_p[1], 1);
     dup2(opt.merge_stderr ? out_p[1] : err_p[1], 2);
     if (!opt.cwd.empty() && chdir(opt.cwd.c_str()) != 0) _exit(126);
+    // Concurrent web requests may have private files/sockets open without CLOEXEC. Only stdio
+    // belongs to this child; do not let those descriptors bypass filesystem/network isolation.
+    if (::syscall(SYS_close_range, 3u, ~0u, 0u) < 0) _exit(126);
     execvpe(args[0], args.data(), envp.data());
     _exit(127);
   }
   close(in_p[0]);
   close(out_p[1]);
   close(err_p[1]);
+  close(start_p[0]);
   if (pid < 0) {
     res.err = std::strerror(errno);
     close(in_p[1]);
     close(out_p[0]);
     close(err_p[0]);
+    close(start_p[1]);
     return res;
   }
+  ::setpgid(pid, pid);  // establish cancellation's target even before the child gets scheduled
+  bool ready = true;
+  if (!opt.cgroup_procs.empty()) {
+    const int fd = ::open(opt.cgroup_procs.c_str(), O_WRONLY | O_CLOEXEC);
+    const std::string value = std::to_string(pid) + "\n";
+    ready = fd >= 0 && ::write(fd, value.data(), value.size()) == static_cast<ssize_t>(value.size());
+    if (fd >= 0) ::close(fd);
+    if (!ready) res.err = "cannot apply agent resource limits";
+  }
+  const char start = ready ? 1 : 0;
+  [[maybe_unused]] const ssize_t started = write(start_p[1], &start, 1);
+  close(start_p[1]);
   // stdin is fed from the same loop as the output, non-blocking, so a child that never reads its
   // prompt still hits the deadline and cancel instead of stalling us in write().
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(opt.timeout_s);
@@ -99,10 +126,18 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
   pollfd fds[3] = {{out_p[0], POLLIN, 0}, {err_p[0], POLLIN, 0}, {in_fd, POLLOUT, 0}};
   int open_fds = 2;
   char buf[8192];
-  while (open_fds > 0) {
+  int status = 0;
+  bool reaped = false;
+  size_t output_bytes = 0;
+  while (open_fds > 0 || !reaped) {
+    if (!reaped) {
+      const pid_t done = waitpid(pid, &status, WNOHANG);
+      if (done == pid || (done < 0 && errno == ECHILD)) reaped = true;
+    }
+    if (reaped && open_fds == 0) break;
     if (std::chrono::steady_clock::now() > deadline) res.timed_out = true;
     if (opt.cancel && opt.cancel->load()) res.cancelled = true;
-    if (res.timed_out || res.cancelled) {
+    if (res.timed_out || res.cancelled || res.output_limited) {
       kill(-pid, SIGTERM);
       usleep(300'000);
       kill(-pid, SIGKILL);
@@ -121,30 +156,44 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
       if (fds[i].fd < 0 || !(fds[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
       ssize_t n = read(fds[i].fd, buf, sizeof buf);
       if (n <= 0) {
+        if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
         close(fds[i].fd);
         fds[i].fd = -1;
         --open_fds;
         continue;
       }
+      const size_t len = static_cast<size_t>(n);
+      if (len > opt.max_output_bytes - std::min(output_bytes, opt.max_output_bytes)) {
+        res.output_limited = true;
+        break;
+      }
+      output_bytes += len;
       if (i == 1) {
         res.err.append(buf, static_cast<size_t>(n));
         continue;
       }
       res.out.append(buf, static_cast<size_t>(n));
-      line_buf.append(buf, static_cast<size_t>(n));
+      if (!opt.on_stdout_line) continue;
+      line_buf.append(buf, len);
       for (size_t nl; (nl = line_buf.find('\n')) != std::string::npos;) {
+        if (nl > opt.max_line_bytes) { res.output_limited = true; break; }
         std::string line = line_buf.substr(0, nl);
         line_buf.erase(0, nl + 1);
-        if (opt.on_stdout_line) opt.on_stdout_line(line);
+        try { opt.on_stdout_line(line); }
+        catch (...) { res.output_limited = true; break; }
       }
+      if (line_buf.size() > opt.max_line_bytes) res.output_limited = true;
+      if (res.output_limited) break;
     }
   }
-  if (!line_buf.empty() && opt.on_stdout_line) opt.on_stdout_line(line_buf);
+  if (!line_buf.empty() && opt.on_stdout_line && !res.output_limited && !res.timed_out && !res.cancelled) {
+    try { opt.on_stdout_line(line_buf); }
+    catch (...) { res.output_limited = true; kill(-pid, SIGKILL); }
+  }
   for (auto& f : fds)
     if (f.fd >= 0) close(f.fd);  // includes stdin if the child exited without reading it all
 
-  int status = 0;
-  waitpid(pid, &status, 0);
+  if (!reaped) while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
   res.exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
   return res;
 }

@@ -75,7 +75,7 @@ struct Turn {
 
 // Namespace scheme, shared with `saga mem` and the web API.
 std::string ns_user(const std::string& uid, const char* what);
-std::string ns_lessons(const std::string& agent);
+std::string ns_lessons(const std::string& agent, const std::string& uid);
 // Write one restored checkpoint file under `root` without following links; false = refused.
 bool write_in_workspace(const std::string& root, const std::string& rel, const std::string& content);
 std::string memory_protocol(const std::string& uid, const std::string& agent, bool can_run_shell,
@@ -143,7 +143,7 @@ class Harness {
   bool user_accounts() const { return opt_.user_accounts; }
   agents::Registry& registry() { return reg_; }
   memwal::Store& store() { return store_; }
-  PromptPool& prompts() { return prompts_; }
+  PromptPool& prompts(const std::string& uid);
 
  private:
   std::string build_context(Turn& t, const agents::Agent& agent, const std::string& instruction,
@@ -183,7 +183,15 @@ class Harness {
   agents::Registry& reg_;
   memwal::Store& store_;
   Options opt_;
-  PromptPool prompts_;
+  struct Learning {
+    PromptPool pool;
+    std::once_flag loaded;
+    std::atomic<bool> evolving{false};
+    Learning(memwal::Store& store, const std::string& uid) : pool(store, ns_user(uid, "learning")) {}
+  };
+  Learning& learning_for(const std::string& uid);
+  std::mutex learning_mu_;
+  std::map<std::string, std::unique_ptr<Learning>> learning_;
   mutable std::mutex mu_;
   std::map<std::string, std::shared_ptr<Turn>> turns_;  // this process only; Walrus is the record
   void prune_turns();  // caller holds mu_
@@ -201,8 +209,6 @@ class Harness {
   int operator_runs_ = 0;
   std::vector<std::future<void>> recalls_;  // in-flight memory reads (pruned as they finish)
   std::map<std::string, std::vector<std::string>> session_turns_;  // "<uid>/<session>" → turn ids, in order
-  std::atomic<bool> evolving_{false};
-  std::set<std::string> critics_;  // users whose critiques are waiting for the next evolution
 
   struct Usage {
     std::string day;

@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <unistd.h>
+#include <fcntl.h>
 
 namespace saga::http {
 namespace {
@@ -16,6 +18,8 @@ struct Ctx {
   Response* resp;
   const ChunkFn* on_chunk;
   std::string blocked;  // the non-public address a public_only request tried to reach
+  size_t limit, received = 0, header_bytes = 0;
+  std::string error;
 };
 
 // Runs before every connect (redirects and happy-eyeballs attempts included), so a refused address
@@ -45,15 +49,27 @@ bool public_v4(const uint8_t* a) {
 size_t on_body(char* p, size_t sz, size_t n, void* ud) {
   auto* ctx = static_cast<Ctx*>(ud);
   const size_t len = sz * n;
+  if (len > ctx->limit - std::min(ctx->received, ctx->limit)) {
+    ctx->error = "HTTP response exceeded its byte limit";
+    return 0;
+  }
+  ctx->received += len;
   if (ctx->on_chunk && *ctx->on_chunk) {
-    if (!(*ctx->on_chunk)(std::string_view(p, len))) return 0;
+    try { if (!(*ctx->on_chunk)(std::string_view(p, len))) return 0; }
+    catch (...) { ctx->error = "HTTP stream exceeded its limit or was rejected"; return 0; }
   }
   ctx->resp->body.append(p, len);
   return len;
 }
 
 size_t on_header(char* p, size_t sz, size_t n, void* ud) {
-  auto* resp = static_cast<Response*>(ud);
+  auto* ctx = static_cast<Ctx*>(ud);
+  auto* resp = ctx->resp;
+  if (sz * n > 64 * 1024 - std::min<size_t>(ctx->header_bytes, 64 * 1024)) {
+    ctx->error = "HTTP headers exceeded their byte limit";
+    return 0;
+  }
+  ctx->header_bytes += sz * n;
   std::string line(p, sz * n);
   const auto colon = line.find(':');
   if (colon != std::string::npos) {
@@ -87,8 +103,54 @@ bool is_public_address(const std::string& ip) {
   return true;
 }
 
+bool is_https_url(const std::string& url) {
+  if (!url.starts_with("https://")) return false;
+  CURLU* u = curl_url();
+  if (!u) return false;
+  bool ok = curl_url_set(u, CURLUPART_URL, url.c_str(), 0) == CURLUE_OK;
+  char* value = nullptr;
+  if (ok) {
+    ok = curl_url_get(u, CURLUPART_HOST, &value, 0) == CURLUE_OK && value && *value;
+    curl_free(value);
+  }
+  for (auto part : {CURLUPART_USER, CURLUPART_PASSWORD, CURLUPART_QUERY, CURLUPART_FRAGMENT}) {
+    value = nullptr;
+    if (curl_url_get(u, part, &value, 0) == CURLUE_OK) ok = false;
+    curl_free(value);
+  }
+  curl_url_cleanup(u);
+  return ok;
+}
+
+int connect_public(const std::string& host, int port) {
+  if (port != 443 || host.empty() || host.size() > 255 ||
+      host.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:[]") != std::string::npos)
+    return -1;
+  static GlobalInit g;
+  CURL* c = curl_easy_init();
+  if (!c) return -1;
+  Response response;
+  Ctx ctx{&response, nullptr, "", 0};
+  const std::string url = "http://" + host + ":" + std::to_string(port);
+  curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(c, CURLOPT_CONNECT_ONLY, 1L);
+  curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(c, CURLOPT_TIMEOUT, 10L);
+  curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
+  curl_easy_setopt(c, CURLOPT_NOPROXY, "*");
+  curl_easy_setopt(c, CURLOPT_PROTOCOLS_STR, "http");
+  curl_easy_setopt(c, CURLOPT_OPENSOCKETFUNCTION, open_public);
+  curl_easy_setopt(c, CURLOPT_OPENSOCKETDATA, &ctx);
+  curl_socket_t socket = CURL_SOCKET_BAD;
+  if (curl_easy_perform(c) == CURLE_OK) curl_easy_getinfo(c, CURLINFO_ACTIVESOCKET, &socket);
+  const int fd = socket == CURL_SOCKET_BAD ? -1 : ::fcntl(socket, F_DUPFD_CLOEXEC, 3);
+  curl_easy_cleanup(c);
+  return fd;
+}
+
 Response request(const std::string& method, const std::string& url, const Headers& headers,
-                 const std::string& body, long timeout_s, const ChunkFn& on_chunk, bool public_only) {
+                 const std::string& body, long timeout_s, const ChunkFn& on_chunk, bool public_only,
+                 size_t max_response_bytes) {
   static GlobalInit g;
   Response resp;
   CURL* c = curl_easy_init();
@@ -96,7 +158,7 @@ Response request(const std::string& method, const std::string& url, const Header
     resp.error = "curl_easy_init failed";
     return resp;
   }
-  Ctx ctx{&resp, &on_chunk, ""};
+  Ctx ctx{&resp, &on_chunk, "", max_response_bytes};
   curl_slist* hl = nullptr;
   for (const auto& [k, v] : headers) hl = curl_slist_append(hl, (k + ": " + v).c_str());
 
@@ -106,7 +168,7 @@ Response request(const std::string& method, const std::string& url, const Header
   curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, on_body);
   curl_easy_setopt(c, CURLOPT_WRITEDATA, &ctx);
   curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, on_header);
-  curl_easy_setopt(c, CURLOPT_HEADERDATA, &resp);
+  curl_easy_setopt(c, CURLOPT_HEADERDATA, &ctx);
   curl_easy_setopt(c, CURLOPT_TIMEOUT, timeout_s);
   curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
   curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
@@ -125,6 +187,7 @@ Response request(const std::string& method, const std::string& url, const Header
 
   const CURLcode rc = curl_easy_perform(c);
   if (rc != CURLE_OK) resp.error = curl_easy_strerror(rc);
+  if (!ctx.error.empty()) resp.error = ctx.error;
   if (!ctx.blocked.empty()) resp.error = "refused: " + ctx.blocked + " is not a public address";
   curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &resp.status);
   curl_slist_free_all(hl);

@@ -372,7 +372,7 @@ TEST_CASE("an owned agent is public-only even when the caller asked otherwise") 
   s.name = "localmodel";
   s.kind = "openai";
   s.owner = "alice";
-  s.base_url = "http://127.0.0.1:9";
+  s.base_url = "https://127.0.0.1:9";
   s.api_key = "test-key";
   s.public_only = false;
   REQUIRE(reg.add(s).empty());
