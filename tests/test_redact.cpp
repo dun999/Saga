@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <thread>
+#include <atomic>
 
 #include <httplib.h>
 
@@ -161,7 +162,14 @@ TEST_CASE("an oversized memory is not queued") {
   cfg.server_url = "http://127.0.0.1:" + std::to_string(port);
   {
     saga::memwal::Client client(cfg);
+    std::atomic<bool> redacted{false}, leaked{false};
     saga::memwal::Store store(&client, true);
+    // recent() can omit a write while the worker moves it from the queue to its submission batch.
+    // put() notifies synchronously with the prepared text, so observe that boundary directly.
+    store.add_listener([&](const saga::memwal::WriteRecord& r) {
+      if (r.text.find("hunter2") != std::string::npos) leaked = true;
+      if (r.text.find(kRedacted) != std::string::npos) redacted = true;
+    });
     store.put("u:alice:facts", "fact", std::string(300000, 'q') + " sk-ant-abcdefghijklmnopqrstuvwxyz");
     const auto huge = store.recent(10);
     REQUIRE_FALSE(huge.empty());
@@ -171,10 +179,8 @@ TEST_CASE("an oversized memory is not queued") {
     CHECK(huge.back().error.find("256") != std::string::npos);
 
     store.put("u:alice:facts", "fact", "my password is hunter2!!");
-    bool redacted = false;
-    for (auto& r : store.recent(10))
-      if (r.text.find("hunter2") == std::string::npos && r.text.find(kRedacted) != std::string::npos) redacted = true;
-    CHECK(redacted);
+    CHECK(redacted.load());
+    CHECK_FALSE(leaked.load());
   }  // the worker finishes against a live 400, which is not retried
 
   svr.stop();
