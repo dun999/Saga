@@ -40,10 +40,14 @@ find_package(Threads REQUIRED)
 
 # Embed the web pages into the binary so `saga serve` is a single file.
 function(saga_embed NAME SRC)
+  set(NAMESPACE saga::web)
+  if(ARGC GREATER 2)
+    set(NAMESPACE ${ARGV2})
+  endif()
   set(OUT ${CMAKE_BINARY_DIR}/embedded_${NAME}.cpp)
   add_custom_command(
     OUTPUT ${OUT}
-    COMMAND ${CMAKE_COMMAND} -DIN=${SRC} -DOUT=${OUT} -DNAME=${NAME} -P ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
+    COMMAND ${CMAKE_COMMAND} -DIN=${SRC} -DOUT=${OUT} -DNAME=${NAME} -DNAMESPACE=${NAMESPACE} -P ${CMAKE_SOURCE_DIR}/cmake/embed.cmake
     DEPENDS ${SRC} ${CMAKE_SOURCE_DIR}/cmake/embed.cmake)
   set(SAGA_EMBEDDED ${SAGA_EMBEDDED} ${OUT} PARENT_SCOPE)
 endfunction()
@@ -53,6 +57,7 @@ saga_embed(kPrivacyHtml ${CMAKE_SOURCE_DIR}/src/web/static/privacy.html)
 saga_embed(kMascotJs ${CMAKE_SOURCE_DIR}/src/web/static/mascot.js)
 saga_embed(kBrandJs ${CMAKE_SOURCE_DIR}/src/web/static/brand.js)
 saga_embed(kLogoPng ${CMAKE_SOURCE_DIR}/src/web/static/saga-logo.png)
+saga_embed(kSeedPrompt ${CMAKE_SOURCE_DIR}/PROMPT.md saga::harness)
 
 file(GLOB_RECURSE SAGA_LIB_SOURCES CONFIGURE_DEPENDS src/*.cpp)
 list(FILTER SAGA_LIB_SOURCES EXCLUDE REGEX ".*/src/main\\.cpp$")

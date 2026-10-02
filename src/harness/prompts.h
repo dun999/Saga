@@ -14,6 +14,7 @@
 #include <mutex>
 #include <random>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "agents/agent.h"
@@ -28,10 +29,11 @@ struct Rule {
 struct PromptVersion {
   int v = 0;
   int parent = -1;
+  int foundation = 1;       // 1 = legacy; 2 = Markov-derived foundation
   std::string base;         // fixed part (the seed prompt, or a legacy full rewrite)
   std::vector<Rule> rules;  // the playbook
   std::string why;
-  std::string status = "live";          // live | rejected (lost its replay)
+  std::string status = "live";          // live | rejected | superseded (older foundation)
   nlohmann::json eval = nullptr;        // {wins, losses, ties, cases} of the child vs its parent
   int wins = 0, losses = 0;             // live ratings (Thompson sampling)
   std::string prompt;                   // base + playbook, rendered
@@ -48,7 +50,9 @@ struct ReplayCase {
   int rating = 0;
 };
 
-extern const char* kSeedPrompt;
+// PROMPT.md is embedded at build time. Bump the revision when changing the foundation.
+inline constexpr int kFoundationRevision = 2;
+extern const std::string_view kSeedPrompt;
 
 std::string render_prompt(const std::string& base, const std::vector<Rule>& rules);
 // Applies [{"op":"add"|"edit"|"remove","id":..,"text":..}]; new rules get ids from next_id.

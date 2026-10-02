@@ -1248,9 +1248,10 @@ async function refreshChats() {
     : `<div class="empty">No chats on Walrus yet.</div>`;
   $("#chats").querySelectorAll(".item").forEach(el => el.onclick = () => openChat(el.dataset.s));
 }
-// The newest version that passed its replay (rejected children never serve a turn).
-const liveVersion = p => Math.max(...p.versions.filter(v => v.status !== "rejected").map(v => v.v));
+// Only active versions serve turns; replaced foundations remain visible as history.
+const liveVersion = p => Math.max(...p.versions.filter(v => v.status === "live").map(v => v.v));
 function evalText(e, parent) {
+  if (e?.kind === "foundation-migration") return "foundation updated; personal rules retained; no replay score yet";
   if (!e) return "went live untested (no rated chats to replay yet)";
   const score = `${e.wins}–${e.losses}${e.ties ? `, ${e.ties} tied` : ""}`;
   const verb = e.wins > e.losses ? "beat" : e.wins === e.losses ? "matched" : "lost to";
@@ -1269,7 +1270,7 @@ async function refreshMemory() {
     `<div class="sub-h">Skills</div>${m.skills.length ? items(m.skills) : '<div class="empty">none yet</div>'}`;
   const p = m.prompts;
   $("#harness").innerHTML =
-    `<div class="list"><div class="row"><div class="l"><b>System prompt</b><span>Each new version must beat the last on your past chats</span></div><span class="pill">v${liveVersion(p)}</span></div>` +
+    `<div class="list"><div class="row"><div class="l"><b>System prompt</b><span>Markov foundation with a personal playbook; learned edits are replay-tested</span></div><span class="pill">v${liveVersion(p)}</span></div>` +
     `<div class="row"><div class="l"><b>Critiques queued</b><span>The prompt evolves every few critiques</span></div><span class="pill">${p.pending_critiques}</span></div></div>` +
     `<div class="sub-h">Improvement log</div>` +
     ((m.improvements || []).length ? `<div class="list">` + m.improvements.map(i => {
@@ -1283,7 +1284,7 @@ async function refreshMemory() {
       return `<div class="tile"><div>${mark}${bits.join("<br>") || "no change"}</div><div class="m">${ago(i.ts)} ${blob(i.blob_id)}</div></div>`;
     }).join("") + `</div>` : `<div class="empty">Every rating produces a reflection stored here.</div>`) +
     `<div class="sub-h">System prompt population</div>` +
-    `<div class="list">` + p.versions.slice().reverse().map(v => `<div class="tile${v.status === "rejected" ? " rejected" : ""}"><div><b>v${v.v}</b>${v.parent >= 0 ? ` ← v${v.parent}` : ""} <span style="color:var(--faint)">${icon("up", 12)} ${v.wins} &nbsp;${icon("down", 12)} ${v.losses}</span>${v.status === "rejected" ? ` <span class="pill">rejected</span>` : ""}</div>` +
+    `<div class="list">` + p.versions.slice().reverse().map(v => `<div class="tile${v.status !== "live" ? " rejected" : ""}"><div><b>v${v.v}</b>${v.parent >= 0 ? ` ← v${v.parent}` : ""} <span style="color:var(--faint)">${icon("up", 12)} ${v.wins} &nbsp;${icon("down", 12)} ${v.losses}</span>${v.status !== "live" ? ` <span class="pill">${esc(v.status)}</span>` : ""}</div>` +
       `<div class="m">${esc(v.why)}${v.parent >= 0 ? ` · ${evalText(v.eval, v.parent)}` : ""}</div>` +
       (v.rules?.length ? `<ul class="rules">` + v.rules.map(r => `<li class="${r.harmful >= 2 && r.harmful > r.helpful ? "muted" : ""}">${esc(r.text)}${r.helpful || r.harmful ? ` <span>+${r.helpful} −${r.harmful}</span>` : ""}</li>`).join("") + `</ul>` : "") +
       `<details class="prompt"><summary>show prompt</summary><div>${esc(v.prompt)}</div></details></div>`).join("") + `</div>`;
