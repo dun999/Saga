@@ -69,6 +69,7 @@ class Store {
   mutable std::mutex mu_;
   std::condition_variable cv_;
   std::deque<WriteRecord> queue_;       // not yet submitted
+  size_t submitting_ = 0;               // taken off queue_, request to the relayer not finished yet
   std::vector<WriteRecord> log_;        // submitted this session
   std::vector<WriteListener> listeners_;
   std::atomic<size_t> blobs_written_{0};

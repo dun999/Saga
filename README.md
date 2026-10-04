@@ -10,6 +10,8 @@ Saga brings Claude Code, Codex, Grok, and OpenAI-compatible models into one conv
 
 Written in C++23 for the Walrus **“Chatbots That Remember”** hackathon, Saga applies ideas from **YC Paper Club: Harness Edition** and the research behind persistent memory, agent collaboration, and self-improving harnesses. See [Research lineage](#research-lineage) for the papers and how they inform the implementation.
 
+**Run it locally:** [Try it](#try-it) builds Saga and opens the UI in a few minutes, without a Walrus account or an API key.
+
 ## Why Saga exists
 
 Working with several agents often means repeating the same context: what you are building, which tools you use, what went wrong last time, and how you want the work done. A useful correction in one conversation may never reach the next agent.
@@ -90,6 +92,10 @@ Saga stores durable memory as encrypted blobs through [Walrus Memory (MemWal)](h
 The C++ client in [src/memwal](src/memwal) implements signed relayer requests, SEAL sessions, and asynchronous writes. The UI exposes storage progress and the resulting blob IDs, making the memory layer visible during a conversation.
 
 Facts, episodes, and skills are recalled concurrently before an agent runs. Writes happen in the background, so the answer can arrive before its memories finish saving. Saga has no application database, but it does keep local workspaces, agent homes, and optionally encrypted provider credentials.
+
+Each chat turn has a **View sources** panel showing the memories Saga retrieved: the excerpt selected for context, the full copyable Walrus blob ID, a Walruscan link, and retrieval details (namespace, search query, distance, and write time or ranking score when supplied by the relayer). Agent lessons identify the step they were selected for; muted lessons and weak matches are excluded. The source record is saved inside the turn's transcript, so reopening a chat shows its original recall, even if a fresh search would return different memories. Older transcripts explicitly say when sources were not recorded. Empty searches, failed reads, and disabled memory are shown separately.
+
+These records show the harness's retrieved context, not proof that the model relied on every memory. Distances and ranking scores measure retrieval relevance, not factual confidence. Additional memory searches an agent makes through `saga mem` are not included in this panel.
 
 ## Markov seed prompt
 
@@ -173,9 +179,11 @@ sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-d
 `g++` and `as` need to be that install. GCC 15 and newer emit a `.base64` assembler directive, and binutils older than 2.43 reject it with `unknown pseudo-op: .base64`. If `command -v as` is not `/usr/bin/as`, put the distro binaries first and delete the failed build directory:
 
 ```bash
-export PATH=/usr/bin:/usr/local/bin:/bin
+export PATH=/usr/bin:$PATH
 rm -rf build
 ```
+
+This keeps the rest of your `PATH`, so the `claude`, `codex`, and `grok` CLIs, often in `~/.local/bin`, stay available to Saga.
 
 From the repository root:
 
@@ -189,11 +197,12 @@ ctest --test-dir build --output-on-failure
 `ctest` runs the unit suite and does not need a Walrus account. Open the UI before creating any keys. Leave `.env` absent:
 
 ```bash
-ss -ltn | grep ':8080' || true
 ./build/saga serve --no-memory
 ```
 
-Open **http://127.0.0.1:8080**. Choose a guest name and press **Continue as guest**. A wallet is not required, and the chat says memory is off. If port 8080 is already taken, start with `--port 8081` and open that URL. A second `saga serve` on a busy port can still print `listening` and share the socket with the first process.
+Open **http://127.0.0.1:8080**. Choose a guest name and press **Continue as guest**. A wallet is not required, and the chat says memory is off. If port 8080 is already taken, `serve` exits with `cannot listen`; start it with `--port 8081` and open that URL.
+
+Without keys, talk to a CLI agent you are signed in to on this machine by mentioning it, for example `@claude hello`. A message without a mention goes to the built-in `@saga` assistant, which answers `BOUNDLESS_API_KEY not set` until you add that key below.
 
 The same steps, written as a sequence an agent can follow, are in [llms.txt](llms.txt). The server also returns that file at `/llms.txt`.
 

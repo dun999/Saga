@@ -28,6 +28,7 @@ struct Memory {
   std::string text;
   double distance = 0;
   std::optional<double> score;
+  std::string created_at;  // optional RFC3339 write time, returned by newer relayers
 };
 
 struct JobStatus {

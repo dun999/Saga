@@ -208,6 +208,7 @@ std::vector<Memory> Client::recall(const std::string& query, const std::string& 
   for (auto& r : res.value("results", json::array())) {
     Memory m{r.value("blob_id", ""), r.value("text", ""), r.value("distance", 1.0), std::nullopt};
     if (r.contains("score") && r["score"].is_number()) m.score = r["score"].get<double>();
+    if (r.contains("created_at") && r["created_at"].is_string()) m.created_at = r["created_at"].get<std::string>();
     if (opt.max_distance && m.distance > *opt.max_distance) continue;
     out.push_back(std::move(m));
   }

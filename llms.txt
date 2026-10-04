@@ -42,9 +42,11 @@ as --version
 `as` should be `/usr/bin/as`, and its version should be 2.43 or newer. If an older `as` appears first on `PATH`, the build fails with `unknown pseudo-op: .base64`. Put the distro binaries first, delete the failed build directory, and start again:
 
 ```bash
-export PATH=/usr/bin:/usr/local/bin:/bin
+export PATH=/usr/bin:$PATH
 rm -rf build
 ```
+
+Prepend, do not replace: the `claude`, `codex`, and `grok` CLIs often live in `~/.local/bin`, and Saga finds them through `PATH` when you serve from this shell.
 
 ### 3. Build
 
@@ -72,19 +74,13 @@ Do this before you create `.env`. `./build/saga serve` and `./build/saga doctor`
 saga: MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID must be set (see .env.example)
 ```
 
-See whether port 8080 is already taken:
-
-```bash
-ss -ltn | grep ':8080' || true
-```
-
-If nothing is listening, start with memory off:
+Start with memory off:
 
 ```bash
 ./build/saga serve --no-memory
 ```
 
-If something is already listening on 8080, do not reuse that port. A second `saga serve` can also print `listening` and share the socket, so the browser may be talking to the other process. Use a free port:
+If port 8080 is already taken, `serve` exits with `saga: cannot listen on 127.0.0.1:8080`. Use a free port:
 
 ```bash
 ./build/saga serve --no-memory --port 8081
@@ -95,6 +91,8 @@ Open the URL it prints. The default is http://127.0.0.1:8080
 - `/` is the landing page. **Start chatting** opens the app. **llms.txt** opens this file.
 - `/app` asks for a guest name. Type one and press **Continue as guest**. A wallet is not required. The sidebar shows that name, and the page says memory is off.
 - `/llms.txt` is this file.
+
+Send a message that mentions a CLI agent signed in on this machine, for example `@claude hello`. A message without a mention goes to `@saga`, which fails with `BOUNDLESS_API_KEY not set` until step 6.
 
 Run `serve` from the repository root. It reads `saga.json` and stores chat workspaces in `workspaces/`. On loopback it uses the CLI logins on this machine and does not start the bubblewrap sandbox.
 

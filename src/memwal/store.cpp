@@ -124,7 +124,7 @@ void Store::flush(std::chrono::seconds timeout) {
   while (std::chrono::steady_clock::now() < deadline) {
     {
       std::lock_guard lk(mu_);
-      bool busy = !queue_.empty();
+      bool busy = !queue_.empty() || submitting_ > 0;
       for (auto& r : log_) busy |= (r.status != "done" && r.status != "failed");
       if (!busy) return;
     }
@@ -163,6 +163,7 @@ void Store::worker() {
         queue_.pop_front();
       }
       queue_.swap(later);
+      submitting_ = batch.size();
       // A retried write replaces its earlier entry in the log instead of showing twice.
       for (auto& r : batch)
         if (r.attempts > 0)
@@ -208,13 +209,12 @@ void Store::worker() {
         }
       }
     }
-    if (!submitted.empty()) {
-      {
-        std::lock_guard lk(mu_);
-        log_.insert(log_.end(), submitted.begin(), submitted.end());
-      }
-      for (auto& r : submitted) notify(r);
+    {
+      std::lock_guard lk(mu_);
+      log_.insert(log_.end(), submitted.begin(), submitted.end());
+      submitting_ = 0;
     }
+    for (auto& r : submitted) notify(r);
 
     // 2) Poll in-flight jobs until Walrus reports a blob id.
     std::vector<std::string> pending;

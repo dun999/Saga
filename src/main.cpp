@@ -179,8 +179,14 @@ int cmd_restore(const Args& a) {
 void print_event(const json& e) {
   const std::string t = e.value("type", "");
   if (t == "recall") {
-    std::printf("\033[34m🧠 %s\033[0m\n", e["ns"].get<std::string>().c_str());
-    for (auto& m : e["items"]) std::printf("\033[34m   · %s\033[0m\n", m.value("text", "").c_str());
+    const bool failed = e.value("status", "") == "unavailable";
+    if (e["items"].empty() && !failed) return;
+    std::printf("\033[34m🧠 %s%s\033[0m\n", e["ns"].get<std::string>().c_str(), failed ? " (recall unavailable)" : "");
+    for (auto& m : e["items"]) {
+      std::printf("\033[34m   · %s\033[0m\n", m.value("text", "").c_str());
+      if (const auto id = m.value("blob_id", ""); !id.empty())
+        std::printf("\033[2m     blob: %s\033[0m\n", id.c_str());
+    }
   } else if (t == "step") {
     std::printf("\n\033[1m@%s\033[0m ← %s\n", e.value("agent", "").c_str(), e.value("instruction", "").c_str());
   } else if (t == "fallback") {

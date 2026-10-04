@@ -248,7 +248,17 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     res.set_header("Cache-Control", "no-cache");
     res.set_content(std::string(kLlmsTxt), "text/plain; charset=utf-8");
   });
-  svr.Get("/privacy", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kPrivacyHtml); });
+  svr.Get("/privacy", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string page(kPrivacyHtml);
+    const std::string marker = "__SAGA_ACCOUNT_NOTICE__";
+    const char* notice = h.user_accounts()
+        ? "<strong>This server uses user account mode.</strong> Personal connections require a verified wallet. "
+          "Another wallet does not inherit them by choosing the same name. The built-in @saga assistant uses the operator's account."
+        : "<strong>This server uses host account mode.</strong> Anyone using this Saga can use the host's connected "
+          "agent accounts, even with a different username or wallet. A memory namespace does not isolate those logins.";
+    if (const auto at = page.find(marker); at != std::string::npos) page.replace(at, marker.size(), notice);
+    send_page(req, res, page);
+  });
   svr.Get("/app", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kIndexHtml); });
 
   svr.Post("/api/login", [&](const httplib::Request& req, httplib::Response& res) {
@@ -620,13 +630,17 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     }, [feeds, uid](bool) { feeds->give(uid); });
   });
 
-  std::printf("saga: listening on http://%s:%d\n", opt.host.c_str(), opt.port);
-  std::fflush(stdout);
-  if (!svr.listen(opt.host, opt.port)) {
-    std::fprintf(stderr, "saga: cannot listen on %s:%d\n", opt.host.c_str(), opt.port);
+  // httplib's default SO_REUSEPORT lets a second serve bind this port and take some of the
+  // first one's connections. SO_REUSEADDR alone still allows an immediate restart.
+  svr.set_socket_options([](socket_t sock) { httplib::set_socket_opt(sock, SOL_SOCKET, SO_REUSEADDR, 1); });
+  if (!svr.bind_to_port(opt.host, opt.port)) {
+    std::fprintf(stderr, "saga: cannot listen on %s:%d (already in use? pick another with --port)\n",
+                 opt.host.c_str(), opt.port);
     return 1;
   }
-  return 0;
+  std::printf("saga: listening on http://%s:%d\n", opt.host.c_str(), opt.port);
+  std::fflush(stdout);
+  return svr.listen_after_bind() ? 0 : 1;
 }
 
 }  // namespace saga::web

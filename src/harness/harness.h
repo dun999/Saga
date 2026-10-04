@@ -61,6 +61,7 @@ struct Turn {
   int prompt_version = 0;
   std::vector<Step> steps;
   std::vector<std::string> recalled;  // memories that shaped this turn (shown in UI / article)
+  json recall_sources = json::array();  // recall batches, preserved with the transcript on Walrus
   std::string history;                // the last few exchanges of this chat, for follow-ups
   int rating = 0;            // last signal: +1 / -1, from the user or implicit
   bool user_rated = false;
@@ -153,10 +154,10 @@ class Harness {
   PromptPool& prompts(const std::string& uid);
 
  private:
-  std::string build_context(Turn& t, const agents::Agent& agent, const std::string& instruction,
+  std::string build_context(Turn& t, const agents::Agent& agent, const std::string& lesson_query,
                             const std::vector<memwal::Memory>& facts, const std::vector<memwal::Memory>& episodes,
                             const std::vector<memwal::Memory>& skills, std::vector<memwal::Memory> lessons,
-                            const Emit& emit);
+                            bool lessons_failed, const Emit& emit);
   // Memory reads run beside the turn, never in front of it: a slow relayer can't hold a reply hostage.
   struct PendingRecall;
   std::shared_ptr<PendingRecall> recall_async(std::string query, std::string ns, memwal::RecallOptions opt);

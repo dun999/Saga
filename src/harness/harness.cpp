@@ -98,10 +98,34 @@ bool safe_relative(const std::string& rel) {
   return true;
 }
 
-json memories_json(const std::vector<memwal::Memory>& ms) {
+constexpr size_t kMemoryContextBytes = 400;
+
+json memories_json(const std::vector<memwal::Memory>& ms, size_t text_limit = 300) {
   json arr = json::array();
-  for (auto& m : ms) arr.push_back({{"text", clip(m.text, 300)}, {"distance", m.distance}, {"blob_id", m.blob_id}});
+  for (auto& m : ms) {
+    json item = {{"text", clip(m.text, text_limit)}, {"distance", m.distance}, {"blob_id", m.blob_id},
+                 {"text_truncated", m.text.size() > text_limit}};
+    if (m.score) item["score"] = *m.score;
+    if (!m.created_at.empty()) item["created_at"] = m.created_at;
+    arr.push_back(std::move(item));
+  }
   return arr;
+}
+
+// Persist the same excerpts sent to the model, rather than re-running a search when a chat is opened.
+// Batches preserve the actual query and distinguish an empty match from a failed read.
+void record_recall(Turn& t, const std::string& ns, const std::string& query,
+                   const std::vector<memwal::Memory>& memories, bool failed, const Emit& emit,
+                   const std::string& agent = "", int step = -1) {
+  json batch = {{"ns", ns}, {"query", clip(query, 400)}, {"query_truncated", query.size() > 400},
+                {"status", failed ? "unavailable" : "ok"}, {"items", memories_json(memories, kMemoryContextBytes)}};
+  if (!agent.empty()) batch["agent"] = agent;
+  if (step >= 0) batch["step"] = step;
+  t.recall_sources.push_back(batch);
+  if (emit) {
+    batch["type"] = "recall";
+    emit(batch);
+  }
 }
 
 bool is_capacity_error(const std::string& e) {
@@ -305,17 +329,17 @@ void Harness::boot(const Emit& log) {
   say("learning namespaces load privately for each user");
 }
 
-std::string Harness::build_context(Turn& t, const agents::Agent& agent, const std::string& instruction,
+std::string Harness::build_context(Turn& t, const agents::Agent& agent, const std::string& lesson_query,
                                    const std::vector<memwal::Memory>& facts,
                                    const std::vector<memwal::Memory>& episodes,
                                    const std::vector<memwal::Memory>& skills, std::vector<memwal::Memory> lessons,
-                                   const Emit& emit) {
-  (void)instruction;
+                                   bool lessons_failed, const Emit& emit) {
   // A lesson that keeps hurting stays on Walrus but stops being used.
   std::erase_if(lessons, [&](const memwal::Memory& m) { return prompts(t.uid).credit_of("lesson:" + m.blob_id).muted(); });
   if (lessons.size() > 4) lessons.resize(4);
-  if (!lessons.empty() && emit)
-    emit({{"type", "recall"}, {"ns", ns_lessons(agent.name(), t.uid)}, {"items", memories_json(lessons)}});
+  if (store_.enabled())
+    record_recall(t, ns_lessons(agent.name(), t.uid), lesson_query, lessons, lessons_failed, emit,
+                   agent.name(), static_cast<int>(t.steps.size()) - 1);
 
   const PromptVersion& pv = prompts(t.uid).get(t.prompt_version);
   auto note = [&](const std::string& id, const std::string& text) {
@@ -351,7 +375,7 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
   auto section = [&](const char* title, const std::vector<memwal::Memory>& ms) {
     if (ms.empty()) return;
     c += "\n## " + std::string(title) + "\n";
-    for (auto& m : ms) c += "- " + clip(m.text, 400) + "\n";
+    for (auto& m : ms) c += "- " + clip(m.text, kMemoryContextBytes) + "\n";
   };
   section("What Saga remembers about this user (Walrus Memory)", facts);
   section("Relevant past episodes", episodes);
@@ -441,20 +465,26 @@ struct Harness::PendingRecall {
   std::mutex mu;
   std::condition_variable cv;
   bool done = false;
+  bool failed = false;
+  std::string query;
   std::vector<memwal::Memory> hits;
 };
 
 std::shared_ptr<Harness::PendingRecall> Harness::recall_async(std::string query, std::string ns,
                                                              memwal::RecallOptions opt) {
   auto r = std::make_shared<PendingRecall>();
+  r->query = query;
   auto f = std::async(std::launch::async, [this, r, query = std::move(query), ns = std::move(ns), opt] {
     std::vector<memwal::Memory> hits;
+    bool failed = false;
     try {
-      hits = store_.recall(query, ns, opt);
+      hits = store_.recall(query, ns, opt, &failed);
     } catch (...) {
+      failed = true;
     }
     std::lock_guard lk(r->mu);
     r->hits = std::move(hits);
+    r->failed = failed;
     r->done = true;
     r->cv.notify_all();
   });
@@ -506,7 +536,8 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     std::lock_guard lk(mu_);
     session_turns_[uid + "/" + session].push_back(t->id);
   }
-  if (emit) emit({{"type", "turn"}, {"turn_id", t->id}, {"prompt_version", t->prompt_version}, {"workspace", t->workspace}});
+  if (emit) emit({{"type", "turn"}, {"turn_id", t->id}, {"prompt_version", t->prompt_version},
+                  {"workspace", t->workspace}, {"memory_enabled", store_.enabled()}});
   trace("turn started");
 
   // Recall (parallel) — this is where memory does its work, and every answer waits for it. The reads
@@ -549,10 +580,10 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   trace("facts/episodes/skills recalled");
   for (auto* ms : {&facts, &episodes, &skills})
     for (auto& m : *ms) t->recalled.push_back(m.text);
-  if (emit) {
-    if (!facts.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "facts")}, {"items", memories_json(facts)}});
-    if (!episodes.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "episodes")}, {"items", memories_json(episodes)}});
-    if (!skills.empty()) emit({{"type", "recall"}, {"ns", ns_user(uid, "skills")}, {"items", memories_json(skills)}});
+  if (store_.enabled()) {
+    record_recall(*t, ns_user(uid, "facts"), message, facts, facts_r->failed, emit);
+    record_recall(*t, ns_user(uid, "episodes"), message, episodes, episodes_r->failed, emit);
+    record_recall(*t, ns_user(uid, "skills"), message, skills, skills_r->failed, emit);
   }
 
   t->steps.reserve(opt_.max_steps);
@@ -571,8 +602,8 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     want_lessons(s.agent, s.instruction);
     auto lessons = await(lessons_r[s.agent]);  // usually already fetched while the previous agent worked
     trace("@" + s.agent + " lessons recalled");
-    const std::string ctx = build_context(*t, a ? *a : *reg_.primary(), s.instruction, facts, episodes, skills,
-                                          std::move(lessons), emit);
+    const std::string ctx = build_context(*t, a ? *a : *reg_.primary(), lessons_r[s.agent]->query, facts, episodes, skills,
+                                          std::move(lessons), lessons_r[s.agent]->failed, emit);
     const Snapshot before = snapshot(t->workspace);
     trace("@" + s.agent + " running");
     run_step(*t, s, ctx, emit);
@@ -656,7 +687,8 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   store_.put(ns_user(uid, "chat"), "chat",
              memwal::encode_record("chat", {{"session", session}, {"turn", t->id}, {"ts", std::time(nullptr)},
                                             {"user", clip(message, 4000)}, {"steps", steps},
-                                            {"prompt_version", t->prompt_version}}),
+                                            {"prompt_version", t->prompt_version},
+                                            {"memory_enabled", store_.enabled()}, {"recall_sources", t->recall_sources}}),
              t->id);
 
   t->done = true;

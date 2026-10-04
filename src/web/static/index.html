@@ -131,13 +131,36 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 .msg { margin: 0 0 22px; }
 .user-msg { display: flex; justify-content: flex-end; }
 .bubble { background: var(--surface); padding: 10px 15px; border-radius: 18px 18px 6px 18px; max-width: 82%; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* One quiet line for what Saga recalled; the memories themselves are one click away. */
-.recall { font-size: 12.5px; color: var(--faint); margin: -12px 0 12px; text-align: right; }
-.recall summary { cursor: pointer; list-style: none; display: inline-flex; gap: 6px; align-items: center; }
-.recall summary::-webkit-details-marker { display: none; }
-.recall summary:hover { color: var(--muted); }
-.recall ul { margin: 8px 0 0; padding: 10px 12px 10px 28px; text-align: left; background: var(--surface); border-radius: 12px; color: var(--muted); }
-.recall li { margin: 3px 0; }
+/* Recall is part of the turn: source excerpts and blob IDs survive reopening the chat. */
+.recall { font-size: 12.5px; color: var(--muted); margin: -10px 0 16px; }
+.recall > summary { cursor: pointer; list-style: none; display: flex; gap: 8px; align-items: center; width: fit-content; margin-left: auto; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.recall > summary::-webkit-details-marker { display: none; }
+.recall > summary:hover { background: var(--hover); color: var(--ink); }
+.recall > summary:focus-visible, .source-copy:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; }
+.recall-action { color: var(--accent-text); font-size: 11px; }
+.recall-action::after { content: "View sources ↓"; }
+.recall[open] .recall-action::after { content: "Hide sources ↑"; }
+.recall-body { margin-top: 8px; padding: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.recall-note, .recall-status { margin: 0; line-height: 1.5; }
+.recall-note { font-size: 12px; }
+.recall-status:not(:empty) { margin-top: 12px; }
+.recall-group { margin-top: 16px; }
+.recall-group h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--ink); }
+.recall-group h4 span { font-weight: 400; color: var(--muted); }
+.recall-empty { font-size: 12px; margin: 0; }
+.memory-source { padding: 12px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.memory-source p { margin: 0 0 10px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+.source-id { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.source-id .blob { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.6; font-size: 11.5px; }
+.source-label { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; line-height: 1.8; }
+.source-copy { border: 0; border-radius: 6px; background: var(--hover); color: var(--accent-text); padding: 3px 7px; font: inherit; font-size: 11px; cursor: pointer; }
+.source-detail { margin-top: 9px; font-size: 11.5px; }
+.source-detail summary { cursor: pointer; color: var(--muted); }
+.source-detail dl { margin: 8px 0 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 12px; line-height: 1.5; }
+.source-detail dt { color: var(--muted); }
+.source-detail dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--ink); }
+.source-excerpt { font-size: 11px; color: var(--muted); margin-bottom: 7px; }
+@media (max-width: 520px) { .recall-body { padding: 10px; } .source-detail dl { grid-template-columns: 1fr; gap: 3px; } .source-detail dd { margin-bottom: 5px; } }
 /* An agent turn is three things: name line, one solid bubble with the answer, one quiet line under it.
    Bubble colours are the same in light and dark mode, deep enough for white text. */
 .lane { margin: 4px 0 18px; --solid: #8A4F64; }
@@ -718,13 +741,13 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
   <form id="gateForm">
     <span class="logo-mark" style="height:26px;margin-bottom:6px;align-self:flex-start" aria-hidden="true"></span>
     <b style="font-size:18px" id="gTitle">Sign in to Saga</b>
-    <div class="empty" style="padding:0" id="gBody">Pick a guest username to try Saga, or connect a wallet to keep your memory and accounts private.</div>
+    <div class="empty" style="padding:0" id="gBody">Pick a guest username to try Saga, or connect a wallet to prove your identity.</div>
     <input id="gHandle" placeholder="What should Saga call you?" aria-label="Username" autocomplete="off" spellcheck="false" autocapitalize="off">
     <button class="btn">Continue as guest</button>
     <div class="g-or" aria-hidden="true"><span>or</span></div>
     <button type="button" class="g-wallet" id="gWallet">Connect a Sui wallet</button>
     <button type="button" class="btn-ghost" id="gCancel" hidden>Cancel</button>
-    <div class="note">Guest mode: anyone who enters the same username sees its memory, and guests can't connect accounts. For private memory and your own Claude, ChatGPT, Grok, GitHub or API keys, connect a wallet.</div>
+    <div class="note">Anyone entering the same guest username shares its memory and chats. Host account mode shares the machine's agent logins across users. In user account mode, personal connections require a wallet. <a href="/privacy#account-mode">Check this server's account mode and privacy details.</a></div>
     <div id="gErr" class="note"></div>
   </form>
 </div>
@@ -996,11 +1019,13 @@ async function refreshUsage() {
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn-connect">Add agent</button><button type="button" class="btn-ghost" id="addCancel">Cancel</button><span class="m off" id="addErr"></span></div>
     </form>`;
   const addTile = `<div class="tile add-tile" id="addTile"><div class="plus">+</div><div><b style="color:var(--ink);font-size:13.5px;font-weight:500">Add an agent with your own API key</b><div class="m">OpenRouter, xAI, Groq, OpenAI, Ollama…</div></div></div>`;
-  const guestNote = me.auth ? "" : `<div class="tile" style="display:flex;align-items:center;gap:12px"><div class="m" style="flex:1">Guests can't connect accounts. Sign in with a wallet to use Claude, ChatGPT or Grok.</div><button class="btn-connect" id="agWallet">Connect wallet</button></div>`;
+  const guestNote = me.auth || state.accounts === "host" ? "" : `<div class="tile" style="display:flex;align-items:center;gap:12px"><div class="m" style="flex:1">Guests can't connect personal accounts in user account mode. Sign in with a wallet to use your own Claude, ChatGPT or Grok account.</div><button class="btn-connect" id="agWallet">Connect wallet</button></div>`;
   const vaultNote = guestNote + (vault.state === "mismatch"
     ? `<div class="tile" style="background:rgba(180,81,59,.10)"><b style="font-size:13.5px">Your saved accounts are locked with a different key</b><div class="m" style="display:block;line-height:1.6">This happens with some wallets (like Google sign-in) on a new device or session: the vault key can't be recreated, so Saga can't open what you connected before. Reset to delete the old, unreadable credentials and connect again here.</div><div style="margin-top:10px"><button class="btn-connect" id="vaultReset">Reset and reconnect</button></div></div>`
     : "");
-  const foot = me.auth && vault.state !== "mismatch" ? `<div class="foot">${icon("save", 12)} Connections last until sign-out unless you choose to remember them. Disconnect deletes them. <a href="/privacy" target="_blank">Privacy</a></div>` : "";
+  const foot = state.accounts === "host"
+    ? `<div class="foot">Host account mode: these CLI logins are shared across Saga users and namespaces. Disconnect signs the provider CLI out on this machine. <a href="/privacy" target="_blank">Privacy</a></div>`
+    : me.auth && vault.state !== "mismatch" ? `<div class="foot">${icon("save", 12)} Personal connections last until sign-out unless you choose to remember them. Disconnect removes the saved credential from Saga; provider revocation is separate. <a href="/privacy" target="_blank">Privacy</a></div>` : "";
   $("#agents").innerHTML = vaultNote + `<div class="deck">${list.map(tile).join("")}${addOpen ? addForm : addTile}</div>` + foot;
   $("#agWallet")?.addEventListener("click", openWallet);
   $("#vaultReset")?.addEventListener("click", async () => { await api("/api/vault/reset", {}); vault = {state: "ok"}; refreshUsage(); });
@@ -1655,6 +1680,69 @@ function foldSteps(lane) {
     lane.querySelector(".meta").after(list); slot.firstChild.setAttribute("aria-expanded", "true");
   };
 }
+
+// One renderer for live recall and the snapshot saved in a Walrus transcript.
+function recallPanel(turn, options = {}) {
+  let panel = turn.querySelector(".recall");
+  if (!panel) {
+    panel = document.createElement("details"); panel.className = "recall fade";
+    panel.recallState = {enabled: true, recorded: true, pending: false, interrupted: false, batches: [], ids: new Set()};
+    panel.innerHTML = `<summary>${icon("brain", 14)}<span class="recall-count"></span><span class="recall-action"></span></summary>
+      <div class="recall-body"><p class="recall-note">Memories retrieved for this turn. Excerpts show the context selected for the agents; retrieval alone does not prove an answer relied on every source. Blob links open storage details on Walruscan.</p>
+      <div class="recall-groups"></div><p class="recall-status" role="status"></p></div>`;
+    turn.prepend(panel);
+  }
+  Object.assign(panel.recallState, options);
+  updateRecall(panel);
+  return panel;
+}
+function updateRecall(panel) {
+  const s = panel.recallState, n = s.ids.size;
+  const failed = s.batches.some(b => b.status === "unavailable");
+  const text = !s.recorded ? "Memory sources not recorded" : !s.enabled ? "Memory off for this turn"
+    : n ? `${n} memor${n === 1 ? "y" : "ies"} recalled${failed ? " · partial" : ""}`
+    : s.pending ? "Recalling memories…" : failed ? "Memory recall unavailable"
+    : s.interrupted ? "Memory recall interrupted" : "No memories recalled";
+  panel.querySelector(".recall-count").textContent = text;
+  panel.querySelector(".recall-count").classList.toggle("working", s.pending);
+  panel.querySelector(".recall-status").textContent = !s.recorded ? "This older turn has no saved source record. Its original recall cannot be reconstructed by a new search."
+    : !s.enabled ? "MemWal recall was disabled for this turn."
+    : s.interrupted ? "The stream ended early. Sources shown here may be incomplete."
+    : failed ? "Some memory searches failed. The assistant continued with the available context."
+    : s.pending ? "Checking memory for this turn…"
+    : !n ? "No matching memories were selected for this turn." : "";
+}
+function addRecallBatch(turn, batch) {
+  if (!batch || !Array.isArray(batch.items)) return;
+  const panel = recallPanel(turn), s = panel.recallState;
+  s.batches.push(batch);
+  const items = batch.items.filter(m => m && typeof m.text === "string");
+  for (const m of items) s.ids.add(JSON.stringify([batch.ns, m.blob_id || m.text]));
+  const kind = batch.agent ? "Agent lessons" : ({facts: "Facts & preferences", episodes: "Past episodes", skills: "Reusable skills"})[String(batch.ns || "").split(":").pop()] || "Memories";
+  const scope = batch.agent ? `Selected for @${batch.agent}${Number.isInteger(batch.step) ? ` · step ${batch.step + 1}` : ""}` : "Shared context";
+  const group = document.createElement("section"); group.className = "recall-group";
+  group.innerHTML = `<h4>${esc(kind)} <span>· ${esc(scope)}</span></h4>` + (items.length ? items.map(m => {
+    const id = typeof m.blob_id === "string" ? m.blob_id : "";
+    const written = typeof m.created_at === "string" && Number.isFinite(Date.parse(m.created_at)) ? new Date(m.created_at).toLocaleString() : "";
+    return `<article class="memory-source">${m.text_truncated ? `<div class="source-excerpt">Excerpt selected for context</div>` : ""}<p>${esc(m.text)}</p>
+      <div class="source-id"><span class="source-label">Blob ID</span>${id ? `<a class="blob" href="${WALRUSCAN(id)}" target="_blank" rel="noopener noreferrer" title="View storage details on Walruscan">${esc(id)}</a><button type="button" class="source-copy" data-blob-id="${esc(id)}" aria-label="Copy blob ID">Copy ID</button>` : `<span>ID unavailable from this relayer</span>`}</div>
+      <details class="source-detail"><summary>Retrieval details</summary><dl>
+        <dt>Namespace</dt><dd>${esc(batch.ns || "Unavailable")}</dd>
+        <dt>${batch.query_truncated ? "Search excerpt" : "Search query"}</dt><dd>${esc(batch.query || "Not recorded")}</dd>
+        ${typeof m.distance === "number" && Number.isFinite(m.distance) ? `<dt>Distance</dt><dd>${m.distance.toFixed(3)} · lower means more similar</dd>` : ""}
+        ${typeof m.score === "number" && Number.isFinite(m.score) ? `<dt>Ranking score</dt><dd>${m.score.toFixed(3)} · relayer ranking, not confidence</dd>` : ""}
+        ${written ? `<dt>Memory written</dt><dd>${esc(written)}</dd>` : ""}
+      </dl></details></article>`;
+  }).join("") : `<p class="recall-empty${batch.status === "unavailable" ? " off" : ""}">${batch.status === "unavailable" ? "Search unavailable." : "No matching memories selected."}</p>`);
+  group.querySelectorAll("[data-blob-id]").forEach(button => button.onclick = async () => {
+    try { await navigator.clipboard.writeText(button.dataset.blobId); button.textContent = "Copied"; }
+    catch { button.textContent = "Select ID to copy"; }
+    setTimeout(() => { button.textContent = "Copy ID"; }, 1800);
+  });
+  panel.querySelector(".recall-groups").appendChild(group);
+  updateRecall(panel);
+}
+
 async function openChat(sid) {
   if (busy) return;
   session = sid; app.classList.remove("side-open");
@@ -1665,6 +1753,9 @@ async function openChat(sid) {
   for (const turn of t.turns) {
     userMsg(turn.user);
     const el = document.createElement("div"); el.className = "msg";
+    const sources = Array.isArray(turn.recall_sources) ? turn.recall_sources : null;
+    recallPanel(el, {enabled: turn.memory_enabled !== false, recorded: sources !== null});
+    for (const batch of sources || []) addRecallBatch(el, batch);
     let lane = null;
     for (const s of turn.steps || []) {
       lane = document.createElement("div"); lane.className = laneClass(s.agent);
@@ -1692,13 +1783,13 @@ $("#f").addEventListener("submit", async e => {
   if (hello) { $("#title").textContent = text.slice(0, 80); await leave(hello); thread.innerHTML = ""; }
   userMsg(text, true);
   const turn = document.createElement("div"); turn.className = "msg";
-  turn.innerHTML = `<details class="recall fade"><summary class="working">recalling…</summary><ul></ul></details>`;
+  recallPanel(turn, {enabled: state.memory_enabled, pending: true});
   thread.appendChild(turn);
   stick = true; log.scrollTo({top: log.scrollHeight, behavior: calm ? "auto" : "smooth"});
   busy = "pending"; sendBtn.disabled = false; sendBtn.classList.add("stop");
   sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`;
   const lanes = {};
-  let turnId = "", recalled = 0;
+  let turnId = "", turnDone = false;
   const lastLane = () => Object.values(lanes).pop()?.el;
   try {
     const r = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({message: text, session})});
@@ -1714,6 +1805,7 @@ $("#f").addEventListener("submit", async e => {
       follow();
     }
   } catch (err) { turn.insertAdjacentHTML("beforeend", `<div class="note pop">${esc(err.message)}</div>`); }
+  recallPanel(turn, {pending: false, interrupted: !turnDone});
   for (const l of Object.values(lanes)) l.w.finish();  // a cut stream leaves no caret behind
   busy = null; sendBtn.classList.remove("stop");
   sendBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
@@ -1722,15 +1814,13 @@ $("#f").addEventListener("submit", async e => {
   refreshRepo();
 
   function onEvent(ev) {
-    if (ev.type === "turn") { busy = turnId = ev.turn_id; }
+    if (ev.type === "turn") {
+      busy = turnId = ev.turn_id;
+      recallPanel(turn, {enabled: ev.memory_enabled !== false});
+    }
     else if (ev.type === "recall") {
-      const r = turn.querySelector(".recall");
-      recalled += ev.items.length;
-      r.querySelector("summary").className = "";
-      r.querySelector("summary").textContent = `used ${recalled} memor${recalled === 1 ? "y" : "ies"}`;
-      r.querySelector("ul").insertAdjacentHTML("beforeend", ev.items.map(m => `<li>${colorMentions(esc(m.text))} ${blob(m.blob_id)}</li>`).join(""));
+      addRecallBatch(turn, ev);
     } else if (ev.type === "step") {
-      if (!recalled) turn.querySelector(".recall")?.remove();  // nothing recalled: no line at all
       if (ev.agent === "claude" && !turn.querySelector(".carry")) carryTo(turn);
       const el = document.createElement("div"); el.className = laneClass(ev.agent) + " rise";
       el.innerHTML = laneHtml(ev.agent, ev.instruction, ev.requested_by, "working", "working");
@@ -1746,7 +1836,7 @@ $("#f").addEventListener("submit", async e => {
     } else if (ev.type === "checkpoint") {
       const l = lanes[ev.step]; if (!l) return;
       metaSlot(l.el, "files").innerHTML = "Edited " + ev.files.map(f => `<code>${esc(f.path.split("/").pop())}</code>`).join(" ");
-      awaitBlob(metaSlot(l.el, "blob"), turnId + ":" + ev.step);
+      if (state.memory_enabled) awaitBlob(metaSlot(l.el, "blob"), turnId + ":" + ev.step);
     } else if (ev.type === "remember") {
       const el = lastLane(); if (!el) return;
       const slot = metaSlot(el, "mem"), facts = [...(el.facts ||= []), ev.text]; el.facts = facts;
@@ -1759,9 +1849,11 @@ $("#f").addEventListener("submit", async e => {
       foldSteps(l.el);
       if (!ev.ok) l.el.querySelector(".out").insertAdjacentHTML("afterend", `<div class="note pop">${esc(ev.error)}</div>`);
     } else if (ev.type === "done") {
+      turnDone = true;
+      recallPanel(turn, {pending: false});
       // The transcript blob goes under the last bubble, unless that step already shows its files' blob.
       const el = lastLane();
-      if (el && !el.querySelector('.meta [data-k="blob"]')) awaitBlob(metaSlot(el, "blob"), ev.turn_id);
+      if (state.memory_enabled && el && !el.querySelector('.meta [data-k="blob"]')) awaitBlob(metaSlot(el, "blob"), ev.turn_id);
       // rate the answer once it has finished writing, not while it's still appearing
       Promise.all(Object.values(lanes).map(l => l.w.idle())).then(() => addFeedback(turn, ev.turn_id));
     } else if (ev.type === "error") {
@@ -1800,7 +1892,7 @@ function addFeedback(turn, id) {
 // The username screen: shown when the server asks for it, or when the user switches account.
 function showGate(switching) {
   $("#gTitle").textContent = switching ? "Switch account" : "Sign in to Saga";
-  $("#gBody").textContent = "Pick a guest username to try Saga, or connect a wallet to keep your memory and accounts private.";
+  $("#gBody").textContent = "Pick a guest username to try Saga, or connect a wallet to prove your identity.";
   $("#gCancel").hidden = !switching;
   $("#gErr").textContent = ""; $("#gHandle").value = "";
   $("#gate").style.display = "flex"; $("#gHandle").focus();
