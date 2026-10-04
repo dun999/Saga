@@ -25,6 +25,7 @@ extern const std::string_view kPrivacyHtml;
 extern const std::string_view kMascotJs;
 extern const std::string_view kBrandJs;
 extern const std::string_view kLogoPng;
+extern const std::string_view kLlmsTxt;
 
 namespace {
 
@@ -242,6 +243,10 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   svr.Get("/saga-logo.png", [](const httplib::Request&, httplib::Response& res) {
     res.set_header("Cache-Control", "public, max-age=86400");
     res.set_content(std::string(kLogoPng), "image/png");
+  });
+  svr.Get("/llms.txt", [](const httplib::Request&, httplib::Response& res) {
+    res.set_header("Cache-Control", "no-cache");
+    res.set_content(std::string(kLlmsTxt), "text/plain; charset=utf-8");
   });
   svr.Get("/privacy", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kPrivacyHtml); });
   svr.Get("/app", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kIndexHtml); });

@@ -164,10 +164,17 @@ Build on Linux with CMake 3.24+ and a C++23 compiler. CI uses GCC 15. Install th
 
 ```bash
 # Fedora
-sudo dnf install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel git pkgconf
+sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel git pkgconf
 
 # Debian / Ubuntu, with a suitable C++23 compiler
-sudo apt install cmake ninja-build g++ libcurl4-openssl-dev libsodium-dev git pkg-config
+sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev git pkg-config
+```
+
+`g++` and `as` need to be that install. GCC 15 and newer emit a `.base64` assembler directive, and binutils older than 2.43 reject it with `unknown pseudo-op: .base64`. If `command -v as` is not `/usr/bin/as`, put the distro binaries first and delete the failed build directory:
+
+```bash
+export PATH=/usr/bin:/usr/local/bin:/bin
+rm -rf build
 ```
 
 From the repository root:
@@ -176,28 +183,44 @@ From the repository root:
 cmake -S . -B build -G Ninja
 cmake --build build
 ctest --test-dir build --output-on-failure
+./build/saga help
+```
 
+`ctest` runs the unit suite and does not need a Walrus account. Open the UI before creating any keys. Leave `.env` absent:
+
+```bash
+ss -ltn | grep ':8080' || true
+./build/saga serve --no-memory
+```
+
+Open **http://127.0.0.1:8080**. Choose a guest name and press **Continue as guest**. A wallet is not required, and the chat says memory is off. If port 8080 is already taken, start with `--port 8081` and open that URL. A second `saga serve` on a busy port can still print `listening` and share the socket with the first process.
+
+The same steps, written as a sequence an agent can follow, are in [llms.txt](llms.txt). The server also returns that file at `/llms.txt`.
+
+Walrus memory and the built-in `@saga` assistant need real keys. Copy the example and fill the empty lines. Keep each value alone on its line, because a `#` comment on that line is stored as part of the key.
+
+```bash
 cp .env.example .env
-# Set MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID from https://memory.walrus.xyz
-# Set BOUNDLESS_API_KEY for the default @saga assistant.
+# MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID from https://memory.walrus.xyz
+# BOUNDLESS_API_KEY from https://inference.boundless.network
 
 ./build/saga doctor
 ./build/saga serve
 ```
 
-Open **http://127.0.0.1:8080**. Install and authenticate the `claude`, `codex`, and `grok` CLIs for the teammates you want to use. The default learning backend requires Claude. Agent configuration lives in [saga.json](saga.json), and environment settings are listed in [.env.example](.env.example).
+`doctor` and `serve` exit until both MemWal variables are set. Install and authenticate the `claude`, `codex`, and `grok` CLIs for the teammates you want to use. The default learning backend requires Claude. Agent configuration lives in [saga.json](saga.json), and the variables are listed in [.env.example](.env.example).
 
 To explore persistence, tell Saga a project preference, wait for the memory write to complete, then start a new chat under the same identity and ask for related work. To explore learning, rate a turn and provide a concrete correction.
 
 ```bash
-./build/saga chat --user mira       # Terminal chat: /good, /bad <reason>, /quit
-./build/saga stats mira             # Inspect stored memory counts and bytes
-./build/saga ab --out ab_report.md  # Compare personalization with and without memory
-./build/saga serve --trace          # See recall and agent phases
-./build/saga help                   # All commands and options
+./build/saga chat --user mira --no-memory   # /quit exits. With memory: /good, /bad <reason>
+./build/saga stats mira                     # Inspect stored memory counts and bytes
+./build/saga ab --out ab_report.md          # Real provider calls. This writes memories.
+./build/saga serve --trace                  # See recall and agent phases
+./build/saga help                           # All commands and options
 ```
 
-The A/B experiment makes real provider calls and writes memories. `serve --no-memory` and `chat --no-memory` run without MemWal; provider access is still needed.
+`serve --no-memory` and `chat --no-memory` run without MemWal. A turn that calls `@saga` still needs `BOUNDLESS_API_KEY`. The CLI agents use the logins on this machine.
 
 Local serving defaults to the operator's accounts and runs CLI agents without Saga's sandbox. For a shared deployment, Saga supports wallet-only sign-in, user-owned provider accounts, encrypted credential storage, and bubblewrap isolation. Public serving requires `--accounts user --wallet-only --public-origin https://your.host --agent-cgroups PATH`. See [deploy/saga.service](deploy/saga.service) for the Linux service configuration; it requires systemd 254+, kernel 5.14+, bubblewrap 0.9+, delegated cgroup v2 controls, and separately configured filesystem quotas.
 
