@@ -1,5 +1,7 @@
-# Edit the public host and install paths before use. Requires systemd >= 254 and cgroup v2.
-# Create a dedicated `saga` account and keep its data on a filesystem with a disk quota.
+# Saga on usesaga.xyz, behind Caddy (deploy/saga.caddy). Port 8090 because 8080 is taken on that host.
+# Secrets go in /etc/saga/saga.env (0600, see .env.example) and agents in /etc/saga/saga.json. MemoryMax
+# covers Saga and every agent it runs: size it to the host (this one has 2 GB). Requires systemd >= 254
+# and cgroup v2. Create a dedicated `saga` account and keep its data on a filesystem with a disk quota.
 [Unit]
 Description=Saga
 After=network-online.target
@@ -12,13 +14,13 @@ WorkingDirectory=/var/lib/saga
 StateDirectory=saga
 StateDirectoryMode=0700
 Environment=HOME=/var/lib/saga
-EnvironmentFile=-/etc/saga/saga.env
+EnvironmentFile=/etc/saga/saga.env
 UMask=0077
 Delegate=cpu memory pids
 DelegateSubgroup=server
-MemoryMax=6G
+MemoryMax=1200M
 TasksMax=512
-ExecStart=/usr/local/bin/saga serve --host 127.0.0.1 --port 8080 --accounts user --wallet-only --public-origin https://usesaga.xyz --trust-proxy --agent-cgroups /sys/fs/cgroup/system.slice/saga.service/agents
+ExecStart=/usr/local/bin/saga serve --config /etc/saga/saga.json --host 127.0.0.1 --port 8090 --accounts user --wallet-only --public-origin https://usesaga.xyz --trust-proxy --agent-cgroups /sys/fs/cgroup/system.slice/saga.service/agents
 Restart=on-failure
 RestartSec=5
 
