@@ -2,6 +2,7 @@
 #include "core/proxy.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/vfs.h>
 #include <fcntl.h>
 
@@ -356,6 +357,9 @@ proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::
   o.cwd.clear();  // bwrap --chdir sets it
   o.env = environment(sb);
   o.inherit_env = false;  // bwrap passes exactly this on; nothing of the server's
+  // Codex won't start, or sign in, unless CODEX_HOME exists, and a new or scrubbed home has none. mkdir
+  // doesn't follow a link the agent may have left in its own home; an existing entry is left alone.
+  if (!sb.home.empty()) ::mkdir((fs::path(sb.home) / ".codex").c_str(), 0700);
   try {
     ResourceGroup group;
     if (!group.path.empty()) o.cgroup_procs = (group.path / "cgroup.procs").string();
