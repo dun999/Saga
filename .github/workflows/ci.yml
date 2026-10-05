@@ -41,7 +41,7 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja
       - name: Build
-        run: cmake --build build
+        run: cmake --build build -- -k 0
       - name: Smoke test
         run: |
           ./build/saga help

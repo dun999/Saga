@@ -16,6 +16,8 @@
 #include <sstream>
 #include <string_view>
 
+extern char** environ;  // glibc declares it in <unistd.h>; macOS does not
+
 namespace saga::proc {
 Options::~Options() {
   secrets::clear(stdin_data);
