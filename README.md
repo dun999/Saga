@@ -179,6 +179,7 @@ Saga builds on Linux and macOS with CMake 3.24+ and a C++23 compiler; on Windows
 sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf
 
 # Debian / Ubuntu (including Ubuntu on WSL2)
+sudo apt update
 sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config
 
 # macOS, with Homebrew (curl and zlib come with the system)

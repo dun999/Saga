@@ -1,23 +1,19 @@
 # Saga
 
-> Run this repository on Linux or macOS; on Windows, inside WSL2 (Ubuntu). Do the steps in order. Stay in the repository root after the clone. Stop at the first command that fails and fix that step before the next one.
+> Saga is a multi-agent chat harness. You mention Claude Code, Codex, Grok or an API model with `@name`, and Walrus Memory stores what it learns. These steps build it from source and run it on this machine. Use Linux or macOS. On Windows, use Ubuntu inside WSL2. Run the steps in order, from the repository root. If a command fails, fix that step before you continue. Each step says what success looks like.
 
-## Run this locally
+You do not need a wallet, a Walrus account or an API key to open the UI. The first build downloads dependencies, so you need a network connection.
 
-The first CMake configure downloads dependencies and needs a network. You do not need a Walrus account, an API key, or a wallet to open the UI.
+## 1. Install the toolchain
 
-### 1. Clone
+You need git, CMake 3.24 or newer, and a C++23 compiler (GCC 13 or newer, or Apple Clang).
+
+Debian or Ubuntu, including Ubuntu on WSL2:
 
 ```bash
-git clone https://github.com/dun999/Saga.git
-cd Saga
+sudo apt update
+sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config
 ```
-
-This file is `llms.txt` in that checkout. After the server is running it is also `http://127.0.0.1:8080/llms.txt`.
-
-### 2. Install the toolchain
-
-You need CMake 3.24 or newer, a C++23 compiler, and a matching assembler. CI builds with GCC 15 on Fedora. GCC 15 and newer emit a `.base64` assembler directive, which binutils older than 2.43 cannot read.
 
 Fedora:
 
@@ -25,96 +21,114 @@ Fedora:
 sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf
 ```
 
-Debian or Ubuntu, including Ubuntu on WSL2 for Windows (GCC 13 or newer; Ubuntu 24.04's default works):
-
-```bash
-sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config
-```
-
-macOS, with Homebrew (Apple Clang; curl and zlib come with the system):
+macOS, with Homebrew (git, curl and zlib come with the system):
 
 ```bash
 brew install cmake ninja libsodium pkgconf
 ```
 
-Windows: run `wsl --install` in PowerShell, open Ubuntu, and do every step inside it, including installing the agent CLIs. Serving other people (`--accounts user`) needs Linux; running Saga for yourself works on all three.
+Windows: run `wsl --install` in PowerShell and open Ubuntu. Do every step inside Ubuntu, including installing the agent CLIs in step 6.
 
-Use the compiler and assembler from that install. Check before you build:
-
-```bash
-command -v g++
-command -v as
-as --version
-```
-
-`as` should be `/usr/bin/as`, and its version should be 2.43 or newer. If an older `as` appears first on `PATH`, the build fails with `unknown pseudo-op: .base64`. Put the distro binaries first, delete the failed build directory, and start again:
+## 2. Clone
 
 ```bash
-export PATH=/usr/bin:$PATH
-rm -rf build
+git clone https://github.com/dun999/Saga.git
+cd Saga
 ```
 
-Prepend, do not replace: the `claude`, `codex`, and `grok` CLIs often live in `~/.local/bin`, and Saga finds them through `PATH` when you serve from this shell.
+Stay in this directory for every step below. This file is `llms.txt` in the checkout.
 
-### 3. Build
+## 3. Build
 
 ```bash
 cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-The server binary is `./build/saga`.
+Success: the build's last line ends with `Linking CXX executable saga`, and `./build/saga` exists.
 
-### 4. Check the build
+If the build fails:
+
+- `unknown pseudo-op: .base64`: an old assembler was found before the one your compiler expects. GCC 15 or newer needs binutils 2.43 or newer. `command -v as` should print `/usr/bin/as`. Put the system binaries first and rebuild from scratch:
+
+  ```bash
+  export PATH=/usr/bin:$PATH
+  rm -rf build
+  cmake -S . -B build -G Ninja && cmake --build build
+  ```
+
+  Add `/usr/bin` to the front of `PATH` and keep the rest. The `claude`, `codex` and `grok` CLIs often live in `~/.local/bin`, and Saga finds them through this shell's `PATH`.
+- `Killed` or `signal 9` while compiling: the machine ran out of memory. Run fewer compile jobs at once with `cmake --build build -j2`.
+
+## 4. Check the build
 
 ```bash
 ./build/saga help
 ```
 
-`help` lists the commands and needs no credentials.
+Success: the first line is `saga — self-improving multi-agent harness with native Walrus Memory`, followed by the command list. No credentials are needed.
 
-### 5. Serve the UI
-
-Do this before you create `.env`. `./build/saga serve` and `./build/saga doctor` both exit until `MEMWAL_PRIVATE_KEY` and `MEMWAL_ACCOUNT_ID` contain real keys:
-
-```text
-saga: MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID must be set (see .env.example)
-```
-
-Start with memory off:
+## 5. Serve the UI without keys
 
 ```bash
 ./build/saga serve --no-memory
 ```
 
-If port 8080 is already taken, `serve` exits with `saga: cannot listen on 127.0.0.1:8080`. Use a free port:
+Success: it prints `saga: listening on http://127.0.0.1:8080` and keeps running in the foreground until you press Ctrl+C. If you are an agent driving a shell, start it in the background and check it:
 
 ```bash
-./build/saga serve --no-memory --port 8081
+./build/saga serve --no-memory > /tmp/saga-serve.log 2>&1 &
+sleep 2
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/
 ```
 
-Open the URL it prints. The default is http://127.0.0.1:8080
+That check should print `200`.
 
-- `/` is the landing page. **Start chatting** opens the app. **llms.txt** opens this file.
-- `/app` asks for a guest name. Type one and press **Continue as guest**. A wallet is not required. The sidebar shows that name, and the page says memory is off.
-- `/llms.txt` is this file.
+Expected messages that are not bugs:
 
-Send a message that mentions a CLI agent signed in on this machine, for example `@claude hello`. A message without a mention goes to `@saga`, which fails with `BOUNDLESS_API_KEY not set` until step 6.
+- `--no-memory` is required until step 7. Without it, `serve` exits with `saga: MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID must be set (see .env.example)`.
+- `saga: cannot listen on 127.0.0.1:8080 (already in use? pick another with --port)` means another program is using that port. Add `--port 8081` and use that port in the URLs below.
 
-Run `serve` from the repository root. It reads `saga.json` and stores chat workspaces in `workspaces/`. On loopback it uses the CLI logins on this machine and does not start the bubblewrap sandbox.
+In a browser:
 
-### 6. Optional: turn memory and @saga on
+- http://127.0.0.1:8080/ is the landing page. **Start chatting** opens the app.
+- http://127.0.0.1:8080/app asks for a guest name. Type any name and press **Continue as guest**. The sidebar shows the name, and the page says memory is off.
+- http://127.0.0.1:8080/llms.txt is this file.
 
-Create the keys first. Copying `.env.example` and running `serve` without editing it still refuses to start, because the key lines are empty.
+What happens when you send a message:
 
-- `MEMWAL_PRIVATE_KEY` and `MEMWAL_ACCOUNT_ID` come from https://memory.walrus.xyz
-- `BOUNDLESS_API_KEY`, for the `@saga` assistant, comes from https://inference.boundless.network
+| Message | Result |
+|---|---|
+| `@claude hello`, with Claude Code installed and signed in (step 6) | Claude replies. |
+| `@claude hello`, without the CLI | Saga reports `claude not found on PATH` and hands the turn to `@saga`. |
+| `hello`, with no mention | The turn goes to `@saga`. It fails with `BOUNDLESS_API_KEY not set` until step 7. |
+
+`serve` reads `saga.json` and `.env` from the current directory and keeps chat workspaces in `workspaces/`. On `127.0.0.1` it uses the CLI logins of the user who started it.
+
+## 6. Agents you can mention
+
+`saga.json` defines the teammates:
+
+- `@claude` is the Claude Code CLI (`claude`).
+- `@codex` is the Codex CLI (`codex`).
+- `@grok` is the Grok CLI (`grok`).
+- `@saga` is an API model that needs `BOUNDLESS_API_KEY` (step 7).
+- `claude-brain` runs internal reflection through Claude Code. Do not mention it.
+
+Install and sign in only the CLIs you want, following each provider's instructions. Then restart `serve` from a shell where `command -v claude` (or `codex`, or `grok`) prints a path. A missing CLI is shown as unavailable, and the server still runs.
+
+## 7. Optional: memory and @saga
+
+Get the keys:
+
+- `MEMWAL_PRIVATE_KEY` and `MEMWAL_ACCOUNT_ID` from https://memory.walrus.xyz
+- `BOUNDLESS_API_KEY` from https://inference.boundless.network
 
 ```bash
 cp .env.example .env
 ```
 
-Put each secret alone on its line. Saga keeps every character after `=`. A `# comment` on that same line becomes part of the key, and `serve` then fails with a bech32 parse error instead of the message in step 5.
+Fill in `.env`. Put each value alone on its line. Saga keeps every character after `=`, so a `# comment` on the same line becomes part of the key and breaks it.
 
 ```dotenv
 MEMWAL_PRIVATE_KEY=suiprivkey1...
@@ -122,33 +136,32 @@ MEMWAL_ACCOUNT_ID=0x...
 BOUNDLESS_API_KEY=...
 ```
 
-`.env` is loaded from the current directory. A variable already set in the environment wins over the file.
+A variable already set in the environment overrides `.env`. A copied `.env.example` with empty values still fails with the MEMWAL message from step 5.
 
 ```bash
 ./build/saga doctor
+```
+
+Success: the relayer, network, delegate key, `remember → Walrus blob` and `recall` lines all say `ok`, and the output ends with a walruscan.com link to the test blob. Agents you have not installed show as unavailable. That does not fail `doctor`.
+
+Then serve with memory:
+
+```bash
 ./build/saga serve
 ```
 
-`doctor` checks the relayer, the delegate key, each agent in `saga.json`, and one remember/recall round trip. Drop `--no-memory` only after `doctor` succeeds. The UI still starts when `BOUNDLESS_API_KEY` is empty. A turn that calls `@saga` fails until that key is set.
-
-### 7. Agents you can mention
-
-`saga.json` defines the teammates:
-
-- `@saga` uses Boundless and needs `BOUNDLESS_API_KEY`.
-- `@claude` is the Claude Code CLI, already signed in on this machine.
-- `@codex` is the Codex CLI, already signed in on this machine.
-- `@grok` is the Grok CLI, already signed in on this machine.
-- `claude-brain` is internal reflection and needs Claude Code. Do not mention it.
-
-Install and sign in only the CLIs you intend to use. A missing CLI is reported as unavailable. The server still starts.
-
-### 8. Terminal chat
+## 8. Terminal chat, without a browser
 
 ```bash
 ./build/saga chat --user mira --no-memory
 ```
 
-`/quit` exits. With memory enabled, `/good` and `/bad <reason>` rate the last turn.
+`/quit` exits. With memory on (drop `--no-memory` after step 7), `/good` and `/bad <reason>` rate the last turn. An agent can drive it through a pipe:
 
-Keep this trial on loopback. Serving any other host requires `--accounts user --public-origin https://… --agent-cgroups PATH`; sign-in is then a wallet or a username with a password (`--wallet-only` for wallets alone). That setup is in the README and in `deploy/saga.service`.
+```bash
+printf '@claude reply with: ok\n/quit\n' | ./build/saga chat --user mira --no-memory
+```
+
+## Serving other people
+
+Keep this setup on `127.0.0.1`. Serving another host needs Linux and `--accounts user --public-origin https://… --agent-cgroups PATH`. Sign-in is then a wallet, or a username with a password (`--wallet-only` allows wallets only). The README and `deploy/saga.service` cover that setup.
