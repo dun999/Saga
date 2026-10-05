@@ -2,6 +2,7 @@
 #include "web/event_queue.h"
 
 #include <httplib.h>
+#include <sodium.h>
 
 #include <algorithm>
 #include <cctype>
@@ -148,7 +149,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   // Headers are written after this runs, including on a 413 that never reached a handler.
   svr.set_post_routing_handler([](const httplib::Request&, httplib::Response& res) {
     res.set_header("X-Content-Type-Options", "nosniff");
-    res.set_header("X-Frame-Options", "DENY");
+    if (!res.has_header("X-Frame-Options")) res.set_header("X-Frame-Options", "DENY");
     res.set_header("Referrer-Policy", "no-referrer");
     if (!res.has_header("Content-Security-Policy"))
       res.set_header("Content-Security-Policy", security_csp("", false));
@@ -277,6 +278,63 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     send_page(req, res, page);
   });
   svr.Get("/app", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kIndexHtml); });
+
+  // ---- live preview: the page agents built in a chat's workspace -------------------------------
+  // Agent-written HTML and scripts are untrusted. Every preview response carries CSP `sandbox`, so the
+  // page runs in an opaque origin: no Saga cookies, no reading Saga's API, and its requests fail the
+  // origin check on anything that changes state. A sandboxed frame sends no session cookie either, so
+  // a preview URL carries its own authorization: uid, chat and expiry, signed with a per-process key.
+  static const crypto::Bytes preview_key = [] {
+    crypto::init();
+    crypto::Bytes k(crypto_auth_KEYBYTES);
+    randombytes_buf(k.data(), k.size());
+    return k;
+  }();
+  auto preview_mac = [](const std::string& uid, const std::string& session, const std::string& expires) {
+    const std::string msg = uid + "\n" + session + "\n" + expires;
+    unsigned char mac[crypto_auth_BYTES];
+    crypto_auth(mac, reinterpret_cast<const unsigned char*>(msg.data()), msg.size(), preview_key.data());
+    return crypto::to_hex(mac, sizeof mac);
+  };
+  svr.Post("/api/preview", [&](const httplib::Request& req, httplib::Response& res) {
+    auto j = json::parse(req.body, nullptr, false);
+    const std::string uid = uid_of(req, res);
+    const std::string session = sanitize_uid(j.is_object() ? j.value("session", "") : "");
+    if (session.empty()) return send_json(res, {{"error", "session required"}}, 400);
+    const std::string entry = h.preview_entry(uid, session);
+    if (entry.empty()) return send_json(res, {{"available", false}});
+    const std::string expires = std::to_string(std::time(nullptr) + 12 * 3600);
+    send_json(res, {{"available", true}, {"entry", entry},
+                    {"url", "/preview/" + uid + "/" + session + "/" + expires + "/" + preview_mac(uid, session, expires) + "/" + entry}});
+  });
+  svr.Get(R"(/preview/([a-z0-9_-]{1,80})/([a-z0-9_-]{1,80})/([0-9]{1,12})/([0-9a-f]{64})/(.*))",
+          [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string uid = req.matches[1], session = req.matches[2], expires = req.matches[3];
+    const bool valid = crypto::constant_time_equal(preview_mac(uid, session, expires), req.matches[4].str()) &&
+                       std::stoll(expires) > std::time(nullptr);
+    std::string rel = req.matches[5];
+    if (rel.empty() || rel.back() == '/') rel += "index.html";
+    static const std::map<std::string, std::string> kTypes = {
+        {".html", "text/html; charset=utf-8"}, {".htm", "text/html; charset=utf-8"}, {".css", "text/css; charset=utf-8"},
+        {".js", "text/javascript; charset=utf-8"}, {".mjs", "text/javascript; charset=utf-8"},
+        {".json", "application/json"}, {".svg", "image/svg+xml"}, {".png", "image/png"}, {".jpg", "image/jpeg"},
+        {".jpeg", "image/jpeg"}, {".gif", "image/gif"}, {".webp", "image/webp"}, {".avif", "image/avif"},
+        {".ico", "image/x-icon"}, {".woff", "font/woff"}, {".woff2", "font/woff2"}, {".txt", "text/plain; charset=utf-8"},
+        {".md", "text/plain; charset=utf-8"}, {".map", "application/json"}, {".mp4", "video/mp4"}, {".webm", "video/webm"}};
+    const auto dot = rel.rfind('.');
+    const auto type = dot == std::string::npos ? kTypes.end() : kTypes.find(rel.substr(dot));
+    const auto body = valid ? harness::read_in_workspace(h.workspace_for(uid, session), rel, 8 * 1024 * 1024) : std::nullopt;
+    res.set_header("Content-Security-Policy",
+                   "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads; "
+                   "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; base-uri 'self'; form-action 'none'");
+    res.set_header("X-Frame-Options", "SAMEORIGIN");
+    res.set_header("Cache-Control", "no-store");
+    if (!body) {
+      res.status = valid ? 404 : 403;
+      return res.set_content(valid ? "Not in this chat's workspace." : "This preview link has expired.", "text/plain; charset=utf-8");
+    }
+    res.set_content(*body, type == kTypes.end() ? "application/octet-stream" : type->second);
+  });
 
   svr.Post("/api/login", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);

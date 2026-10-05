@@ -30,6 +30,7 @@ The browser UI brings the workflow together:
 
 - **Chat with multiple agents.** Mention teammates, see their progress, and inspect recalled memories.
 - **Connect your providers.** Use Claude, Codex, Grok, or an OpenAI-compatible endpoint with your own account.
+- **See what they built.** When agents leave a page (`index.html`) in the chat's workspace, a live preview opens beside the chat. It runs in a sandboxed origin, so the page's scripts can't see your session.
 - **Work on a repository.** Connect GitHub, select a repo, and let coding agents work in a chat workspace. Open a pull request from the resulting changes.
 - **Give feedback.** Rate an answer or explain what went wrong so Saga can reflect on the attempt.
 - **See memory being saved.** Pending writes become links to Walrus blobs when storage is confirmed.

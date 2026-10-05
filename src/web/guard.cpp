@@ -93,7 +93,7 @@ std::string security_csp(std::string_view nonce, bool document) {
   // 'unsafe-inline' is ignored for scripts once a nonce is present, which is the point: injected
   // script tags do not have this response's nonce. Inline style attributes stay, because the pages
   // are full of them. esm.sh is the wallet-standard module; fonts load from Google.
-  return "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'none'; "
+  return "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; frame-src 'self'; "
          "script-src 'self' 'nonce-" +
          std::string(nonce) +
          "' https://esm.sh; "

@@ -81,6 +81,9 @@ std::string ns_user(const std::string& uid, const char* what);
 std::string ns_lessons(const std::string& agent, const std::string& uid);
 // Write one restored checkpoint file under `root` without following links; false = refused.
 bool write_in_workspace(const std::string& root, const std::string& rel, const std::string& content);
+// Read one file under `root` the same way: every step opened relative to its parent without following
+// links, no hidden (dot) components, a regular file of at most `max_bytes`. nullopt = refused or missing.
+std::optional<std::string> read_in_workspace(const std::string& root, const std::string& rel, size_t max_bytes);
 std::string memory_protocol(const std::string& uid, const std::string& agent, bool can_run_shell,
                             const std::string& saga_bin, bool native_tools = false);
 
@@ -158,6 +161,9 @@ class Harness {
   json vault_reset(const std::string& uid, const secrets::Key& vault);  // forget old sealed secrets
 
   std::string workspace_for(const std::string& uid, const std::string& session) const;
+  // The page a live preview opens: index.html at the top of the chat's workspace or up to two folders
+  // down (a cloned repo, a site/ folder), newest first. "" = nothing to preview yet.
+  std::string preview_entry(const std::string& uid, const std::string& session) const;
   bool user_accounts() const { return opt_.user_accounts; }
   agents::Registry& registry() { return reg_; }
   memwal::Store& store() { return store_; }

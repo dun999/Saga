@@ -186,6 +186,41 @@ bool write_in_workspace(const std::string& root, const std::string& rel, const s
   return ok;
 }
 
+std::optional<std::string> read_in_workspace(const std::string& root, const std::string& rel, size_t max_bytes) {
+  if (!safe_relative(rel)) return std::nullopt;
+  std::vector<std::string> parts;
+  for (auto& part : fs::path(rel))
+    if (!part.empty() && part != ".") parts.push_back(part.string());
+  if (parts.empty()) return std::nullopt;
+  for (auto& p : parts)
+    if (p.starts_with(".")) return std::nullopt;  // .git, .env, editor state: never served
+  int dir = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  for (size_t i = 0; dir >= 0 && i + 1 < parts.size(); ++i) {
+    const int next = ::openat(dir, parts[i].c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    ::close(dir);
+    dir = next;
+  }
+  if (dir < 0) return std::nullopt;
+  const int fd = ::openat(dir, parts.back().c_str(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+  ::close(dir);
+  if (fd < 0) return std::nullopt;
+  std::optional<std::string> out;
+  struct stat st{};
+  if (::fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && static_cast<size_t>(st.st_size) <= max_bytes) {
+    std::string body(static_cast<size_t>(st.st_size), '\0');
+    size_t off = 0;
+    while (off < body.size()) {
+      const ssize_t n = ::read(fd, body.data() + off, body.size() - off);
+      if (n <= 0) break;
+      off += static_cast<size_t>(n);
+    }
+    body.resize(off);
+    out = std::move(body);
+  }
+  ::close(fd);
+  return out;
+}
+
 std::string ns_user(const std::string& uid, const char* what) { return "u:" + uid + ":" + what; }
 std::string ns_lessons(const std::string& agent, const std::string& uid) {
   return ns_user(uid, "lessons") + ":" + agent;
@@ -1121,6 +1156,32 @@ json Harness::state() const {
           {"agents", reg_.roster()},
           {"recent_writes", writes},
           {"account_id", store_.client() ? store_.client()->account_id() : ""}};
+}
+
+std::string Harness::preview_entry(const std::string& uid, const std::string& session) const {
+  const fs::path root = workspace_for(uid, session);
+  std::string best;
+  fs::file_time_type newest{};
+  std::error_code ec;
+  for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+       !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+    const std::string name = it->path().filename().string();
+    if (it->is_symlink(ec) || name.starts_with(".") || name == "node_modules") {
+      if (it->is_directory(ec)) it.disable_recursion_pending();
+      continue;
+    }
+    if (it->is_directory(ec)) {
+      if (it.depth() >= 2) it.disable_recursion_pending();
+      continue;
+    }
+    if (name != "index.html" || !it->is_regular_file(ec)) continue;
+    const auto when = it->last_write_time(ec);
+    if (best.empty() || when > newest) {
+      best = it->path().lexically_relative(root).string();
+      newest = when;
+    }
+  }
+  return best;
 }
 
 std::string Harness::workspace_for(const std::string& uid, const std::string& session) const {
