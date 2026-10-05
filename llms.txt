@@ -1,6 +1,6 @@
 # Saga
 
-> Run this repository on a Linux machine. Do the steps in order. Stay in the repository root after the clone. Stop at the first command that fails and fix that step before the next one.
+> Run this repository on Linux or macOS; on Windows, inside WSL2 (Ubuntu). Do the steps in order. Stay in the repository root after the clone. Stop at the first command that fails and fix that step before the next one.
 
 ## Run this locally
 
