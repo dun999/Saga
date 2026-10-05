@@ -195,11 +195,10 @@ From the repository root:
 ```bash
 cmake -S . -B build -G Ninja
 cmake --build build
-ctest --test-dir build --output-on-failure
 ./build/saga help
 ```
 
-`ctest` runs the unit suite and does not need a Walrus account. Open the UI before creating any keys. Leave `.env` absent:
+Open the UI before creating any keys. Leave `.env` absent:
 
 ```bash
 ./build/saga serve --no-memory

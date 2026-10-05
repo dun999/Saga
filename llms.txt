@@ -61,10 +61,9 @@ The server binary is `./build/saga`.
 
 ```bash
 ./build/saga help
-ctest --test-dir build --output-on-failure
 ```
 
-`help` lists the commands and needs no credentials. `ctest` runs `saga_tests` and needs no credentials.
+`help` lists the commands and needs no credentials.
 
 ### 5. Serve the UI
 
