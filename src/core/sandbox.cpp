@@ -344,7 +344,9 @@ std::map<std::string, std::string> environment(const Sandbox& sb) {
                                             {"TERM", "dumb"},
                                             // Walrus is the agents' memory (see ClaudeCodeAgent::child_env).
                                             {"CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1"},
-                                            {"ENABLE_CLAUDEAI_MCP_SERVERS", "false"}};
+                                            {"ENABLE_CLAUDEAI_MCP_SERVERS", "false"},
+                                            // The CLIs are the host's, shared read-only: no per-user self-updates.
+                                            {"DISABLE_AUTOUPDATER", "1"}};
   for (auto& [k, v] : sb.env) env[k] = v;
   return env;
 }

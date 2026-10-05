@@ -60,6 +60,9 @@ TEST_CASE("a username with a password is claimed once, opens only with that pass
   // A password account can keep its own API key, sealed under its vault; a guest can't.
   const json own = {{"name", "qwen"}, {"base_url", "https://api.example.com/v1"}, {"model", "qwen3"}, {"api_key", "sk-test-1234"}};
   CHECK_FALSE(h.add_agent("carol", own, vault).contains("error"));
+  // Provider accounts are for wallets: a username account brings its own API agents instead.
+  CHECK(h.connect_agent("carol", "claude", vault).value("error", "").find("wallet") != std::string::npos);
+  CHECK(h.set_credential("carol", "claude", "api_key", "sk-ant-api03-CAROL", vault).value("error", "").find("wallet") != std::string::npos);
   json guest_agent = own;
   guest_agent["name"] = "qwen2";
   CHECK(h.add_agent("dave", guest_agent, {}).contains("error"));

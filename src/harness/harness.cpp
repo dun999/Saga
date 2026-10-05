@@ -1419,6 +1419,10 @@ std::string strip_ansi(const std::string& s) {
 // gets an empty keyring nothing is ever saved to. '~' never appears in a uid.
 namespace {
 const json kWalletOnly = {{"error", "Sign in with a wallet or a password to connect accounts. Guest usernames can't keep credentials."}};
+// Claude, ChatGPT and Grok accounts are connected by wallet users only; a username account brings its
+// own API agents instead.
+const json kProviderWalletOnly = {{"error", "Sign in with a wallet to connect your own Claude, ChatGPT or Grok account. "
+                                            "Username accounts can add their own API agents."}};
 }  // namespace
 
 // A wallet, or a username registered with a password and signed in (its vault key is present): both
@@ -1607,7 +1611,7 @@ json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
 json Harness::connect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault, bool remember) {
   agents::Agent* a = reg_.find(name);
   if (!a) return {{"error", "unknown agent"}};
-  if (opt_.user_accounts && !keeps_credentials(uid, vault)) return kWalletOnly;
+  if (opt_.user_accounts && !is_wallet(uid)) return keeps_credentials(uid, vault) ? kProviderWalletOnly : kWalletOnly;
   if (opt_.user_accounts && vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
 
   if (!opt_.user_accounts) {
@@ -1706,7 +1710,7 @@ json Harness::connect_status(const std::string& uid, const std::string& name, co
 json Harness::set_credential(const std::string& uid, const std::string& name, const std::string& kind,
                              const std::string& value, const secrets::Key& vault, bool remember) {
   if (!opt_.user_accounts) return {{"error", "this Saga runs agents on the operator's own accounts"}};
-  if (!keeps_credentials(uid, vault)) return kWalletOnly;
+  if (!is_wallet(uid)) return keeps_credentials(uid, vault) ? kProviderWalletOnly : kWalletOnly;
   if (vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
   agents::Agent* a = reg_.find(name);
   if (!a) return {{"error", "unknown agent"}};

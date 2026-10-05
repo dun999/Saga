@@ -945,7 +945,7 @@ async function refreshUsage() {
     const ws = (a.windows || []).map(w => ({...w, pct: Math.max(0, Math.min(100, w.used_percent || 0))}));
     const worst = ws.reduce((m, w) => !m || w.pct > m.pct ? w : m, null);
     const heat = pct => pct >= 100 ? "full" : pct >= 90 ? "hot" : "";
-    const how = me.auth || state.accounts !== "user" ? x.connect || [] : [];
+    const how = me.wallet || state.accounts !== "user" ? x.connect || [] : [];
     const cs = connectState[x.name] || {};
     const connecting = (!!x.device && cs.mode !== "closed") || ["token", "api_key", "choose", "busy", "confirm"].includes(cs.mode);
     const box = connectBox(x, how);
@@ -1022,7 +1022,7 @@ async function refreshUsage() {
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center"><button class="btn-connect">Add agent</button><button type="button" class="btn-ghost" id="addCancel">Cancel</button><span class="m off" id="addErr"></span></div>
     </form>`;
   const addTile = `<div class="tile add-tile" id="addTile"><div class="plus">+</div><div><b style="color:var(--ink);font-size:13.5px;font-weight:500">Add an agent with your own API key</b><div class="m">OpenRouter, xAI, Groq, OpenAI, Ollama…</div></div></div>`;
-  const guestNote = me.auth || state.accounts === "host" ? "" : `<div class="tile" style="display:flex;align-items:center;gap:12px"><div class="m" style="flex:1">Guests can't connect personal accounts in user account mode. Sign in with a wallet to use your own Claude, ChatGPT or Grok account.</div><button class="btn-connect" id="agWallet">Connect wallet</button></div>`;
+  const guestNote = me.wallet || state.accounts === "host" ? "" : `<div class="tile" style="display:flex;align-items:center;gap:12px"><div class="m" style="flex:1">${me.auth ? "Username accounts add their own API agents with +." : "Guests can't connect personal accounts in user account mode."} Sign in with a wallet to use your own Claude, ChatGPT or Grok account.</div><button class="btn-connect" id="agWallet">Connect wallet</button></div>`;
   const vaultNote = guestNote + (vault.state === "mismatch"
     ? `<div class="tile" style="background:rgba(180,81,59,.10)"><b style="font-size:13.5px">Your saved accounts are locked with a different key</b><div class="m" style="display:block;line-height:1.6">This happens with some wallets (like Google sign-in) on a new device or session: the vault key can't be recreated, so Saga can't open what you connected before. Reset to delete the old, unreadable credentials and connect again here.</div><div style="margin-top:10px"><button class="btn-connect" id="vaultReset">Reset and reconnect</button></div></div>`
     : "");
