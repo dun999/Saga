@@ -47,7 +47,7 @@ li { margin: 6px 0; }
 </header>
 <main>
   <h1>Privacy &amp; cookies</h1>
-  <p class="updated">Last updated: 4 October 2026</p>
+  <p class="updated">Last updated: 5 October 2026</p>
 
   <div class="summary">
     <p><strong>A memory namespace is a label, not a login or a password.</strong> Anyone entering the same guest username shares its memory, chats and workspace files.</p>
@@ -81,7 +81,7 @@ li { margin: 6px 0; }
   <table>
     <thead><tr><th>Name</th><th>What it does</th><th>Lifetime</th></tr></thead>
     <tbody>
-      <tr><td><code>saga_session</code></td><td>A random ID for your signed-in session (wallet or password). It contains no wallet address, vault key or provider credential, but possession of it grants access to the live session. <em>HttpOnly</em> keeps page scripts from reading it; public HTTPS deployments also mark it <em>Secure</em>.</td><td>1 hour by default; sign-out or a server restart invalidates the session sooner</td></tr>
+      <tr><td><code>saga_session</code></td><td>A random ID for your signed-in session (wallet or password). It contains no wallet address, vault key or provider credential, but possession of it grants access to the live session. <em>HttpOnly</em> keeps page scripts from reading it; public HTTPS deployments also mark it <em>Secure</em>.</td><td>Renewed while you use Saga; ends after 1 hour of inactivity or 7 days after sign-in. Sign-out or a server restart invalidates the session sooner</td></tr>
       <tr><td><code>saga_csrf</code></td><td>A matching value the page sends with each change you make, so another site can't submit one for you (a double-submit check). <em>SameSite=Strict</em>. Page scripts can read it; it is not a login secret.</td><td>14 days</td></tr>
       <tr><td><code>saga_uid</code></td><td>Your guest username, or an anonymous handle before you pick one. Not used once you sign in with a wallet or a password.</td><td>1 year</td></tr>
       <tr><td><code>saga_gh_state</code></td><td>During GitHub OAuth sign-in: a one-time value that ties the reply to your request, plus your choice about remembering the connection.</td><td>10 minutes, or until the callback clears it</td></tr>
@@ -132,7 +132,7 @@ li { margin: 6px 0; }
   <ul>
     <li><strong>Personal credentials:</strong> use <strong>Profile → Connections → Disconnect</strong>, or remove a custom API agent. This removes its saved credential from Saga's active storage. It does not erase chats, cloned repos, backups or data already sent to providers. Revoke API keys and authorizations at the provider when needed.</li>
     <li><strong>Host connections:</strong> Disconnect runs the provider's sign-out on the host machine and affects other users of that CLI. Signing out of Saga alone does not sign the host's CLI out.</li>
-    <li><strong>Wallet session:</strong> use <strong>Profile → Sign out</strong> to invalidate that session, clear its vault key and cancel active work. Clearing cookies alone does not immediately revoke a session on the server or stop running work; the session expires after one hour by default. Signing out of a guest name does not delete its shared data.</li>
+    <li><strong>Wallet session:</strong> use <strong>Profile → Sign out</strong> to invalidate that session, clear its vault key and cancel active work. Clearing cookies alone does not immediately revoke a session on the server or stop running work; the session expires after one hour of inactivity, or seven days after sign-in even if it is in use. Signing out of a guest name does not delete its shared data.</li>
     <li><strong>Memory and files:</strong> Saga has no in-app delete-all-memory control. Ask the operator to remove local workspaces and arrange deletion of stored memory, including transcripts, source copies and derived lessons. Removing search-index entries alone does not erase Walrus blobs; restoration can make them searchable again.</li>
     <li><strong>Walrus retention:</strong> deletion depends on blob ownership and the relayer's available controls. MemWal documents a <a href="https://docs.wal.app/walrus-memory/guides/delete-memories-programmatically">Security Delete flow</a> for eligible blobs, authorized by their owning wallet; in Saga that may be the deployment's memory-account owner. Storage expiry is not a promise that every copy disappears. Provider records and operator backups have separate retention.</li>
   </ul>
