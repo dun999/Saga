@@ -20,6 +20,7 @@ struct Options {
   size_t max_output_bytes = 8 * 1024 * 1024;  // combined stdout/stderr; cannot be disabled
   size_t max_line_bytes = 1024 * 1024;
   std::string cgroup_procs;  // trusted cgroup v2 membership file, joined before exec
+  int pass_fd = -1;          // handed to the child as fd 3 (bwrap --seccomp 3); every other fd is closed
   const std::atomic<bool>* session_cancel = nullptr;
   ~Options();
 };

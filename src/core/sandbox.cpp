@@ -2,7 +2,12 @@
 #include "core/proxy.h"
 
 #include <unistd.h>
+#include <linux/audit.h>
+#include <linux/filter.h>
+#include <linux/seccomp.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/vfs.h>
 #include <fcntl.h>
 
@@ -352,6 +357,68 @@ std::map<std::string, std::string> environment(const Sandbox& sb) {
   return env;
 }
 
+namespace {
+// Kernel interfaces no agent needs, each a common route to a kernel exploit: module and kexec loading,
+// eBPF, perf, userfaultfd, keyrings, io_uring, mount and handle APIs, and clock or swap control. Docker's
+// default profile refuses the same families. io_uring answers ENOSYS so runtimes fall back to epoll.
+// Returns a sealed memfd holding the classic BPF program bwrap's --seccomp reads, or -1 off x86-64.
+int seccomp_program() {
+#if defined(__x86_64__)
+  static const int kDenied[] = {
+      SYS_kexec_load, SYS_kexec_file_load, SYS_init_module, SYS_finit_module, SYS_delete_module, SYS_bpf,
+      SYS_perf_event_open, SYS_userfaultfd, SYS_keyctl, SYS_add_key, SYS_request_key, SYS_mount, SYS_umount2,
+      SYS_pivot_root, SYS_fsopen, SYS_fsconfig, SYS_fsmount, SYS_fspick, SYS_move_mount, SYS_open_tree,
+      SYS_mount_setattr, SYS_open_by_handle_at, SYS_name_to_handle_at, SYS_setns, SYS_swapon, SYS_swapoff,
+      SYS_reboot, SYS_acct, SYS_settimeofday, SYS_clock_settime, SYS_clock_adjtime, SYS_adjtimex, SYS_quotactl,
+      SYS_lookup_dcookie, SYS_iopl, SYS_ioperm, SYS_syslog, SYS_vhangup, SYS_uselib};
+  static const int kUnsupported[] = {SYS_io_uring_setup, SYS_io_uring_enter, SYS_io_uring_register};
+  std::vector<sock_filter> f = {
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, arch)),
+      BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+      BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, nr)),
+      // The x32 ABI reaches the same kernel code under other numbers.
+      BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EPERM),
+  };
+  auto refuse = [&](int nr, int err) {
+    f.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, static_cast<uint32_t>(nr), 0, 1));
+    f.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | static_cast<uint32_t>(err)));
+  };
+  for (int nr : kDenied) refuse(nr, EPERM);
+  for (int nr : kUnsupported) refuse(nr, ENOSYS);
+  f.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+  const int fd = ::memfd_create("saga-seccomp", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+  if (fd < 0) throw std::runtime_error("cannot prepare the agent syscall filter");
+  const size_t bytes = f.size() * sizeof(sock_filter);
+  if (::write(fd, f.data(), bytes) != static_cast<ssize_t>(bytes) || ::lseek(fd, 0, SEEK_SET) != 0 ||
+      ::fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL) != 0) {
+    ::close(fd);
+    throw std::runtime_error("cannot prepare the agent syscall filter");
+  }
+  return fd;
+#else
+  return -1;
+#endif
+}
+
+struct Fd {
+  int n = -1;
+  ~Fd() {
+    if (n >= 0) ::close(n);
+  }
+};
+
+// bwrap installs the filter on the agent before it runs anything.
+void with_seccomp(std::vector<std::string>& command, proc::Options& o, Fd& filter) {
+  if (command.empty()) return;
+  filter.n = seccomp_program();
+  if (filter.n < 0) return;
+  o.pass_fd = filter.n;
+  command.insert(command.begin() + 1, {"--seccomp", "3"});
+}
+}  // namespace
+
 proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::Options o) {
   o.session_cancel = sb.cancel.get();
   o.cwd.clear();  // bwrap --chdir sets it
@@ -363,7 +430,12 @@ proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::
   try {
     ResourceGroup group;
     if (!group.path.empty()) o.cgroup_procs = (group.path / "cgroup.procs").string();
-    if (sb.runner.empty()) return proc::run(wrap(sb, argv), o);  // offline library callers
+    Fd filter;
+    if (sb.runner.empty()) {  // offline library callers
+      auto command = wrap(sb, argv);
+      with_seccomp(command, o, filter);
+      return proc::run(command, o);
+    }
     proxy::Broker broker;
     const std::string dir = fs::path(broker.path()).parent_path().string();
     secrets::write_private_file(dir, "hosts", "127.0.0.1 localhost\n::1 localhost\n");
@@ -378,6 +450,7 @@ proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::
     marker = command.insert(marker, mounts.begin(), mounts.end());
     marker = std::find(marker, command.end(), "--");
     command.insert(marker + 1, {"/mnt/bin/saga", "sandbox-exec", "/mnt/proxy.sock"});
+    with_seccomp(command, o, filter);
     return proc::run(command, o);
   } catch (const std::exception& e) {
     proc::Result r; r.exit_code = 126; r.err = e.what(); return r;

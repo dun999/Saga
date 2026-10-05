@@ -146,7 +146,10 @@ class Harness {
   // Username + password sign-in. The first sign-in claims a name that has no memory yet; the Argon2id
   // verifier and the vault salt stay in the 0600 keys file, never in memory. Fills `vault` with the
   // password-derived key that seals this user's credentials. Returns {uid, created} or {error}.
-  json password_login(const std::string& name, const std::string& password, secrets::Key& vault);
+  // After 5 wrong passwords a name waits 30 s, doubling to 15 min, before another check runs (no Argon2
+  // work while it waits). `may_create` false refuses to claim a new name.
+  json password_login(const std::string& name, const std::string& password, secrets::Key& vault,
+                      bool may_create = true);
   // Where a user's connections live: the wallet address or signed-in username, or "<uid>~guest".
   std::string keyring(const std::string& uid, const secrets::Key& vault) const;
   bool keeps_credentials(const std::string& uid, const secrets::Key& vault) const;
@@ -230,8 +233,15 @@ class Harness {
   void reap_background_locked();
   bool spawn_locked(std::function<void()> fn);  // false when max_background jobs are still running
   // False when this run would spend the operator's daily budget and that budget is used up.
-  bool take_operator_run(const agents::Agent& agent);
+  bool take_operator_run(const agents::Agent& agent, const std::string& uid);
   std::vector<BgJob> background_;
+  struct LoginFailures {
+    int count = 0;
+    std::chrono::steady_clock::time_point until{};
+  };
+  std::mutex login_mu_;
+  std::map<std::string, LoginFailures> login_failures_;  // username → wrong passwords in a row
+  std::map<std::string, std::pair<std::string, int>> operator_user_runs_;  // uid → (day, built-in runs)
   std::string operator_day_;
   int operator_runs_ = 0;
   std::vector<std::future<void>> recalls_;  // in-flight memory reads (pruned as they finish)

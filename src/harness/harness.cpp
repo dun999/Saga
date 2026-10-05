@@ -312,7 +312,7 @@ bool Harness::spawn_locked(std::function<void()> fn) {
   return true;
 }
 
-bool Harness::take_operator_run(const agents::Agent& agent) {
+bool Harness::take_operator_run(const agents::Agent& agent, const std::string& uid) {
   // Empty owner is a built-in. In host mode every built-in spends the operator's login. In user
   // mode only a built-in with an operator API key does — a user's sandbox login is their own bill.
   if (!agent.spec().owner.empty()) return true;
@@ -325,6 +325,14 @@ bool Harness::take_operator_run(const agents::Agent& agent) {
     operator_runs_ = 0;
   }
   if (operator_runs_ >= opt_.operator_daily_runs) return false;
+  // On a shared Saga, accounts are cheap to make: one of them may spend a tenth of the day's budget.
+  if (opt_.user_accounts) {
+    auto& [user_day, runs] = operator_user_runs_[uid];
+    if (user_day != day) user_day = day, runs = 0;
+    if (runs >= std::max(10, opt_.operator_daily_runs / 10)) return false;
+    ++runs;
+    if (operator_user_runs_.size() > 10000) std::erase_if(operator_user_runs_, [&](auto& e) { return e.second.first != day; });
+  }
   ++operator_runs_;
   return true;
 }
@@ -447,8 +455,8 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
       res.error = why;
       return res;
     }
-    if (a && !take_operator_run(*a)) {
-      res.error = "this Saga's daily budget for built-in agents is used up";
+    if (a && !take_operator_run(*a, t.uid)) {
+      res.error = "today's budget for the built-in assistant is used up; add your own agent with + to keep going";
       return res;
     }
     agents::Task task{s.instruction, context, sbp ? sandbox::kWork : t.workspace, t.cancel.get(),
@@ -1437,8 +1445,27 @@ std::string Harness::keyring(const std::string& uid, const secrets::Key& vault) 
   return keeps_credentials(uid, vault) ? uid : uid + "~guest";
 }
 
-json Harness::password_login(const std::string& name, const std::string& password, secrets::Key& vault) {
+json Harness::password_login(const std::string& name, const std::string& password, secrets::Key& vault,
+                             bool may_create) {
   if (password.size() < 8 || password.size() > 256) return {{"error", "Use a password of 8 to 256 characters."}};
+  {
+    std::lock_guard lk(login_mu_);
+    const auto now = std::chrono::steady_clock::now();
+    if (auto it = login_failures_.find(name); it != login_failures_.end() && it->second.until > now) {
+      const auto wait = std::chrono::duration_cast<std::chrono::seconds>(it->second.until - now).count() + 1;
+      return {{"error", "Too many wrong passwords for this username. Try again in " + std::to_string(wait) + " s."}};
+    }
+  }
+  auto failed = [&] {
+    std::lock_guard lk(login_mu_);
+    auto& f = login_failures_[name];
+    if (++f.count >= 5) {
+      const int doublings = std::min(f.count - 5, 5);  // 30 s … 16 min
+      f.until = std::chrono::steady_clock::now() + std::chrono::seconds(std::min(30 << doublings, 900));
+    }
+    if (login_failures_.size() > 10000) std::erase_if(login_failures_, [](auto& e) { return e.second.count < 5; });
+    return json{{"error", "Wrong username or password."}};
+  };
   crypto::init();
   // One sign-in at a time: each Argon2id run holds 64 MB, and a name is claimed exactly once.
   static std::mutex mu;
@@ -1449,9 +1476,12 @@ json Harness::password_login(const std::string& name, const std::string& passwor
   if (account.is_object()) {
     const std::string verifier = account.value("verifier", "");
     if (verifier.empty() || crypto_pwhash_str_verify(verifier.c_str(), password.data(), password.size()) != 0)
-      return {{"error", "Wrong username or password."}};
+      return failed();
     salt_hex = account.value("salt", "");
+    std::lock_guard flk(login_mu_);
+    login_failures_.erase(name);
   } else {
+    if (!may_create) return {{"error", "Too many new accounts from your network. Try again later, or sign in with a wallet."}};
     // A name with memory but no password was made before passwords (a guest on this machine, or the
     // operator's own tests on the same MemWal account): its memory isn't the first claimant's to read.
     if (store_.enabled()) {

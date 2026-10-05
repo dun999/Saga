@@ -116,6 +116,20 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   };
   const std::string sec = opt.secure_cookies ? "; Secure" : "";
   RateLimiter limiter(std::max(opt.rate_per_ip, 1), std::max(opt.rate_global, 1));
+  // Password checks are slow on purpose (Argon2id), so they get their own, much smaller budget.
+  RateLimiter password_limiter(10, 300);
+  // New usernames per address in the last hour: claiming a name is free, so sybils are capped.
+  std::mutex signups_mu;
+  std::map<std::string, std::deque<std::chrono::steady_clock::time_point>> signups;
+  auto may_sign_up = [&](const std::string& ip, bool record) {
+    std::lock_guard lk(signups_mu);
+    const auto now = std::chrono::steady_clock::now();
+    auto& q = signups[ip];
+    while (!q.empty() && now - q.front() > std::chrono::hours(1)) q.pop_front();
+    if (record) q.push_back(now);
+    if (signups.size() > 10000) std::erase_if(signups, [](auto& e) { return e.second.empty(); });
+    return q.size() < 3;
+  };
   h.store().add_listener([hub](const memwal::WriteRecord& r) { hub->push(r); });
 
   auto client_ip = [&](const httplib::Request& req) {
@@ -280,9 +294,13 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
         return send_json(res, {{"error", "Pick a username of 3 to 32 letters, numbers, - or _."}}, 400);
       if (password.empty())
         return send_json(res, {{"error", "Enter a password. Your first sign-in with a new username sets it."}}, 400);
+      const std::string ip = client_ip(req);
+      if (!password_limiter.allow(ip))
+        return send_json(res, {{"error", "Too many sign-in attempts. Wait a minute and try again."}}, 429);
       secrets::Key vault;
-      const json r = h.password_login(handle, password, vault);
+      const json r = h.password_login(handle, password, vault, may_sign_up(ip, false));
       if (r.contains("error")) return send_json(res, r, 403);
+      if (r.value("created", false)) may_sign_up(ip, true);
       if (const std::string previous = auth.logout(cookie(req, "saga_session")); !previous.empty() && previous != handle)
         h.end_session(previous);
       h.end_session(handle);

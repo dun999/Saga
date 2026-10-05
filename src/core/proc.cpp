@@ -90,9 +90,13 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
     dup2(out_p[1], 1);
     dup2(opt.merge_stderr ? out_p[1] : err_p[1], 2);
     if (!opt.cwd.empty() && chdir(opt.cwd.c_str()) != 0) _exit(126);
-    // Concurrent web requests may have private files/sockets open without CLOEXEC. Only stdio
-    // belongs to this child; do not let those descriptors bypass filesystem/network isolation.
-    if (::syscall(SYS_close_range, 3u, ~0u, 0u) < 0) _exit(126);
+    // Concurrent web requests may have private files/sockets open without CLOEXEC. Only stdio (and
+    // the one descriptor the caller passes) belongs to this child; do not let those descriptors bypass
+    // filesystem/network isolation.
+    if (opt.pass_fd >= 0) {
+      if (opt.pass_fd == 3 ? ::fcntl(3, F_SETFD, 0) < 0 : ::dup2(opt.pass_fd, 3) < 0) _exit(126);
+    }
+    if (::syscall(SYS_close_range, opt.pass_fd >= 0 ? 4u : 3u, ~0u, 0u) < 0) _exit(126);
     execvpe(args[0], args.data(), envp.data());
     _exit(127);
   }
