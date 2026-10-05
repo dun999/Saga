@@ -270,6 +270,16 @@ void set_cgroup_root(const std::string& path) {
   std::ifstream processes(root / "cgroup.procs");
   std::string pid;
   if (processes >> pid) throw std::runtime_error("--agent-cgroups needs an empty subtree, separate from the Saga server");
+  // systemd delegates a unit's cgroup with nothing enabled below it (an empty cgroup.subtree_control);
+  // the delegatee turns on what its children use. Until the parent does, the subtree has no cpu,
+  // memory or pids controllers to enable.
+  auto available = [&] {
+    std::ifstream in(root / "cgroup.controllers");
+    std::set<std::string> have;
+    for (std::string c; in >> c;) have.insert(c);
+    return have.contains("cpu") && have.contains("memory") && have.contains("pids");
+  };
+  if (!available()) control(root.parent_path() / "cgroup.subtree_control", "+cpu +memory +pids");
   control(root / "cgroup.subtree_control", "+cpu +memory +pids");
   // Bound aggregate demand too: creating more wallets must not multiply the host's resource budget.
   control(root / "memory.max", "4294967296");
