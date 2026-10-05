@@ -93,7 +93,7 @@ std::string read_file(const fs::path& p) {
 // A restorable path stays inside the workspace.
 bool safe_relative(const std::string& rel) {
   if (rel.empty() || rel[0] == '/' || rel.find('\0') != std::string::npos) return false;
-  for (auto& part : fs::path(rel))
+  for (const auto& part : fs::path(rel))
     if (part == "..") return false;
   return true;
 }
@@ -158,7 +158,7 @@ json model_options(const std::string& kind);
 bool write_in_workspace(const std::string& root, const std::string& rel, const std::string& content) {
   if (!safe_relative(rel)) return false;
   std::vector<std::string> parts;
-  for (auto& part : fs::path(rel))
+  for (const auto& part : fs::path(rel))
     if (!part.empty() && part != ".") parts.push_back(part.string());
   if (parts.empty()) return false;
   int dir = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -189,7 +189,7 @@ bool write_in_workspace(const std::string& root, const std::string& rel, const s
 std::optional<std::string> read_in_workspace(const std::string& root, const std::string& rel, size_t max_bytes) {
   if (!safe_relative(rel)) return std::nullopt;
   std::vector<std::string> parts;
-  for (auto& part : fs::path(rel))
+  for (const auto& part : fs::path(rel))
     if (!part.empty() && part != ".") parts.push_back(part.string());
   if (parts.empty()) return std::nullopt;
   for (auto& p : parts)
