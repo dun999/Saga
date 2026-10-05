@@ -1,4 +1,5 @@
 #include "memwal/gate.h"
+#include "core/compat.h"
 #include "memwal/redact.h"
 
 #include <poll.h>
@@ -127,7 +128,7 @@ Gate::Gate(Client& client, Store* store) : client_(client), store_(store) {
   if (::chmod(dir_.c_str(), 0700) != 0) fail("cannot protect memory socket directory");
   path_ = dir_ + "/sock";
   if (path_.size() >= sizeof(sockaddr_un::sun_path)) fail("memory socket path too long");
-  listen_fd_ = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  listen_fd_ = compat::socket_cloexec(AF_UNIX, SOCK_STREAM);
   if (listen_fd_ < 0) fail("memory socket");
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
@@ -160,7 +161,7 @@ void Gate::serve() {
   while (!stop_) {
     pollfd p{listen_fd_, POLLIN, 0};
     if (::poll(&p, 1, 200) <= 0) continue;
-    const int fd = ::accept4(listen_fd_, nullptr, nullptr, SOCK_CLOEXEC);
+    const int fd = compat::accept_cloexec(listen_fd_);
     if (fd < 0) continue;
     // Each request on its own thread: a remember waits for Walrus to confirm the blob, and agents
     // working in parallel shouldn't queue their recalls behind it.
@@ -183,9 +184,16 @@ void Gate::serve() {
 }
 
 void Gate::handle(int fd) {
+#ifdef __linux__
   ucred cred{};
   socklen_t cred_len = sizeof cred;
-  if (::getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) != 0 || cred.uid != ::getuid()) {
+  const bool same_user = ::getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) == 0 && cred.uid == ::getuid();
+#else
+  uid_t peer_uid = 0;
+  gid_t peer_gid = 0;
+  const bool same_user = ::getpeereid(fd, &peer_uid, &peer_gid) == 0 && peer_uid == ::getuid();
+#endif
+  if (!same_user) {
     write_all(fd, json({{"ok", false}, {"error", "memory socket is for this user only"}}).dump() + "\n");
     return;
   }

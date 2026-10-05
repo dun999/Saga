@@ -103,13 +103,27 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   auto feeds = std::make_shared<Slots>(), chats = std::make_shared<Slots>();
   Auth auth(opt.auth);
   // Expiry also clears idle keys and stops workers when no further browser request arrives.
-  std::jthread session_expiry([&](std::stop_token stop) {
-    std::mutex expiry_mu;
-    std::condition_variable_any expiry_cv;
-    std::unique_lock lk(expiry_mu);
-    while (!stop.stop_requested()) {
+  struct Expiry {  // std::thread with a stop flag: std::jthread is missing from some standard libraries
+    std::mutex mu;
+    std::condition_variable cv;
+    bool stop = false;
+    std::thread thread;
+    ~Expiry() {
+      {
+        std::lock_guard lk(mu);
+        stop = true;
+      }
+      cv.notify_all();
+      if (thread.joinable()) thread.join();
+    }
+  } expiry;
+  expiry.thread = std::thread([&] {
+    std::unique_lock lk(expiry.mu);
+    while (!expiry.stop) {
+      lk.unlock();
       for (const auto& uid : auth.expired_sessions()) h.end_session(uid);
-      expiry_cv.wait_for(lk, stop, std::chrono::seconds(1), [] { return false; });
+      lk.lock();
+      expiry.cv.wait_for(lk, std::chrono::seconds(1), [&] { return expiry.stop; });
     }
   });
   auto vault_of = [&auth](const httplib::Request& req) {

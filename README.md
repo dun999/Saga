@@ -172,17 +172,24 @@ Saga's current adaptation operates on memories, skills, and prompt rules. It doe
 
 ## Try it
 
-Build on Linux with CMake 3.24+ and a C++23 compiler. CI uses GCC 15. Install the dependencies for your distribution:
+Saga builds on Linux and macOS with CMake 3.24+ and a C++23 compiler; on Windows, use WSL2. CI builds it with GCC 15 on Fedora and with Apple Clang on macOS, and it builds with GCC 13 and newer on Ubuntu 24.04 and 26.04. Install the dependencies for your system:
 
 ```bash
 # Fedora
 sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf
 
-# Debian / Ubuntu, with a suitable C++23 compiler
+# Debian / Ubuntu (including Ubuntu on WSL2)
 sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config
+
+# macOS, with Homebrew (curl and zlib come with the system)
+brew install cmake ninja libsodium pkgconf
 ```
 
-`g++` and `as` need to be that install. GCC 15 and newer emit a `.base64` assembler directive, and binutils older than 2.43 reject it with `unknown pseudo-op: .base64`. If `command -v as` is not `/usr/bin/as`, put the distro binaries first and delete the failed build directory:
+On **Windows**, install WSL2 with Ubuntu (`wsl --install` in PowerShell), open the Ubuntu terminal, and follow the Debian / Ubuntu steps there. Install and sign in to the `claude`, `codex`, and `grok` CLIs inside Ubuntu as well, since Saga runs them from there. Open the UI from your Windows browser at the same `http://127.0.0.1:8080`.
+
+Everything below runs the same on Linux, macOS, and WSL2. The one exception is serving other people (`--accounts user`): its agent sandbox needs Linux (bubblewrap, seccomp, and cgroup v2).
+
+On Linux, `g++` and `as` need to be that install. GCC 15 and newer emit a `.base64` assembler directive, and binutils older than 2.43 reject it with `unknown pseudo-op: .base64`. If `command -v as` is not `/usr/bin/as`, put the distro binaries first and delete the failed build directory:
 
 ```bash
 export PATH=/usr/bin:$PATH

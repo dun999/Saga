@@ -1,5 +1,6 @@
 #include "core/proc.h"
 #include "core/secrets.h"
+#include "core/compat.h"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -51,13 +52,27 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
   }
   if (argv.empty()) return res;
   int out_p[2]{-1,-1}, err_p[2]{-1,-1}, in_p[2]{-1,-1}, start_p[2]{-1,-1};
-  if (pipe2(out_p, O_CLOEXEC) || pipe2(err_p, O_CLOEXEC) || pipe2(in_p, O_CLOEXEC) || pipe2(start_p, O_CLOEXEC)) {
+  if (compat::pipe_cloexec(out_p) || compat::pipe_cloexec(err_p) || compat::pipe_cloexec(in_p) ||
+      compat::pipe_cloexec(start_p)) {
     res.err = std::strerror(errno);
     for (int fd : {out_p[0], out_p[1], err_p[0], err_p[1], in_p[0], in_p[1], start_p[0], start_p[1]})
       if (fd >= 0) close(fd);
     return res;
   }
 
+  // Build argv/envp and find the program before fork: only async-signal-safe calls in the child. The
+  // search uses this process's PATH, as execvpe (glibc-only) did.
+  std::string exe = argv[0];
+  if (exe.find('/') == std::string::npos)
+    if (const char* path = std::getenv("PATH")) {
+      std::stringstream dirs(path);
+      for (std::string dir; std::getline(dirs, dir, ':');)
+        if (!dir.empty() && access((dir + "/" + exe).c_str(), X_OK) == 0) {
+          exe = dir + "/" + exe;
+          break;
+        }
+    }
+  const int max_fd = static_cast<int>(std::min(sysconf(_SC_OPEN_MAX), 65536L));
   // Build argv/envp before fork: only async-signal-safe calls in the child.
   std::vector<char*> args;
   for (auto& a : argv) args.push_back(const_cast<char*>(a.c_str()));
@@ -96,8 +111,8 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
     if (opt.pass_fd >= 0) {
       if (opt.pass_fd == 3 ? ::fcntl(3, F_SETFD, 0) < 0 : ::dup2(opt.pass_fd, 3) < 0) _exit(126);
     }
-    if (::syscall(SYS_close_range, opt.pass_fd >= 0 ? 4u : 3u, ~0u, 0u) < 0) _exit(126);
-    execvpe(args[0], args.data(), envp.data());
+    if (!compat::close_from(opt.pass_fd >= 0 ? 4 : 3, max_fd)) _exit(126);
+    execve(exe.c_str(), args.data(), envp.data());
     _exit(127);
   }
   close(in_p[0]);

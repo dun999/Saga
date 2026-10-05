@@ -1,4 +1,5 @@
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -9,6 +10,7 @@
 #include <vector>
 
 #include "agents/registry.h"
+#include "core/compat.h"
 #include "core/crypto.h"
 #include "core/env.h"
 #include "core/sandbox.h"
@@ -68,8 +70,7 @@ harness::Options harness_options(const Args& a) {
   harness::Options o;
   o.workspaces_dir = a.get("workspaces", o.workspaces_dir);
   o.trace = a.has("trace");
-  std::error_code ec;
-  o.saga_bin = std::filesystem::canonical("/proc/self/exe", ec).string();
+  o.saga_bin = compat::self_exe();
   o.workspaces_dir = std::filesystem::absolute(o.workspaces_dir).string();
   o.keys_path = env::get("HOME", ".") + "/.config/saga/keys.json";
   o.homes_dir = std::filesystem::absolute("agent-homes").string();
@@ -496,6 +497,8 @@ void usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // A browser or agent that hangs up mid-write must cost an EPIPE, never the server.
+  std::signal(SIGPIPE, SIG_IGN);
   if (argc > 3 && std::string_view(argv[1]) == "sandbox-exec")
     return proxy::exec(argv[2], std::vector<std::string>(argv + 3, argv + argc));
   env::load_dotenv();

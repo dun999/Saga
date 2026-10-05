@@ -25,11 +25,19 @@ Fedora:
 sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf
 ```
 
-Debian or Ubuntu (`g++` must support C++23):
+Debian or Ubuntu, including Ubuntu on WSL2 for Windows (GCC 13 or newer; Ubuntu 24.04's default works):
 
 ```bash
 sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config
 ```
+
+macOS, with Homebrew (Apple Clang; curl and zlib come with the system):
+
+```bash
+brew install cmake ninja libsodium pkgconf
+```
+
+Windows: run `wsl --install` in PowerShell, open Ubuntu, and do every step inside it, including installing the agent CLIs. Serving other people (`--accounts user`) needs Linux; running Saga for yourself works on all three.
 
 Use the compiler and assembler from that install. Check before you build:
 

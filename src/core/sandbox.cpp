@@ -2,14 +2,16 @@
 #include "core/proxy.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#ifdef __linux__  // the agent sandbox itself: seccomp, memfd, cgroup v2
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/vfs.h>
-#include <fcntl.h>
+#endif
 
 #include <chrono>
 #include <thread>
@@ -263,6 +265,9 @@ void verify(const std::string& runner) {
 
 void set_cgroup_root(const std::string& path) {
   if (path.empty()) return;
+#ifndef __linux__
+  throw std::runtime_error("--agent-cgroups needs Linux cgroup v2; serve this machine alone without it");
+#else
   if (!fs::exists(path)) {
     struct statfs parent{};
     if (::statfs(fs::path(path).parent_path().c_str(), &parent) != 0 || parent.f_type != 0x63677270)
@@ -299,6 +304,7 @@ void set_cgroup_root(const std::string& path) {
   options.cgroup_procs = (probe.path / "cgroup.procs").string();
   if (proc::run({"/bin/true"}, options).exit_code != 0)
     throw std::runtime_error("agent cgroups need delegation that allows process migration from the Saga server");
+#endif
 }
 
 void set_hidden(std::vector<std::string> paths) {
@@ -363,7 +369,7 @@ namespace {
 // default profile refuses the same families. io_uring answers ENOSYS so runtimes fall back to epoll.
 // Returns a sealed memfd holding the classic BPF program bwrap's --seccomp reads, or -1 off x86-64.
 int seccomp_program() {
-#if defined(__x86_64__)
+#if defined(__linux__) && defined(__x86_64__)
   static const int kDenied[] = {
       SYS_kexec_load, SYS_kexec_file_load, SYS_init_module, SYS_finit_module, SYS_delete_module, SYS_bpf,
       SYS_perf_event_open, SYS_userfaultfd, SYS_keyctl, SYS_add_key, SYS_request_key, SYS_mount, SYS_umount2,

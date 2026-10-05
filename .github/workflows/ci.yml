@@ -29,3 +29,22 @@ jobs:
         run: cmake --build build
       - name: Smoke test
         run: ./build/saga help
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Install toolchain
+        run: brew install cmake ninja libsodium pkgconf
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Configure
+        run: cmake -S . -B build -G Ninja
+      - name: Build
+        run: cmake --build build
+      - name: Smoke test
+        run: |
+          ./build/saga help
+          ./build/saga serve --no-memory --port 8090 &
+          for i in $(seq 1 40); do curl -fsS -o /dev/null http://127.0.0.1:8090/app && break; sleep 0.5; done
+          curl -fsS -o /dev/null -w "app: %{http_code}\n" http://127.0.0.1:8090/app

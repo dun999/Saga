@@ -1,4 +1,5 @@
 #include "core/proxy.h"
+#include "core/compat.h"
 #include "core/http.h"
 
 #include <arpa/inet.h>
@@ -92,7 +93,7 @@ void bridge(int a, int b, const std::atomic<bool>& stop) {
 }
 int unix_connect(const std::string& path) {
   if (path.size() >= sizeof(sockaddr_un::sun_path)) return -1;
-  Fd fd(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
+  Fd fd(compat::socket_cloexec(AF_UNIX, SOCK_STREAM));
   if (fd.n < 0) return -1;
   sockaddr_un address{}; address.sun_family = AF_UNIX;
   std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
@@ -153,7 +154,7 @@ struct Broker::State {
     if (socket.size() >= sizeof(sockaddr_un::sun_path)) {
       std::filesystem::remove(directory); throw std::runtime_error("agent proxy socket path is too long");
     }
-    listener.n = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    listener.n = compat::socket_cloexec(AF_UNIX, SOCK_STREAM, true);
     sockaddr_un address{}; address.sun_family = AF_UNIX;
     std::memcpy(address.sun_path, socket.c_str(), socket.size() + 1);
     if (listener.n < 0 || ::bind(listener.n, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0 ||
@@ -165,7 +166,7 @@ struct Broker::State {
       while (!stop) {
         pollfd p{listener.n, POLLIN, 0};
         if (::poll(&p, 1, 100) <= 0 || !(p.revents & POLLIN)) continue;
-        const int fd = ::accept4(listener.n, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+        const int fd = compat::accept_cloexec(listener.n, true);
         if (fd < 0) continue;
         try { workers.start(fd, [this](int client) {
           const std::string request = header(client, stop);
@@ -192,7 +193,7 @@ const std::string& Broker::path() const { return state_->socket; }
 
 int exec(const std::string& socket_path, const std::vector<std::string>& argv) {
   if (argv.empty()) return 126;
-  Fd listener(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
+  Fd listener(compat::socket_cloexec(AF_INET, SOCK_STREAM, true));
   sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   if (listener.n < 0 || ::bind(listener.n, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0 ||
       ::listen(listener.n, 16) < 0) return 126;
@@ -216,7 +217,7 @@ int exec(const std::string& socket_path, const std::vector<std::string>& argv) {
     while (!stop) {
       pollfd p{listener.n, POLLIN, 0};
       if (::poll(&p, 1, 100) <= 0 || !(p.revents & POLLIN)) continue;
-      const int fd = ::accept4(listener.n, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+      const int fd = compat::accept_cloexec(listener.n, true);
       if (fd < 0) continue;
       try { workers.start(fd, [&](int client) {
         Fd broker(unix_connect(socket_path));
