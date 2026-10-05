@@ -18,7 +18,7 @@ Delegate=cpu memory pids
 DelegateSubgroup=server
 MemoryMax=6G
 TasksMax=512
-ExecStart=/usr/local/bin/saga serve --host 127.0.0.1 --port 8080 --accounts user --wallet-only --public-origin https://saga.example.com --trust-proxy --agent-cgroups /sys/fs/cgroup/system.slice/saga.service/agents
+ExecStart=/usr/local/bin/saga serve --host 127.0.0.1 --port 8080 --accounts user --wallet-only --public-origin https://usesaga.xyz --trust-proxy --agent-cgroups /sys/fs/cgroup/system.slice/saga.service/agents
 Restart=on-failure
 RestartSec=5
 

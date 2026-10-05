@@ -41,6 +41,12 @@ class PromptRelayer {
       }
       res.set_content(json{{"job_ids", ids}}.dump(), "application/json");
     });
+    server_.Post("/api/remember", [&](const httplib::Request& req, httplib::Response& res) {
+      std::lock_guard lk(mu_);
+      const auto item = json::parse(req.body);
+      records_[item.at("namespace").get<std::string>()].push_back(item.at("text").get<std::string>());
+      res.set_content(json{{"job_id", "job-" + std::to_string(++writes_)}}.dump(), "application/json");
+    });
     server_.Post("/api/remember/bulk/status", [](const httplib::Request& req, httplib::Response& res) {
       json results = json::array();
       const auto body = json::parse(req.body);
@@ -95,8 +101,12 @@ TEST_CASE("fresh users persist the embedded Markov foundation and evolve only th
   memwal::Client client(relayer.config);
   memwal::Store store(&client, true);
   PromptPool alice(store, "u:alice:learning"), bob(store, "u:bob:learning");
-  alice.load();
-  bob.load();
+  CHECK(alice.load() == 0);
+  CHECK(bob.load() == 0);
+  store.flush(std::chrono::seconds(5));
+  CHECK(relayer.writes() == 0);  // the seed waits for the harness's restore attempt
+  alice.save_seed();
+  bob.save_seed();
   CHECK(alice.get(0).foundation == kFoundationRevision);
   CHECK(alice.get(0).prompt == kSeedPrompt);
   CHECK(alice.get(0).base.size() > 1000);  // compiled prompt is present, not an empty embedding
@@ -115,15 +125,42 @@ TEST_CASE("fresh users persist the embedded Markov foundation and evolve only th
   CHECK(bob.summary()["versions"].size() == 1);
 
   store.flush(std::chrono::seconds(5));
-  REQUIRE(store.blobs_written() == 3);
+  REQUIRE(store.blobs_written() == 4);  // two seeds, alice's queued critique, her learned version
   PromptPool restored(store, "u:alice:learning");
-  restored.load();
+  CHECK(restored.load() == 2);
+  CHECK(restored.pending_critiques() == 0);  // the stored child names the critique it addressed
   CHECK(restored.get(learned.v).base == kSeedPrompt);
   CHECK(restored.get(learned.v).foundation == kFoundationRevision);
   REQUIRE(restored.get(learned.v).rules.size() == 1);
   CHECK(restored.get(learned.v).rules[0].text == learned.rules[0].text);
   CHECK(restored.summary()["versions"].size() == 2);
-  CHECK(relayer.writes() == 3);
+  CHECK(relayer.writes() == 4);
+}
+
+TEST_CASE("queued critiques survive a restart until a stored child addresses them") {
+  PromptRelayer relayer;
+  memwal::Client client(relayer.config);
+  memwal::Store store(&client, true);
+  {
+    PromptPool before(store, "u:carol:learning");
+    before.load();
+    before.save_seed();
+    before.add_critique("Too long; the user asked for bullets.");
+    before.add_critique("Ignored the stated deadline.");
+    CHECK(before.pending_critiques() == 2);
+  }
+  store.flush(std::chrono::seconds(5));
+  PromptPool after(store, "u:carol:learning");
+  CHECK(after.load() == 1);
+  CHECK(after.pending_critiques() == 2);
+  after.add_critique("Repeated a setup step the user had done.");
+  LearningBrain brain;
+  REQUIRE_FALSE(after.evolve(brain, {{"Plan my week", "", "", "", -1}}, nullptr).contains("error"));
+  CHECK(after.pending_critiques() == 0);
+  store.flush(std::chrono::seconds(5));
+  PromptPool again(store, "u:carol:learning");
+  again.load();
+  CHECK(again.pending_critiques() == 0);
 }
 
 TEST_CASE("foundation migration retains live playbooks and history and is idempotent after storage") {

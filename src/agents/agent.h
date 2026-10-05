@@ -53,6 +53,7 @@ struct Spec {
   std::string name;         // what users type after '@'
   std::string kind;         // claude-code | codex | grok-cli | openai
   std::string model;
+  std::string effort;       // reasoning effort, for CLIs that take one (codex: low … xhigh); "" = the CLI's own
   std::string description;
   std::string base_url;     // openai
   std::string api_key_env;  // openai

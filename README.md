@@ -75,15 +75,14 @@ Memory serves several purposes. Personal facts shape how an agent responds; epis
 | Memory | What it contributes to future work |
 |---|---|
 | **Facts and preferences** | Who you are, your project context, and how you like to work |
-| **Conversations and episodes** | What was discussed, attempted, and completed |
-| **Task records** | What each teammate did during a shared task |
+| **Conversations and episodes** | What was discussed, attempted, and completed, including what each teammate did in a shared task |
 | **Per-agent lessons** | Guidance learned from feedback on a particular agent's work |
 | **Skills** | Reusable procedures distilled from successful multi-agent tasks |
 | **Prompt versions and scores** | The evolving rules used to guide agents and the feedback they received |
 | **Replay cases** | Rated past requests used to evaluate proposed prompt changes |
 | **File checkpoints** | Size-limited snapshots of files created or changed during a step |
 
-Personal memory and learning records live in namespaces such as `u:<user>:facts`, `u:<user>:lessons:<agent>`, and `u:<user>:learning:prompts`. A turn's shared task record lives in `task:<turn>`.
+Personal memory and learning records live in namespaces such as `u:<user>:facts`, `u:<user>:lessons:<agent>`, and `u:<user>:learning:prompts`. Queued playbook critiques live in `u:<user>:learning:critiques`, so prompt evolution picks up where it left off after a restart.
 
 ### Why Walrus
 
@@ -91,11 +90,17 @@ Saga stores durable memory as encrypted blobs through [Walrus Memory (MemWal)](h
 
 The C++ client in [src/memwal](src/memwal) implements signed relayer requests, SEAL sessions, and asynchronous writes. The UI exposes storage progress and the resulting blob IDs, making the memory layer visible during a conversation.
 
-Facts, episodes, and skills are recalled concurrently before an agent runs. Writes happen in the background, so the answer can arrive before its memories finish saving. Saga has no application database, but it does keep local workspaces, agent homes, and optionally encrypted provider credentials.
+Every read a turn needs starts at once: facts, episodes, skills, the agents' lessons, and, on a user's first turn since a restart, their prompt population, settings and chat history. The turn waits for the slowest read instead of their sum. Writes happen in the background, so the answer can arrive before its memories finish saving; a turn's writes go to the relayer as one request, and Saga asks for their blob IDs on a schedule rather than continuously.
+
+The relayer limits each delegate key to 60 weighted requests a minute (recalls and status checks count 1, a write 5, a batch of writes 10). Saga tracks that budget itself: background work (writes, status checks, fact extraction, index restores) waits for headroom and leaves a reserve, so a user's reads are not refused with a minute-long `Retry-After` because of writes that could have been spaced out. Connections to the relayer are reused, which saves a TLS handshake (100–400 ms) on every call.
+
+Saga has no application database, but it does keep local workspaces, agent homes, and optionally encrypted provider credentials.
+
+Agents use the same memory. Claude Code gets two native tools, `memory_recall` and `memory_remember`, from `saga mcp`, an MCP server that reaches Walrus through Saga's local memory socket, so the delegate key never enters the agent. In Saga runs, Claude Code's own auto-memory and claude.ai connectors are switched off, so Walrus is the only memory an agent reads or writes. Other CLI agents use `saga mem` from their shell. Sandboxed agents in user-account mode get their memory in context only.
 
 Each chat turn has a **View sources** panel showing the memories Saga retrieved: the excerpt selected for context, the full copyable Walrus blob ID, a Walruscan link, and retrieval details (namespace, search query, distance, and write time or ranking score when supplied by the relayer). Agent lessons identify the step they were selected for; muted lessons and weak matches are excluded. The source record is saved inside the turn's transcript, so reopening a chat shows its original recall, even if a fresh search would return different memories. Older transcripts explicitly say when sources were not recorded. Empty searches, failed reads, and disabled memory are shown separately.
 
-These records show the harness's retrieved context, not proof that the model relied on every memory. Distances and ranking scores measure retrieval relevance, not factual confidence. Additional memory searches an agent makes through `saga mem` are not included in this panel.
+These records show the harness's retrieved context, not proof that the model relied on every memory. Distances and ranking scores measure retrieval relevance, not factual confidence. Additional memory searches an agent makes through `saga mem` or its memory tools are not included in this panel.
 
 ## Markov seed prompt
 
@@ -130,7 +135,7 @@ The prompt adaptation is behavioral guidance. Markov's original evaluation resul
 
 Saga changes the context and instructions supplied to its agents. Model weights stay unchanged.
 
-**First, it collects signals.** A thumbs-up or thumbs-down is explicit feedback. Recognized responses such as “that's wrong” or “thanks,” execution failures, and opening a pull request can also provide a signal about the previous turn. Rated turns become replay cases for that user.
+**First, it collects signals.** A thumbs-up or thumbs-down is explicit feedback. Recognized responses such as “that's wrong” or “thanks,” execution failures, and opening a pull request can also provide a signal about the previous turn. Rated turns become replay cases for that user. A “thanks” only scores the prompt version and keeps the case; reflection runs for explicit ratings, corrections and failures, so polite replies don't fill memory with lessons.
 
 **Then it reflects.** The brain reviews the task, the agents' outputs, and the feedback. It writes lessons for the agents involved and credits or penalizes guidance that appeared in their context. Rules and lessons that repeatedly hurt can be retired. Successful multi-agent procedures can be distilled into reusable skills.
 
@@ -170,10 +175,10 @@ Build on Linux with CMake 3.24+ and a C++23 compiler. CI uses GCC 15. Install th
 
 ```bash
 # Fedora
-sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel git pkgconf
+sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf
 
 # Debian / Ubuntu, with a suitable C++23 compiler
-sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev git pkg-config
+sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config
 ```
 
 `g++` and `as` need to be that install. GCC 15 and newer emit a `.base64` assembler directive, and binutils older than 2.43 reject it with `unknown pseudo-op: .base64`. If `command -v as` is not `/usr/bin/as`, put the distro binaries first and delete the failed build directory:
@@ -237,7 +242,7 @@ Local serving defaults to the operator's accounts and runs CLI agents without Sa
 
 MemWal's default relayer-managed decryption exposes recalled plaintext to the relayer. Users of a deployment share one MemWal account with namespace separation; per-user relayer accounts and client-side SEAL decryption are not implemented.
 
-Relayer latency affects chat because recall happens before the answer. Failed reads can leave an agent with less memory context, and queued writes are durable only after confirmation. File checkpoints are partial snapshots, with content capped at 16,000 bytes per file and 40,000 bytes per step.
+Relayer latency affects chat because recall happens before the answer (each recall takes one to two seconds; a turn's reads run in parallel). Every user of a deployment shares one delegate key's budget of 60 weighted requests a minute; a busy deployment confirms writes more slowly before it lets reads fail. Failed reads can leave an agent with less memory context, and queued writes are durable only after confirmation. File checkpoints are partial snapshots, with content capped at 16,000 bytes per file and 40,000 bytes per step.
 
 Feedback-driven learning also depends on the configured brain being available. Passing a replay comparison is evidence about those saved cases, not a guarantee of improvement on every future task.
 

@@ -1,4 +1,5 @@
 #include "memwal/gate.h"
+#include "memwal/redact.h"
 
 #include <poll.h>
 #include <stdlib.h>
@@ -46,7 +47,7 @@ bool write_all(int fd, const std::string& s) {
 
 }  // namespace
 
-json gate_request(Client& client, const json& req) {
+json gate_request(Client& client, const json& req, Store* store) {
   const std::string op = req.value("op", "");
   const std::string ns = req.value("ns", "");
   if (ns.empty() || ns.size() > 200) return {{"ok", false}, {"error", "namespace required"}};
@@ -54,6 +55,13 @@ json gate_request(Client& client, const json& req) {
     if (ns.starts_with("harness:")) return {{"ok", false}, {"error", "harness:* namespaces are written by the harness only"}};
     const std::string text = req.value("text", "");
     if (text.empty() || text.size() > 32000) return {{"ok", false}, {"error", "text required"}};
+    if (store && store->enabled() && !req.value("wait", true)) {
+      // Same refusal as the client's, answered now rather than from the worker's log.
+      if (const StorageText safe = prepare_for_storage(text); !safe.ok)
+        return {{"ok", false}, {"error", safe.error.empty() ? "memory record refused" : safe.error}};
+      store->put(ns, "memory", text);
+      return {{"ok", true}, {"status", "queued"}, {"ns", ns}};
+    }
     const auto st = client.wait(client.remember(text, ns), std::chrono::seconds(90));
     return {{"ok", st.done()}, {"status", st.status}, {"ns", ns}, {"blob_id", st.blob_id}, {"error", st.error}};
   }
@@ -98,7 +106,7 @@ json gate_transact(const std::string& path, const json& req) {
   return out;
 }
 
-Gate::Gate(Client& client) : client_(client) {
+Gate::Gate(Client& client, Store* store) : client_(client), store_(store) {
   // The socket inode keeps the mode it was created with. fchmod on the fd does not change the
   // pathname another user would connect to, and umask is process-global, so the directory is 0700
   // and the bind itself happens under a temporary 077 umask that is restored before anything else.
@@ -139,6 +147,10 @@ Gate::Gate(Client& client) : client_(client) {
 Gate::~Gate() {
   stop_ = true;
   if (thread_.joinable()) thread_.join();
+  {
+    std::unique_lock lk(mu_);
+    idle_.wait(lk, [&] { return active_ == 0; });
+  }
   if (listen_fd_ >= 0) ::close(listen_fd_);
   if (!path_.empty()) ::unlink(path_.c_str());
   if (!dir_.empty()) ::rmdir(dir_.c_str());
@@ -150,8 +162,23 @@ void Gate::serve() {
     if (::poll(&p, 1, 200) <= 0) continue;
     const int fd = ::accept4(listen_fd_, nullptr, nullptr, SOCK_CLOEXEC);
     if (fd < 0) continue;
-    handle(fd);
-    ::close(fd);
+    // Each request on its own thread: a remember waits for Walrus to confirm the blob, and agents
+    // working in parallel shouldn't queue their recalls behind it.
+    {
+      std::lock_guard lk(mu_);
+      if (active_ >= kMaxActive) {
+        write_all(fd, json({{"ok", false}, {"error", "memory socket is busy, try again"}}).dump() + "\n");
+        ::close(fd);
+        continue;
+      }
+      ++active_;
+    }
+    std::thread([this, fd] {
+      handle(fd);
+      ::close(fd);
+      std::lock_guard lk(mu_);
+      if (--active_ == 0) idle_.notify_all();
+    }).detach();
   }
 }
 
@@ -167,8 +194,7 @@ void Gate::handle(int fd) {
   json res = req.is_object() ? json() : json{{"ok", false}, {"error", "bad request"}};
   if (req.is_object()) {
     try {
-      std::lock_guard lk(mu_);
-      res = gate_request(client_, req);
+      res = gate_request(client_, req, store_);
     } catch (const std::exception& e) {
       res = {{"ok", false}, {"error", e.what()}};
     }

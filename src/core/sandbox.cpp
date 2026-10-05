@@ -331,7 +331,10 @@ std::map<std::string, std::string> environment(const Sandbox& sb) {
                                             {"HOME", kHome},
                                             {"CODEX_HOME", std::string(kHome) + "/.codex"},
                                             {"LANG", "C.UTF-8"},
-                                            {"TERM", "dumb"}};
+                                            {"TERM", "dumb"},
+                                            // Walrus is the agents' memory (see ClaudeCodeAgent::child_env).
+                                            {"CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1"},
+                                            {"ENABLE_CLAUDEAI_MCP_SERVERS", "false"}};
   for (auto& [k, v] : sb.env) env[k] = v;
   return env;
 }

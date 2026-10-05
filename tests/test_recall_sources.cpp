@@ -50,6 +50,14 @@ class RecallFixture {
       }
       res.set_content(json{{"job_ids", ids}}.dump(), "application/json");
     });
+    server.Post("/api/remember", [&](const auto& req, auto& res) {
+      const auto item = json::parse(req.body);
+      std::lock_guard lock(mu);
+      const auto id = "job-" + std::to_string(++writes);
+      records[item.at("namespace").template get<std::string>()].push_back(
+          {{"blob_id", "blob-" + id}, {"text", item.at("text")}, {"distance", 0.1}});
+      res.set_content(json{{"job_id", id}}.dump(), "application/json");
+    });
     server.Post("/api/remember/bulk/status", [](const auto& req, auto& res) {
       json results = json::array();
       const auto body = json::parse(req.body);

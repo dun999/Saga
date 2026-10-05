@@ -3,9 +3,12 @@
 // until the relayer reports the Walrus blob id; reads are semantic recalls. There is no local
 // database: the in-process state here is only a cache of what is in flight this session.
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <future>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -23,6 +26,7 @@ struct WriteRecord {
   int64_t ts = 0;
   int attempts = 0;        // transient relayer failures are retried with backoff
   int64_t retry_at = 0;    // unix seconds; 0 = now
+  std::chrono::steady_clock::time_point submitted{};  // when the relayer took the job
   json to_json() const;
 };
 
@@ -64,9 +68,15 @@ class Store {
   bool retry_later(WriteRecord& r);
   void notify(const WriteRecord& r);
 
+  struct Recalled {
+    std::vector<Memory> hits;
+    bool failed = false;
+  };
+
   Client* client_;
   bool enabled_;
   mutable std::mutex mu_;
+  std::map<std::string, std::shared_future<Recalled>> recalls_;  // reads in flight, by request
   std::condition_variable cv_;
   std::deque<WriteRecord> queue_;       // not yet submitted
   size_t submitting_ = 0;               // taken off queue_, request to the relayer not finished yet
@@ -74,6 +84,7 @@ class Store {
   std::vector<WriteListener> listeners_;
   std::atomic<size_t> blobs_written_{0};
   std::atomic<bool> stop_{false};
+  std::atomic<int> flushing_{0};  // callers waiting in flush()
   std::thread thread_;
 };
 

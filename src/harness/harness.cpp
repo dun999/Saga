@@ -188,7 +188,7 @@ std::string ns_lessons(const std::string& agent, const std::string& uid) {
 
 // Injected into every agent's context: what Saga's memory is and how to use it.
 std::string memory_protocol(const std::string& uid, const std::string& agent, bool can_run_shell,
-                            const std::string& saga_bin) {
+                            const std::string& saga_bin, bool native_tools) {
   std::string p =
       "\n## Memory protocol — Walrus mainnet\n"
       "Saga has no database. Every memory is SEAL-encrypted by the Walrus Memory (MemWal) relayer and stored as "
@@ -201,7 +201,6 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
       "- " + ns_lessons(agent, uid) + " — lessons learned about how you should work\n"
       "- " + ns_user(uid, "skills") + ", " + ns_user(uid, "learning") + ":prompts, " +
       ns_user(uid, "improvements") + " — how Saga improves for this user\n"
-      "- task:<turn> — the blackboard shared with teammates this turn\n"
       "Transcripts, checkpoints and episodes are saved automatically; you never need to save your own output.\n"
       "Never put a secret in memory: no passwords, API keys, tokens, private keys, seed phrases or anything that "
       "grants access. Memory is recalled into future conversations, possibly by someone else using this identity. "
@@ -214,7 +213,11 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
       "before proposing it; for corrections, name what the new fact supersedes. This directive queues a write, "
       "not a confirmed save. Use it sparingly, only for things worth knowing in a future conversation. "
       "Never store secrets, keys or passwords.\n";
-  if (can_run_shell && !saga_bin.empty())
+  if (native_tools)
+    p += "You also have memory tools: memory_recall (semantic search; default namespace " + ns_user(uid, "facts") +
+         ") and memory_remember (queues one fact, like #remember). Use memory_recall when the user refers to "
+         "something from the past that is not in the sections above.\n";
+  else if (can_run_shell && !saga_bin.empty())
     p += "You can also query memory on demand from the shell:\n"
          "  " + saga_bin + " mem recall \"<query>\" [--ns <namespace>] [--limit N]\n"
          "  " + saga_bin + " mem remember \"<text>\" [--ns <namespace>]\n"
@@ -235,11 +238,31 @@ Harness::Learning& Harness::learning_for(const std::string& uid) {
     learning = slot.get();
   }
   std::call_once(learning->loaded, [&] {
-    if (store_.enabled())
-      for (const char* suffix : {":prompts", ":scores"}) {
-        try { store_.client()->restore(ns_user(uid, "learning") + suffix, 50); } catch (...) {}
-      }
-    learning->pool.load();
+    if (learning->pool.load() > 0 || !store_.enabled()) return;
+    // No stored versions: a new user, or a relayer index that lost them. Rebuilding the index from
+    // Walrus takes a chain query per namespace, so it runs beside the user's turns, which use the seed
+    // version meanwhile. The seed is written only once the restore has had its chance.
+    std::lock_guard lk(mu_);
+    if (!spawn_locked([this, uid, learning] {
+          memwal::BackgroundRequests background;
+          // Versions come first: with none on Walrus either, there are no scores or critiques to find.
+          int restored = 0;
+          for (const char* suffix : {":prompts", ":scores", ":critiques"}) {
+            try {
+              restored += store_.client()->restore(ns_user(uid, "learning") + suffix, 50).value("restored", 0);
+            } catch (const std::exception&) {  // the seed still serves; nothing was lost here
+            }
+            if (restored == 0) break;
+          }
+          if (restored > 0) {
+            try {
+              if (learning->pool.load() > 0) return;
+            } catch (const std::exception&) {
+            }
+          }
+          learning->pool.save_seed();
+        }))
+      learning->pool.save_seed();
   });
   return *learning;
 }
@@ -384,7 +407,10 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
   c += t.history;
   c += repo_context(t);
   // Shell access to memory needs the Walrus delegate key, which never enters a user's sandbox.
-  c += memory_protocol(t.uid, agent.name(), agent.can_edit_files() && !opt_.user_accounts, opt_.saga_bin);
+  // Claude Code gets the same memory as native tools through `saga mcp` (ClaudeCodeAgent::argv).
+  const bool host_shell = agent.can_edit_files() && !opt_.user_accounts;
+  c += memory_protocol(t.uid, agent.name(), host_shell, opt_.saga_bin,
+                       host_shell && !opt_.mem_sock.empty() && agent.spec().kind == "claude-code");
 
   if (!t.steps.empty()) {
     c += "\n## Blackboard — work already done in this task\n";
@@ -507,9 +533,11 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   auto t = std::make_shared<Turn>();
   t->vault = vault;
   t->sensitive = std::make_shared<memwal::SecretScope>();
+  // A turn that ends early (a read that must not be skipped failed) still ends: prune_turns() only
+  // drops finished turns.
   struct ClearTurnVault {
     std::shared_ptr<Turn> turn;
-    ~ClearTurnVault() { secrets::clear(turn->vault); turn->sensitive.reset(); }
+    ~ClearTurnVault() { secrets::clear(turn->vault); turn->sensitive.reset(); turn->done = true; }
   } clear_vault{t};
   t->id = crypto::uuid4();
   t->uid = uid;
@@ -519,33 +547,20 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   t->message = message;
   t->workspace = workspace_for(uid, session);
   fs::create_directories(t->workspace);
-  t->prompt_version = prompts(uid).choose().v;
   t->started = std::time(nullptr);
-  // Implicit feedback: the next message often says how the last answer went ("no, that's wrong", "thanks").
-  if (auto prev = last_turn(uid, session); prev && prev->done)
-    if (const int sig = followup_signal(message); sig != 0)
-      rate_later(prev, sig, "(implicit: the user's next message was \"" + clip(message, 200) + "\")", vault);
-  {
-    std::lock_guard lk(mu_);
-    prune_turns();
-    turns_[t->id] = t;
-  }
-  // Follow-ups ("make it shorter", "no, the other one") only make sense next to what came before.
-  t->history = session_history(uid, session);
-  {
-    std::lock_guard lk(mu_);
-    session_turns_[uid + "/" + session].push_back(t->id);
-  }
-  if (emit) emit({{"type", "turn"}, {"turn_id", t->id}, {"prompt_version", t->prompt_version},
-                  {"workspace", t->workspace}, {"memory_enabled", store_.enabled()}});
-  trace("turn started");
 
-  // Recall (parallel) — this is where memory does its work, and every answer waits for it. The reads
-  // start together, and each agent's lessons are fetched as soon as it is known to be needed (a handoff's
-  // while the previous agent is still working), so they overlap instead of queueing one after another.
+  // Every read this turn needs starts now, side by side. Each is a relayer round trip of one to two
+  // seconds, so the turn waits for the slowest instead of their sum: recall for this message, the
+  // user's prompt population and settings (on their first turn since a restart), and the chat so far.
+  // Each agent's lessons are fetched as soon as it is known to be needed (a handoff's while the
+  // previous agent is still working).
   auto facts_r = recall_async(message, ns_user(uid, "facts"), {.limit = 10, .max_distance = 0.75, .recency_weight = 0.2});
   auto episodes_r = recall_async(message, ns_user(uid, "episodes"), {.limit = 3, .max_distance = 0.7});
   auto skills_r = recall_async(message, ns_user(uid, "skills"), {.limit = 2, .max_distance = 0.55});
+  auto version_f = std::async(std::launch::async, [this, uid] { return prompts(uid).choose().v; });
+  auto seed_f = std::async(std::launch::async, [this, uid] { seed_user(uid); });
+  // Follow-ups ("make it shorter", "no, the other one") only make sense next to what came before.
+  auto history_f = std::async(std::launch::async, [this, uid, session] { return session_history(uid, session); });
   std::map<std::string, std::shared_ptr<PendingRecall>> lessons_r;
   auto want_lessons = [&](const std::string& agent, const std::string& instruction) {
     if (!lessons_r.contains(agent))
@@ -556,25 +571,45 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     r->cv.wait(lk, [&] { return r->done; });
     return r->hits;
   };
+  // Route: split @mentions into an ordered plan; agents can extend it with their own @handoffs.
+  auto plan_queue = [&](const std::vector<std::string>& names) {
+    std::vector<router::Segment> plan = router::split_mentions(message, names);
+    if (plan.empty()) plan.push_back({"", message});
+    std::vector<std::pair<router::Segment, std::string>> queue;  // segment, requested_by
+    for (auto& seg : plan) {
+      if (seg.agent.empty()) seg.agent = reg_.primary()->name();
+      const bool dup = std::any_of(queue.begin(), queue.end(), [&](auto& q) {
+        return q.first.agent == seg.agent && q.first.instruction == seg.instruction;
+      });
+      if (!dup) queue.push_back({seg, "user"});  // "@saga @saga hi" runs once
+    }
+    return queue;
+  };
+  // The planned agents' lessons start with the other reads. The user's own agents are known once
+  // their settings are read; a plan that changes then fetches the rest.
+  for (auto& [seg, by] : plan_queue(reg_.names(uid))) want_lessons(seg.agent, seg.instruction);
   // Learn from what the user just said (relayer-side fact extraction → one blob per fact).
   store_.analyze(ns_user(uid, "facts"), message);
 
-  // Route: split @mentions into an ordered plan; agents can extend it with their own @handoffs.
-  trace("recalls started");
-  seed_user(uid);
-  trace("user settings ready");
-  const auto names = reg_.names(uid);
-  std::vector<router::Segment> plan = router::split_mentions(message, names);
-  if (plan.empty()) plan.push_back({"", message});
-  std::vector<std::pair<router::Segment, std::string>> queue;  // segment, requested_by
-  for (auto& seg : plan) {
-    if (seg.agent.empty()) seg.agent = reg_.primary()->name();
-    const bool dup = std::any_of(queue.begin(), queue.end(), [&](auto& q) {
-      return q.first.agent == seg.agent && q.first.instruction == seg.instruction;
-    });
-    if (!dup) queue.push_back({seg, "user"});  // "@saga @saga hi" runs once
+  // Implicit feedback: the next message often says how the last answer went ("no, that's wrong", "thanks").
+  if (auto prev = last_turn(uid, session); prev && prev->done)
+    if (const int sig = followup_signal(message); sig != 0)
+      rate_later(prev, sig, "(implicit: the user's next message was \"" + clip(message, 200) + "\")", vault);
+  {
+    std::lock_guard lk(mu_);
+    prune_turns();
+    turns_[t->id] = t;
+    session_turns_[uid + "/" + session].push_back(t->id);
   }
+  if (emit) emit({{"type", "turn"}, {"turn_id", t->id}, {"workspace", t->workspace}, {"memory_enabled", store_.enabled()}});
+  trace("turn started, reads in flight");
 
+  t->prompt_version = version_f.get();
+  seed_f.get();
+  t->history = history_f.get();
+  trace("prompt, user settings and chat history ready");
+  const auto names = reg_.names(uid);
+  auto queue = plan_queue(names);
   for (auto& [seg, by] : queue) want_lessons(seg.agent, seg.instruction);
   const auto facts = await(facts_r), episodes = await(episodes_r), skills = await(skills_r);
   trace("facts/episodes/skills recalled");
@@ -641,11 +676,6 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
       emit({{"type", "step_done"}, {"step", idx}, {"agent", s.agent}, {"ok", s.error.empty()}, {"error", s.error},
             {"seconds", s.seconds}, {"output", clip(s.output, 20000)}, {"fallback", s.fallback}});
 
-    // Shared blackboard on Walrus: any teammate (now or in a later session) can recall it.
-    store_.put("task:" + t->id, "blackboard",
-               "@" + s.agent + " (" + (s.error.empty() ? "done" : "failed") + ") " + clip(s.instruction, 200) +
-                   " → " + clip(s.error.empty() ? s.output : s.error, 800),
-               t->id, uid);
 
     for (auto& h : router::find_handoffs(s.output, names)) {
       const bool dup = std::any_of(queue.begin(), queue.end(), [&](auto& q) {
@@ -658,12 +688,15 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     }
   }
 
-  // Episode memory: what happened, compactly, for future continuity.
-  std::string ep = "Episode " + today() + ": user asked \"" + clip(message, 240) + "\". ";
-  for (auto& s : t->steps)
-    ep += "@" + s.agent + (s.fallback ? " (fallback)" : "") + (s.error.empty() ? " did: " : " failed: ") +
-          clip(s.error.empty() ? s.output : s.error, 220) + " ";
-  store_.put(ns_user(uid, "episodes"), "episode", ep);
+  // Episode memory: what happened, compactly, for future continuity. A cancelled turn is in the
+  // transcript; as an episode it would only be recalled as noise.
+  if (!t->cancel->load() && !t->steps.empty()) {
+    std::string ep = "Episode " + today() + ": user asked \"" + clip(message, 240) + "\". ";
+    for (auto& s : t->steps)
+      ep += "@" + s.agent + (s.fallback ? " (fallback)" : "") + (s.error.empty() ? " did: " : " failed: ") +
+            clip(s.error.empty() ? s.output : s.error, 220) + " ";
+    store_.put(ns_user(uid, "episodes"), "episode", ep);
+  }
 
   // Implicit feedback (Reflexion): a hard failure is a learning signal even without a thumbs-down.
   const bool failed = std::any_of(t->steps.begin(), t->steps.end(),
@@ -692,7 +725,7 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
              t->id);
 
   t->done = true;
-  if (emit) emit({{"type", "done"}, {"turn_id", t->id}, {"final", clip(final_text, 20000)}});
+  if (emit) emit({{"type", "done"}, {"turn_id", t->id}, {"prompt_version", t->prompt_version}, {"final", clip(final_text, 20000)}});
   return t->id;
 }
 
@@ -741,14 +774,16 @@ json Harness::reflect(const Turn& t, int rating, const std::string& comment, con
   if (!j) return {{"error", "reflection was not JSON"}, {"raw", clip(r.text, 400)}};
 
   json out = {{"lessons", json::array()}, {"skill", nullptr}, {"critique", ""}, {"credit", json::array()}};
+  std::vector<std::pair<std::string, bool>> verdicts;
   if (auto cr = j->value("credit", json::object()); cr.is_object())
     for (auto& [label, verdict] : cr.items()) {
       const size_t i = label.size() > 1 ? std::strtoul(label.c_str() + 1, nullptr, 10) : 0;
       if (i == 0 || i > t.in_context.size() || !verdict.is_string()) continue;
       const bool helpful = verdict.get<std::string>() == "helpful";
-      prompts(t.uid).credit(t.in_context[i - 1].first, helpful);
+      verdicts.emplace_back(t.in_context[i - 1].first, helpful);
       out["credit"].push_back({{"text", clip(t.in_context[i - 1].second, 160)}, {"helpful", helpful}});
     }
+  prompts(t.uid).credit(verdicts);
   for (auto& l : j->value("lessons", json::array())) {
     std::string agent = l.value("agent", reg_.primary()->name());
     if (agent.starts_with("@")) agent.erase(0, 1);
@@ -816,7 +851,9 @@ json Harness::rate(const std::shared_ptr<Turn>& t, int rating, const std::string
              memwal::encode_record("case", {{"ts", std::time(nullptr)}, {"message", clip(t->message, 1500)},
                                             {"memory", memory}, {"answer", clip(answer, 2500)}, {"rating", rating},
                                             {"comment", clip(comment, 300)}, {"prompt_version", t->prompt_version}}));
-  json out = reflect(*t, rating, comment, vault, cancelled);
+  // A "thanks" scores the prompt and keeps the case. Lessons come from explicit ratings, corrections and
+  // failures, so a polite reply doesn't cost a reflection and a reflection's worth of stored records.
+  json out = implicit && rating > 0 ? json::object() : reflect(*t, rating, comment, vault, cancelled);
   out["prompt_version"] = t->prompt_version;
   out["implicit"] = implicit;
   return out;
@@ -989,39 +1026,62 @@ void Harness::end_session(const std::string& uid) {
   }
 }
 
-json Harness::memory_view(const std::string& uid, const std::string& query) {
+json Harness::memory_view(const std::string& uid, const std::string& query, const std::set<std::string>& parts) {
   const std::string q = query.empty() ? "what matters about this user and how Saga should behave" : query;
-  json lessons = json::array();
-  for (auto* a : reg_.visible(uid))
-    for (auto& m : store_.recall(q, ns_lessons(a->name(), uid), {.limit = 5}))
-      lessons.push_back({{"agent", a->name()}, {"text", m.text}, {"blob_id", m.blob_id}, {"distance", m.distance}});
-  return {
-      {"facts", memories_json(store_.recall(q, ns_user(uid, "facts"), {.limit = 20}))},
-      {"episodes", memories_json(store_.recall(q, ns_user(uid, "episodes"), {.limit = 8, .recent = true}))},
-      {"lessons", lessons},
-      {"skills", memories_json(store_.recall(q, ns_user(uid, "skills"), {.limit = 8}))},
-      {"improvements", [&] {
-         json arr = json::array();
-         // Improvements quote the user's own comments, so each user sees only the ones their turns caused.
-         for (auto& r : recall_records(ns_user(uid, "improvements"), "improvement", "harness improvement lesson critique", 30))
-           if (r.value("uid", "") == uid && arr.size() < 15) arr.push_back(r);
-         return arr;
-       }()},
-      {"prompts", prompts(uid).summary()},
+  auto want = [&](const char* part) { return parts.empty() || parts.contains(part); };
+  // One relayer round trip per namespace, all in flight together.
+  auto read = [&](std::string ns, memwal::RecallOptions opt) {
+    return std::async(std::launch::async, [this, q, ns = std::move(ns), opt] { return store_.recall(q, ns, opt); });
   };
+  std::vector<std::pair<std::string, std::future<std::vector<memwal::Memory>>>> lessons_f;
+  if (want("lessons"))
+    for (auto* a : reg_.visible(uid)) lessons_f.emplace_back(a->name(), read(ns_lessons(a->name(), uid), {.limit = 5}));
+  std::map<std::string, std::future<std::vector<memwal::Memory>>> lists;
+  if (want("facts")) lists["facts"] = read(ns_user(uid, "facts"), {.limit = 20});
+  if (want("episodes")) lists["episodes"] = read(ns_user(uid, "episodes"), {.limit = 8, .recent = true});
+  if (want("skills")) lists["skills"] = read(ns_user(uid, "skills"), {.limit = 8});
+  std::future<json> improvements_f, prompts_f;
+  // Improvements quote the user's own comments, so each user sees only the ones their turns caused.
+  if (want("improvements"))
+    improvements_f = std::async(std::launch::async, [this, uid] {
+      json arr = json::array();
+      for (auto& r : recall_records(ns_user(uid, "improvements"), "improvement", "harness improvement lesson critique", 30))
+        if (r.value("uid", "") == uid && arr.size() < 15) arr.push_back(r);
+      return arr;
+    });
+  if (want("prompts")) prompts_f = std::async(std::launch::async, [this, uid] { return prompts(uid).summary(); });
+  json out = json::object();
+  if (want("lessons")) {
+    json lessons = json::array();
+    for (auto& [agent, f] : lessons_f)
+      for (auto& m : f.get())
+        lessons.push_back({{"agent", agent}, {"text", m.text}, {"blob_id", m.blob_id}, {"distance", m.distance}});
+    out["lessons"] = lessons;
+  }
+  for (auto& [part, f] : lists) out[part] = memories_json(f.get());
+  if (improvements_f.valid()) out["improvements"] = improvements_f.get();
+  if (prompts_f.valid()) out["prompts"] = prompts_f.get();
+  return out;
 }
 
 json Harness::memory_stats(const std::string& uid) {
   long blobs = 0, bytes = 0;
-  if (auto* c = store_.enabled() ? store_.client() : nullptr)
-    for (const char* k : {"facts", "episodes", "chat", "checkpoints", "settings", "cases"}) {
-      try {
-        const json s = c->stats(ns_user(uid, k));
-        blobs += s.value("memory_count", 0L);
-        bytes += s.value("storage_bytes", 0L);
-      } catch (const std::exception&) {  // a namespace that was never written has no stats
-      }
+  if (auto* c = store_.enabled() ? store_.client() : nullptr) {
+    std::vector<std::future<json>> stats;
+    for (const char* k : {"facts", "episodes", "chat", "checkpoints", "settings", "cases"})
+      stats.push_back(std::async(std::launch::async, [c, ns = ns_user(uid, k)] {
+        try {
+          return c->stats(ns);
+        } catch (const std::exception&) {  // a namespace that was never written has no stats
+          return json::object();
+        }
+      }));
+    for (auto& f : stats) {
+      const json s = f.get();
+      blobs += s.value("memory_count", 0L);
+      bytes += s.value("storage_bytes", 0L);
     }
+  }
   return {{"blobs", blobs}, {"bytes", bytes}};
 }
 
@@ -1245,26 +1305,49 @@ bool Harness::forget_connection(const std::string& uid, const std::string& provi
 }
 
 void Harness::seed_user(const std::string& uid) {
+  std::promise<void> ready;
+  std::shared_future<void> pending;
   {
     std::lock_guard lk(mu_);
-    if (seeded_.contains(uid)) return;
-    seeded_.insert(uid);
+    if (auto it = seeding_.find(uid); it != seeding_.end()) pending = it->second;
+    else seeding_[uid] = ready.get_future().share();
   }
+  // Another request is reading this user's settings already: wait for it rather than run a turn
+  // without the user's own agents.
+  if (pending.valid()) return pending.wait();
   // If the relayer can't be reached, try again on the user's next request instead of leaving them
   // without their agents and model picks until a restart.
-  bool failed = false;
-  struct Retry {
+  bool chats_failed = false, settings_failed = false;
+  struct Finish {
     Harness* h;
     const std::string& uid;
-    bool& failed;
-    ~Retry() {
-      if (!failed) return;
-      std::lock_guard lk(h->mu_);
-      h->seeded_.erase(uid);
+    std::promise<void>& ready;
+    bool ok = false;
+    ~Finish() {
+      if (!ok) {
+        std::lock_guard lk(h->mu_);
+        h->seeding_.erase(uid);
+      }
+      ready.set_value();
     }
-  } retry{this, uid, failed};
-  // Today's runs per agent, rebuilt from the Walrus transcripts (idempotent, since seeding can repeat).
-  auto chats = recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100, &failed);
+  } finish{this, uid, ready};
+  // Both reads at once. Today's runs per agent are rebuilt from the Walrus transcripts (idempotent,
+  // since seeding can repeat).
+  auto chats_f = std::async(std::launch::async, [&] {
+    return recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100, &chats_failed);
+  });
+  // Settings are snapshots and the newest of each kind wins. One wide read covers both kinds, so a
+  // run of model changes can't push the newest agents snapshot out of the result.
+  std::optional<json> picks, agents_rec;
+  for (auto& m : store_.recall("user settings: model picks and api agents", ns_user(uid, "settings"),
+                               {.limit = 50, .recent = true}, &settings_failed)) {
+    auto newer = [](std::optional<json>& slot, std::optional<json> rec) {
+      if (rec && (!slot || rec->value("ts", 0L) > slot->value("ts", 0L))) slot = std::move(rec);
+    };
+    newer(picks, memwal::decode_record(m.text, "models"));
+    newer(agents_rec, memwal::decode_record(m.text, "agents"));
+  }
+  const auto chats = chats_f.get();
   const std::time_t now = std::time(nullptr);
   std::tm tm{};
   gmtime_r(&now, &tm);
@@ -1284,25 +1367,24 @@ void Harness::seed_user(const std::string& uid) {
     }
   }
   // The user's model picks.
-  if (auto picks = recall_records(ns_user(uid, "settings"), "models", "user model picks settings", 5, &failed);
-      !picks.empty()) {
+  if (picks) {
     // Name the object: before C++23 a range-for over a temporary's items() iterates freed memory.
-    const json models = picks.front().value("models", json::object());
+    const json models = picks->value("models", json::object());
     std::lock_guard lk(mu_);
     for (auto& [agent, model] : models.items())
       if (model.is_string()) model_picks_[uid][agent] = model.get<std::string>();
   }
   // The user's own API agents.
-  auto recs = recall_records(ns_user(uid, "settings"), "agents", "user api agents settings", 5, &failed);
-  if (recs.empty()) return;
-  for (auto& a : recs.front().value("agents", json::array())) {
-    if (!a.is_object() || !a.contains("name") || !a["name"].is_string()) continue;
-    agents::Spec spec = agents::spec_from_json(a);
-    spec.kind = "openai";
-    spec.owner = uid;
-    spec.public_only = true;
-    reg_.add(spec);
-  }
+  if (agents_rec)
+    for (auto& a : agents_rec->value("agents", json::array())) {
+      if (!a.is_object() || !a.contains("name") || !a["name"].is_string()) continue;
+      agents::Spec spec = agents::spec_from_json(a);
+      spec.kind = "openai";
+      spec.owner = uid;
+      spec.public_only = true;
+      reg_.add(spec);
+    }
+  finish.ok = !chats_failed && !settings_failed;
 }
 
 void Harness::record_usage(const std::string& uid, const std::string& agent, const agents::Result& r) {
@@ -1775,7 +1857,8 @@ json Harness::remove_agent(const std::string& uid, const std::string& name, cons
 // Models worth suggesting per kind of agent; anything else can still be typed in.
 json model_options(const std::string& kind) {
   if (kind == "claude-code") return {"opus", "sonnet", "haiku"};
-  if (kind == "codex") return {"gpt-5.5"};
+  if (kind == "codex") return {"gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol", "gpt-5.5"};
+  if (kind == "grok-cli") return {"grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"};
   return json::array();
 }
 

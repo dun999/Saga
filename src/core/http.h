@@ -1,5 +1,5 @@
 #pragma once
-// Thin libcurl wrapper. One easy handle per call; thread-safe after global init.
+// Thin libcurl wrapper. Thread-safe after global init; idle handles are pooled so connections are reused.
 #include <functional>
 #include <cstddef>
 #include <map>

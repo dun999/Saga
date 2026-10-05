@@ -22,13 +22,13 @@ You need CMake 3.24 or newer, a C++23 compiler, and a matching assembler. CI bui
 Fedora:
 
 ```bash
-sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel git pkgconf
+sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf
 ```
 
 Debian or Ubuntu (`g++` must support C++23):
 
 ```bash
-sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev git pkg-config
+sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config
 ```
 
 Use the compiler and assembler from that install. Check before you build:

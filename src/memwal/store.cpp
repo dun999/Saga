@@ -1,6 +1,7 @@
 #include "memwal/store.h"
 
 #include <cstdio>
+#include <future>
 
 #include "memwal/redact.h"
 
@@ -37,13 +38,16 @@ std::optional<json> decode_record(const std::string& text, const std::string& ki
 }
 
 Store::Store(Client* client, bool enabled) : client_(client), enabled_(enabled) {
-  if (this->enabled()) thread_ = std::thread([this] { worker(); });
+  if (!this->enabled()) return;
+  client_->set_background_stop([this] { return stop_.load(); });
+  thread_ = std::thread([this] { worker(); });
 }
 
 Store::~Store() {
   stop_ = true;
   cv_.notify_all();
   if (thread_.joinable()) thread_.join();
+  if (enabled()) client_->set_background_stop(nullptr);
 }
 
 void Store::put(const std::string& ns, const std::string& kind, const std::string& text, const std::string& ref,
@@ -88,13 +92,39 @@ void Store::analyze(const std::string& ns, const std::string& text) {
 std::vector<Memory> Store::recall(const std::string& query, const std::string& ns, const RecallOptions& opt,
                                   bool* failed) {
   if (!enabled() || query.empty()) return {};
-  try {
-    return client_->recall(query, ns, opt);
-  } catch (const std::exception& e) {
-    log_err(("recall " + ns).c_str(), e);
-    if (failed) *failed = true;
-    return {};
+  // The same read already in flight (the chat list and a user's settings load both read their
+  // transcripts when a page opens) is joined, not sent again: its answer is as fresh as a new one.
+  const std::string key = json::array({ns, query, opt.limit, opt.max_distance ? *opt.max_distance : -1.0, opt.recent,
+                                       opt.recency_weight, opt.importance_weight}).dump();
+  std::promise<Recalled> mine;
+  std::shared_future<Recalled> flight;
+  bool leader = false;
+  {
+    std::lock_guard lk(mu_);
+    auto it = recalls_.find(key);
+    if (it == recalls_.end()) {
+      it = recalls_.emplace(key, mine.get_future().share()).first;
+      leader = true;
+    }
+    flight = it->second;
   }
+  if (leader) {
+    Recalled r;
+    try {
+      r.hits = client_->recall(query, ns, opt);
+    } catch (const std::exception& e) {
+      log_err(("recall " + ns).c_str(), e);
+      r.failed = true;
+    }
+    {
+      std::lock_guard lk(mu_);
+      recalls_.erase(key);
+    }
+    mine.set_value(std::move(r));
+  }
+  const Recalled& r = flight.get();
+  if (failed && r.failed) *failed = true;
+  return r.hits;
 }
 
 void Store::add_listener(WriteListener fn) {
@@ -120,6 +150,12 @@ void Store::notify(const WriteRecord& r) {
 }
 
 void Store::flush(std::chrono::seconds timeout) {
+  // While someone waits, the worker sends at once and checks for blob ids every second.
+  struct Flushing {
+    Store& s;
+    explicit Flushing(Store& s) : s(s) { ++s.flushing_; s.cv_.notify_all(); }
+    ~Flushing() { --s.flushing_; }
+  } flushing{*this};
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     {
@@ -146,15 +182,30 @@ bool Store::retry_later(WriteRecord& r) {
 }
 
 void Store::worker() {
+  // Everything this thread sends is background work for the relayer's budget: users' reads go first.
+  BackgroundRequests background;
+  using clock = std::chrono::steady_clock;
+  // A write takes about 20 s to reach Walrus, and each status request spends the budget, so the first
+  // check waits kFirstPoll after submission and later ones come every kPollEvery. While a caller waits in
+  // flush(), checks start at once and come every kFlushPollEvery: faster polling would spend the
+  // background share of the budget and then stall until the minute rolls over.
+  constexpr std::chrono::milliseconds kGather{150}, kFirstPoll{10'000}, kPollEvery{4'000}, kFlushPollEvery{2'000};
+  clock::time_point next_poll{};
   while (!stop_) {
-    // 1) Submit everything queued. Plain memories go through /api/remember/bulk (≤20 per call).
+    // 1) Submit everything queued: one write through /api/remember, several through /api/remember/bulk
+    // (≤20 per call), which costs the relayer's budget as much as two single writes.
     std::vector<WriteRecord> batch;
     {
       std::unique_lock lk(mu_);
-      cv_.wait_for(lk, std::chrono::seconds(2), [&] {
+      auto ready = [&] {
         const int64_t now = std::time(nullptr);
-        return stop_ || std::any_of(queue_.begin(), queue_.end(), [&](auto& r) { return r.retry_at <= now; });
-      });
+        return std::any_of(queue_.begin(), queue_.end(), [&](auto& r) { return r.retry_at <= now; });
+      };
+      cv_.wait_for(lk, flushing_ > 0 ? std::chrono::milliseconds(250) : std::chrono::milliseconds(1000),
+                   [&] { return stop_ || ready(); });
+      // A turn's writes arrive moments apart (a step's checkpoint, then the episode and transcript):
+      // a short pause sends the burst as one request instead of several.
+      if (!stop_ && ready() && flushing_ == 0) cv_.wait_for(lk, kGather, [&] { return stop_.load(); });
       const int64_t now = std::time(nullptr);
       std::deque<WriteRecord> later;
       while (!queue_.empty()) {
@@ -183,6 +234,7 @@ void Store::worker() {
           fr.text = f.value("text", "");
           fr.job_id = f.value("job_id", f.value("id", ""));
           fr.status = "running";
+          fr.submitted = clock::now();
           submitted.push_back(fr);
         }
       } catch (const std::exception& e) {
@@ -193,10 +245,12 @@ void Store::worker() {
       std::vector<std::pair<std::string, std::string>> items;
       for (auto& r : plain) items.emplace_back(r.text, r.ns);
       try {
-        auto ids = client_->remember_bulk(items);
+        const auto ids = items.size() == 1 ? std::vector<std::string>{client_->remember(items[0].first, items[0].second)}
+                                           : client_->remember_bulk(items);
         for (size_t i = 0; i < plain.size(); ++i) {
           plain[i].job_id = i < ids.size() ? ids[i] : "";
           plain[i].status = plain[i].job_id.empty() ? "failed" : "running";
+          plain[i].submitted = clock::now();
           submitted.push_back(plain[i]);
         }
       } catch (const std::exception& e) {
@@ -218,12 +272,18 @@ void Store::worker() {
 
     // 2) Poll in-flight jobs until Walrus reports a blob id.
     std::vector<std::string> pending;
+    const auto now = clock::now();
+    bool due = false;
     {
       std::lock_guard lk(mu_);
       for (auto& r : log_)
-        if (r.status != "done" && r.status != "failed" && !r.job_id.empty()) pending.push_back(r.job_id);
+        if (r.status != "done" && r.status != "failed" && !r.job_id.empty()) {
+          pending.push_back(r.job_id);
+          due |= flushing_ > 0 || now - r.submitted >= kFirstPoll;
+        }
     }
-    if (pending.empty()) continue;
+    if (pending.empty() || !due || now < next_poll) continue;
+    next_poll = now + (flushing_ > 0 ? kFlushPollEvery : kPollEvery);
     std::vector<JobStatus> st;
     try {
       st = client_->jobs(pending);

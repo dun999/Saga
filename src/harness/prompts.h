@@ -12,6 +12,7 @@
 //     Thompson sampling over live ratings decides how much traffic each live version gets.
 #include <map>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <string>
 #include <string_view>
@@ -37,6 +38,7 @@ struct PromptVersion {
   nlohmann::json eval = nullptr;        // {wins, losses, ties, cases} of the child vs its parent
   int wins = 0, losses = 0;             // live ratings (Thompson sampling)
   std::string prompt;                   // base + playbook, rendered
+  std::vector<std::string> critiques;   // ids of the queued critiques this child was proposed from
 };
 
 struct Credit {
@@ -65,13 +67,21 @@ class PromptPool {
   explicit PromptPool(memwal::Store& store, std::string scope = "harness")
       : store_(store), scope_(std::move(scope)) {}
 
-  void load();                        // pull versions, scores and credit from Walrus
-  const PromptVersion& choose();      // Thompson sample over live versions
-  const PromptVersion& get(int v);
-  const PromptVersion& best();
+  // Pull versions, scores, credit and queued critiques from Walrus, all read at once. Returns how many
+  // stored versions were found. With none (a new user, or an index that lost them), the seed version
+  // serves turns from memory and is written by save_seed(), so a restore can run first.
+  size_t load();
+  void save_seed();
+  // Copies: a reload after a restore replaces the population while turns are reading it.
+  PromptVersion choose();             // Thompson sample over live versions
+  PromptVersion get(int v);
+  PromptVersion best();
   void score(int v, int rating, bool implicit = false);  // +1 / -1, persisted as a SAGA:score record
-  void credit(const std::string& id, bool helpful);      // rule "b3" or "lesson:<blob>"
+  // One reflection's verdicts on rules ("b3") and lessons ("lesson:<blob>"), stored as one record.
+  void credit(const std::vector<std::pair<std::string, bool>>& verdicts);
   Credit credit_of(const std::string& id) const;
+  // Queued on Walrus too (<scope>:critiques), so evolution resumes after a restart. A critique stays
+  // queued until a proposed child version records its id.
   void add_critique(const std::string& c);
   size_t pending_critiques() const;
   // Propose a child of best() from queued critiques, replay it against `cases`, keep it live only if
@@ -90,7 +100,8 @@ class PromptPool {
   mutable std::mutex mu_;
   std::map<int, PromptVersion> versions_;
   std::map<std::string, Credit> credit_;
-  std::vector<std::string> critiques_;
+  std::vector<std::pair<std::string, std::string>> critiques_;  // id, text; oldest first
+  std::optional<PromptVersion> unsaved_seed_;
   std::mt19937 rng_{std::random_device{}()};
 };
 

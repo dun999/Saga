@@ -187,6 +187,7 @@ class CliAgent : public Agent {
     o.timeout_s = task.timeout_s;
     o.cancel = task.cancel;
     o.env = task.env;
+    child_env(o.env);
     tl_account = key_of(task.sandbox);
     o.on_stdout_line = [&](const std::string& line) {
       if (line.empty() || line[0] != '{') return;
@@ -224,6 +225,7 @@ class CliAgent : public Agent {
   virtual std::vector<std::string> argv(const Task& t, const std::string& system_file) const = 0;
   virtual bool system_in_file() const { return false; }
   virtual std::string stdin_for(const Task&) const { return ""; }  // e.g. the prompt, off argv
+  virtual void child_env(std::map<std::string, std::string>&) const {}  // per-CLI settings for every run
   virtual void parse(const json& j, Result& r, const std::function<void(Event)>& emit) = 0;
 
   static std::string with_system(const Task& t) {
@@ -266,6 +268,7 @@ class ClaudeCodeAgent : public CliAgent {
     proc::Options o;
     o.timeout_s = 300;
     o.stdin_data = prompt;  // reflection traces quote the user; keep them off argv
+    child_env(o.env);
     auto p = exec(a, o, sb);
     Result r;
     r.seconds = since(t0);
@@ -324,6 +327,7 @@ class ClaudeCodeAgent : public CliAgent {
   bool probe_usage(const sandbox::Sandbox* sb) override {
     proc::Options o;
     o.timeout_s = 60;
+    child_env(o.env);
     Result r;
     tl_account = key_of(sb);
     o.on_stdout_line = [&](const std::string& line) {
@@ -344,15 +348,33 @@ class ClaudeCodeAgent : public CliAgent {
   std::string exe() const override { return "claude"; }
   bool system_in_file() const override { return true; }
   std::string stdin_for(const Task& t) const override { return t.prompt; }
+  // Saga's Walrus memory is the only memory a run has: no auto-memory files of Claude Code's own,
+  // and no claude.ai connectors (a MemWal connector there would compete with Saga's and fail to
+  // authorize in -p mode). Skipping the connector fetch also shortens every start. Sandboxed runs
+  // get the same through sandbox::environment.
+  void child_env(std::map<std::string, std::string>& env) const override {
+    env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1";
+    env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false";
+  }
   std::vector<std::string> argv(const Task& t, const std::string& system_file) const override {
     std::vector<std::string> a = {"claude", "-p", "--output-format", "stream-json", "--verbose",
                                   "--permission-mode", spec_.permission_mode, "--no-session-persistence"};
     if (!system_file.empty()) a.insert(a.end(), {"--append-system-prompt-file", system_file});
     if (!model_for(t).empty()) a.insert(a.end(), {"--model", model_for(t)});
-    // acceptEdits still asks before any shell command, and nobody can answer in -p mode, so the
-    // memory command the prompt tells the agent to use has to be allowed up front.
-    if (auto bin = t.env.find("SAGA_BIN"); bin != t.env.end() && !bin->second.empty())
-      a.insert(a.end(), {"--allowedTools", "Bash(" + bin->second + " mem:*)"});
+    // Memory as native tools: `saga mcp` serves memory_recall and memory_remember over the memory
+    // socket. acceptEdits still asks before a tool outside the edit set, and nobody can answer in -p
+    // mode, so they are allowed up front, as is the `saga mem` shell form.
+    const auto bin = t.env.find("SAGA_BIN"), sock = t.env.find("SAGA_MEM_SOCK"), uid = t.env.find("SAGA_UID");
+    if (bin != t.env.end() && !bin->second.empty()) {
+      std::vector<std::string> allowed = {"Bash(" + bin->second + " mem:*)"};
+      if (sock != t.env.end() && !sock->second.empty() && uid != t.env.end()) {
+        const json server = {{"type", "stdio"}, {"command", bin->second}, {"args", {"mcp"}},
+                             {"env", {{"SAGA_UID", uid->second}, {"SAGA_MEM_SOCK", sock->second}}}};
+        a.insert(a.end(), {"--mcp-config", json{{"mcpServers", {{"saga", server}}}}.dump()});
+        allowed.insert(allowed.end(), {"mcp__saga__memory_recall", "mcp__saga__memory_remember"});
+      }
+      for (auto& tool : allowed) a.insert(a.end(), {"--allowedTools", tool});
+    }
     a.insert(a.end(), spec_.extra_args.begin(), spec_.extra_args.end());
     return a;
   }
@@ -531,6 +553,9 @@ class CodexAgent : public CliAgent {
     std::vector<std::string> a = {"codex", "exec", "--json", "--skip-git-repo-check", "-s", "workspace-write"};
     if (!t.workspace.empty()) a.insert(a.end(), {"-C", t.workspace});
     if (!model_for(t).empty()) a.insert(a.end(), {"-m", model_for(t)});
+    // Always set: otherwise the operator's own ~/.codex/config.toml effort applies, and one the model
+    // doesn't support (gpt-5.5 rejects "max") fails every run.
+    if (!spec_.effort.empty()) a.insert(a.end(), {"-c", "model_reasoning_effort=" + spec_.effort});
     a.insert(a.end(), spec_.extra_args.begin(), spec_.extra_args.end());
     a.push_back("-");  // the prompt comes on stdin
     return a;
@@ -577,6 +602,7 @@ Spec spec_from_json(const json& j) {
   s.name = j.at("name").get<std::string>();
   s.kind = j.at("kind").get<std::string>();
   s.model = j.value("model", "");
+  s.effort = j.value("effort", "");
   s.description = j.value("description", "");
   s.base_url = j.value("base_url", "");
   s.api_key_env = j.value("api_key_env", "");

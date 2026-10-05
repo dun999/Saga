@@ -4,6 +4,8 @@
 // Python SDK): Ed25519 signed headers + a SEAL SessionKey envelope for decrypt flows.
 #include <chrono>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -50,6 +52,43 @@ class Error : public std::runtime_error {
   long status;
 };
 
+// The relayer's weighted per-delegate-key budget (60 a minute on mainnet; a 429 that names another
+// limit replaces it). Every signed request is counted with the relayer's own weights. Foreground
+// requests (a turn's recalls, page loads) go at once; background ones (queued writes, status polls,
+// fact extraction, restores) wait for headroom and leave kReserve for the foreground, so a user's
+// reads are not refused with a minute-long Retry-After because of writes Saga could have spaced out.
+class RateBudget {
+ public:
+  using clock = std::chrono::steady_clock;
+  static constexpr int kReserve = 20;
+  static int weight(const std::string& method, const std::string& path);
+  void spend(int weight);
+  // Waits until `weight` fits under the limit minus the reserve, then records it. False once `stop` is set.
+  bool wait_for(int weight, const std::function<bool()>& stop);
+  void denied(const std::string& body, int retry_after_s);  // a 429: learn the limit, hold background work
+  int limit() const;
+  int spent() const;
+
+ private:
+  int used_locked(clock::time_point now) const;
+  mutable std::mutex mu_;
+  mutable std::deque<std::pair<clock::time_point, int>> spent_;
+  int limit_ = 60;
+  clock::time_point hold_until_{};
+};
+
+// Marks the calling thread's requests as background work for the budget while in scope.
+class BackgroundRequests {
+ public:
+  BackgroundRequests();
+  ~BackgroundRequests();
+  BackgroundRequests(const BackgroundRequests&) = delete;
+  BackgroundRequests& operator=(const BackgroundRequests&) = delete;
+
+ private:
+  bool prev_;
+};
+
 // Exposed for tests.
 std::string canonical_message(const std::string& ts, const std::string& method, const std::string& path,
                               const std::string& body_sha256, const std::string& nonce,
@@ -78,6 +117,10 @@ class Client {
   json stats(const std::string& ns);
   json namespaces();
 
+  RateBudget& budget() { return budget_; }
+  // Lets a background caller stop waiting for headroom (the store's worker, at shutdown).
+  void set_background_stop(std::function<bool()> stop) { background_stop_ = std::move(stop); }
+
   const std::string& owner_address() const { return address_; }
   const std::string& account_id() const { return cfg_.account_id; }
   const std::string& server_url() const { return cfg_.server_url; }
@@ -96,6 +139,8 @@ class Client {
   std::optional<json> config_cache_;
   std::string session_cache_;
   int64_t session_expiry_ms_ = 0;
+  RateBudget budget_;
+  std::function<bool()> background_stop_;
 };
 
 }  // namespace saga::memwal

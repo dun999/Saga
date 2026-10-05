@@ -28,7 +28,9 @@ FetchContent_Declare(httplib
   GIT_SHALLOW OFF)
 set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
-set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+# gzip for pages, scripts and JSON when zlib is installed. The NDJSON chat stream and the SSE write
+# feed are never compressed (httplib skips those types), so they keep arriving as they are written.
+set(HTTPLIB_USE_ZLIB_IF_AVAILABLE ON CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(json httplib)

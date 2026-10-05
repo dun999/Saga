@@ -16,6 +16,10 @@ TEST_CASE("flush waits for a write the worker is still submitting") {
     std::this_thread::sleep_for(std::chrono::milliseconds(800));
     res.set_content(R"({"job_ids":["job-1"]})", "application/json");
   });
+  svr.Post("/api/remember", [](const httplib::Request&, httplib::Response& res) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+    res.set_content(R"({"job_id":"job-1"})", "application/json");
+  });
   svr.Post("/api/remember/bulk/status", [](const httplib::Request&, httplib::Response& res) {
     res.set_content(R"({"results":[{"job_id":"job-1","status":"done","blob_id":"blob-1"}]})", "application/json");
   });

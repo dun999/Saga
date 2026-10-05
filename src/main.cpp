@@ -16,6 +16,7 @@
 #include "harness/harness.h"
 #include "memwal/client.h"
 #include "memwal/gate.h"
+#include "memwal/mcp.h"
 #include "memwal/store.h"
 #include "web/server.h"
 
@@ -202,10 +203,11 @@ void print_event(const json& e) {
   std::fflush(stdout);
 }
 
-// Host-mode agents call `saga mem` through this socket. The delegate key stays in `mw`.
-std::unique_ptr<memwal::Gate> open_gate(memwal::Client* mw, harness::Options& o) {
+// Host-mode agents call `saga mem` and `saga mcp` through this socket. The delegate key stays in
+// `mw`. Declare the store first: the gate's queued writes go through it.
+std::unique_ptr<memwal::Gate> open_gate(memwal::Client* mw, memwal::Store& store, harness::Options& o) {
   if (!mw || o.user_accounts) return nullptr;
-  auto gate = std::make_unique<memwal::Gate>(*mw);
+  auto gate = std::make_unique<memwal::Gate>(*mw, &store);
   o.mem_sock = gate->path();
   return gate;
 }
@@ -214,8 +216,8 @@ int cmd_chat(const Args& a) {
   std::unique_ptr<memwal::Client> mw;
   if (!a.has("no-memory")) mw = std::make_unique<memwal::Client>(memwal_config());
   harness::Options ho = harness_options(a);
-  auto gate = open_gate(mw.get(), ho);
   memwal::Store store(mw.get(), mw != nullptr);
+  auto gate = open_gate(mw.get(), store, ho);
   auto reg = agents::Registry::load(a.get("config", "saga.json"));
   harness::Harness h(reg, store, ho);
   h.boot(print_event);
@@ -260,8 +262,8 @@ int cmd_ab(const Args& a) {
     std::unique_ptr<memwal::Client> mw;
     if (with_memory) mw = std::make_unique<memwal::Client>(memwal_config());
     harness::Options ho = harness_options(a);
-    auto gate = open_gate(mw.get(), ho);
     memwal::Store store(mw.get(), with_memory);
+    auto gate = open_gate(mw.get(), store, ho);
     harness::Harness h(reg, store, ho);
     (void)gate;
     h.boot();
@@ -311,8 +313,8 @@ int cmd_evolve(const Args& a) {
   memwal::Client mw(memwal_config());
   auto reg = agents::Registry::load(a.get("config", "saga.json"));
   harness::Options ho = harness_options(a);
-  auto gate = open_gate(&mw, ho);
   memwal::Store store(&mw, true);
+  auto gate = open_gate(&mw, store, ho);
   harness::Harness h(reg, store, ho);
   h.boot();
   const json r = h.evolve_now(a.get("user", "cli"), a.pos);
@@ -370,6 +372,14 @@ int cmd_mem(const Args& a) {
   }
   std::fprintf(stderr, "saga mem: unknown op %s\n", op.c_str());
   return 2;
+}
+
+// ---- mcp: Walrus memory as native tools for agents (MCP over stdio) -----------------------
+int cmd_mcp(const Args&) {
+  const std::string uid = env::get("SAGA_UID", "cli"), sock = env::get("SAGA_MEM_SOCK");
+  for (std::string line; std::getline(std::cin, line);)
+    if (const auto reply = memwal::mcp_reply(line, uid, sock)) std::cout << reply->dump() << "\n" << std::flush;
+  return 0;
 }
 
 bool loopback_host(const std::string& host) {
@@ -448,8 +458,8 @@ int cmd_serve(const Args& a) {
 
   std::unique_ptr<memwal::Client> mw;
   if (!a.has("no-memory")) mw = std::make_unique<memwal::Client>(memwal_config());
-  auto gate = open_gate(mw.get(), ho);
   memwal::Store store(mw.get(), mw != nullptr);
+  auto gate = open_gate(mw.get(), store, ho);
   auto reg = agents::Registry::load(a.get("config", "saga.json"));
   harness::Harness h(reg, store, ho);
   (void)gate;
@@ -471,7 +481,8 @@ void usage() {
       "  restore <namespace…> [--limit N]            rebuild relayer index from Walrus\n"
       "  ab      [--out FILE]                        before/after memory experiment\n"
       "  evolve  \"critique\"… [--user NAME]          evolve the playbook now, replay-gated\n"
-      "  mem     recall|remember \"text\" [--ns NS]    memory API used by agents from their shell\n\n"
+      "  mem     recall|remember \"text\" [--ns NS]    memory API used by agents from their shell\n"
+      "  mcp                                         the same memory as MCP tools (stdio), for agents\n\n"
       "common: --config saga.json  --workspaces DIR");
 }
 
@@ -491,6 +502,7 @@ int main(int argc, char** argv) {
     if (a.cmd == "ab") return cmd_ab(a);
     if (a.cmd == "evolve") return cmd_evolve(a);
     if (a.cmd == "mem") return cmd_mem(a);
+    if (a.cmd == "mcp") return cmd_mcp(a);
     usage();
     return a.cmd.empty() || a.cmd == "help" ? 0 : 2;
   } catch (const std::exception& e) {

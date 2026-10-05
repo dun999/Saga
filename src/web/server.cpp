@@ -10,6 +10,8 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <set>
+#include <sstream>
 #include <thread>
 
 #include "core/crypto.h"
@@ -232,22 +234,23 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     res.set_content(inject_nonce(std::move(html), nonce), "text/html; charset=utf-8");
   };
   svr.Get("/", [&](const httplib::Request& req, httplib::Response& res) { send_page(req, res, kLandingHtml); });
-  svr.Get("/mascot.js", [](const httplib::Request&, httplib::Response& res) {
-    res.set_header("Cache-Control", "no-cache");
-    res.set_content(std::string(kMascotJs), "text/javascript; charset=utf-8");
-  });
-  svr.Get("/brand.js", [](const httplib::Request&, httplib::Response& res) {
-    res.set_header("Cache-Control", "no-cache");
-    res.set_content(std::string(kBrandJs), "text/javascript; charset=utf-8");
-  });
-  svr.Get("/saga-logo.png", [](const httplib::Request&, httplib::Response& res) {
-    res.set_header("Cache-Control", "public, max-age=86400");
-    res.set_content(std::string(kLogoPng), "image/png");
-  });
-  svr.Get("/llms.txt", [](const httplib::Request&, httplib::Response& res) {
-    res.set_header("Cache-Control", "no-cache");
-    res.set_content(std::string(kLlmsTxt), "text/plain; charset=utf-8");
-  });
+  // Embedded files never change while this binary runs: a revalidation is answered with 304 and no body.
+  auto serve_file = [](std::string_view body, const char* type, const char* cache) {
+    const std::string etag = "\"" + crypto::sha256_hex(std::string(body)).substr(0, 16) + "\"";
+    return [body, type, cache, etag](const httplib::Request& req, httplib::Response& res) {
+      res.set_header("Cache-Control", cache);
+      res.set_header("ETag", etag);
+      if (req.get_header_value("If-None-Match") == etag) {
+        res.status = 304;
+        return;
+      }
+      res.set_content(std::string(body), type);
+    };
+  };
+  svr.Get("/mascot.js", serve_file(kMascotJs, "text/javascript; charset=utf-8", "no-cache"));
+  svr.Get("/brand.js", serve_file(kBrandJs, "text/javascript; charset=utf-8", "no-cache"));
+  svr.Get("/saga-logo.png", serve_file(kLogoPng, "image/png", "public, max-age=86400"));
+  svr.Get("/llms.txt", serve_file(kLlmsTxt, "text/plain; charset=utf-8", "no-cache"));
   svr.Get("/privacy", [&](const httplib::Request& req, httplib::Response& res) {
     std::string page(kPrivacyHtml);
     const std::string marker = "__SAGA_ACCOUNT_NOTICE__";
@@ -340,7 +343,13 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   });
   svr.Get("/api/memory", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string uid = uid_of(req, res);
-    send_json(res, h.memory_view(uid, req.get_param_value("q")));
+    std::set<std::string> parts;
+    for (std::stringstream in(req.get_param_value("parts")); in.good();) {
+      std::string part;
+      std::getline(in, part, ',');
+      if (!part.empty() && parts.size() < 8) parts.insert(part);
+    }
+    send_json(res, h.memory_view(uid, req.get_param_value("q"), parts));
   });
 
   // Chat history and transcripts are read back from Walrus, not from a local store.

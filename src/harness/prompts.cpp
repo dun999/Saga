@@ -2,8 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <ctime>
 #include <future>
 #include <set>
+#include <tuple>
+
+#include "core/crypto.h"
 
 namespace saga::harness {
 
@@ -79,12 +83,28 @@ int followup_signal(const std::string& next_message) {
   return 0;
 }
 
-void PromptPool::load() {
+size_t PromptPool::load() {
+  // Three independent reads, each a relayer round trip: issue them together.
+  auto read = [this](const char* query, const std::string& ns, int limit) {
+    return std::async(std::launch::async, [this, query, ns, limit] {
+      bool failed = false;
+      auto hits = store_.recall(query, ns, {.limit = limit, .recent = true}, &failed);
+      return std::make_pair(std::move(hits), failed);
+    });
+  };
+  auto versions_f = read("Saga system prompt version", scope_ + ":prompts", 50);
+  // Rolling window of the most recent ratings: a non-stationary bandit, which suits a
+  // harness whose users and models drift. Credit tags share the namespace.
+  auto scores_f = read("Saga prompt score rating", scope_ + ":scores", 100);
+  auto critiques_f = read("critique of a turn that went badly", scope_ + ":critiques", 50);
+  const auto [records, versions_failed] = versions_f.get();
+  const auto [scores, scores_failed] = scores_f.get();
+  const auto [critique_records, critiques_failed] = critiques_f.get();
+  if (versions_failed) throw std::runtime_error("could not load saved prompt versions; retry before initializing or migrating");
+  if (scores_failed) throw std::runtime_error("could not load saved prompt scores; retry before initializing or migrating");
+
   std::map<int, PromptVersion> found;
-  bool failed = false;
-  const auto records = store_.recall("Saga system prompt version", scope_ + ":prompts",
-                                    {.limit = 50, .recent = true}, &failed);
-  if (failed) throw std::runtime_error("could not load saved prompt versions; retry before initializing or migrating");
+  std::set<std::string> addressed;  // critiques a stored child was already proposed from
   for (auto& m : records) {
     if (auto j = memwal::decode_record(m.text, "prompt")) {
       PromptVersion p;
@@ -98,23 +118,38 @@ void PromptPool::load() {
       p.base = j->value("base", j->value("prompt", ""));
       for (auto& r : j->value("rules", json::array()))
         p.rules.push_back({r.value("id", ""), r.value("text", "")});
+      for (auto& id : j->value("critiques", json::array()))
+        if (id.is_string()) addressed.insert(id.get<std::string>());
       p.prompt = render_prompt(p.base, p.rules);
       if (!p.base.empty()) found.emplace(p.v, p);
     }
   }
+  const size_t stored = found.size();
+  // Critiques still waiting for an evolution, oldest first. A failed read leaves the queue empty:
+  // the critiques stay on Walrus and come back on the next load.
+  std::vector<std::tuple<long, std::string, std::string>> waiting;  // ts, id, text
+  if (!critiques_failed)
+    for (auto& m : critique_records)
+      if (auto c = memwal::decode_record(m.text, "critique")) {
+        const std::string id = c->value("id", ""), text = c->value("text", "");
+        if (!id.empty() && !text.empty() && !addressed.contains(id)) waiting.emplace_back(c->value("ts", 0L), id, text);
+      }
+  std::sort(waiting.begin(), waiting.end());
+  if (waiting.size() > 32) waiting.erase(waiting.begin(), waiting.end() - 32);
   std::map<std::string, Credit> credit;
-  // Rolling window of the most recent ratings: a non-stationary bandit, which suits a
-  // harness whose users and models drift. Credit tags share the namespace.
-  const auto scores = store_.recall("Saga prompt score rating", scope_ + ":scores",
-                                   {.limit = 200, .recent = true}, &failed);
-  if (failed) throw std::runtime_error("could not load saved prompt scores; retry before initializing or migrating");
   for (auto& m : scores) {
     if (auto j = memwal::decode_record(m.text, "score")) {
       auto it = found.find(j->value("v", -1));
       if (it != found.end()) (j->value("r", 0) > 0 ? it->second.wins : it->second.losses)++;
-    } else if (auto c = memwal::decode_record(m.text, "credit")) {
+    } else if (auto c = memwal::decode_record(m.text, "credit")) {  // one verdict per record (older)
       auto& cr = credit[c->value("id", "")];
       (c->value("helpful", false) ? cr.helpful : cr.harmful)++;
+    } else if (auto cs = memwal::decode_record(m.text, "credits")) {
+      for (auto& item : cs->value("items", json::array())) {
+        if (!item.is_object() || !item.contains("id") || !item["id"].is_string()) continue;
+        auto& cr = credit[item["id"].get<std::string>()];
+        (item.value("helpful", false) ? cr.helpful : cr.harmful)++;
+      }
     }
   }
   // Append replacement versions; never overwrite the old Walrus records or attach old
@@ -140,33 +175,51 @@ void PromptPool::load() {
     created.push_back(std::move(child));
   }
   for (const auto& p : created) found.emplace(p.v, p);
+  std::optional<PromptVersion> seed;
   if (std::none_of(found.begin(), found.end(), [](const auto& entry) { return entry.second.status == "live"; })) {
-    PromptVersion seed;
-    seed.v = next_v;
-    seed.foundation = kFoundationRevision;
-    seed.base = seed.prompt = kSeedPrompt;
-    seed.why = "Markov foundation";
-    found.emplace(seed.v, seed);
-    created.push_back(std::move(seed));
+    seed.emplace();
+    seed->v = next_v;
+    seed->foundation = kFoundationRevision;
+    seed->base = seed->prompt = kSeedPrompt;
+    seed->why = "Markov foundation";
+    found.emplace(seed->v, *seed);
+    if (stored > 0) created.push_back(*seed);  // nothing live among stored versions: no restore can help
   }
   {
     std::lock_guard lk(mu_);
     versions_ = std::move(found);
     credit_ = std::move(credit);
+    unsaved_seed_ = stored == 0 ? seed : std::nullopt;
+    // A reload keeps critiques queued in this process since the last one.
+    std::vector<std::pair<std::string, std::string>> queue;
+    for (auto& [ts, id, text] : waiting) queue.emplace_back(id, text);
+    for (auto& c : critiques_)
+      if (std::none_of(queue.begin(), queue.end(), [&](auto& q) { return q.first == c.first; })) queue.push_back(c);
+    critiques_ = std::move(queue);
   }
   for (const auto& p : created) persist(p);
+  return stored;
+}
+
+void PromptPool::save_seed() {
+  std::optional<PromptVersion> seed;
+  {
+    std::lock_guard lk(mu_);
+    seed.swap(unsaved_seed_);
+  }
+  if (seed) persist(*seed);
 }
 
 void PromptPool::persist(const PromptVersion& p) {
   json rules = json::array();
   for (auto& r : p.rules) rules.push_back({{"id", r.id}, {"text", r.text}});
-  store_.put(scope_ + ":prompts", "prompt",
-             memwal::encode_record("prompt", {{"v", p.v}, {"parent", p.parent}, {"foundation", p.foundation},
-                                              {"base", p.base}, {"rules", rules},
-                                              {"why", p.why}, {"status", p.status}, {"eval", p.eval}}));
+  json record = {{"v", p.v}, {"parent", p.parent}, {"foundation", p.foundation}, {"base", p.base},
+                 {"rules", rules}, {"why", p.why}, {"status", p.status}, {"eval", p.eval}};
+  if (!p.critiques.empty()) record["critiques"] = p.critiques;
+  store_.put(scope_ + ":prompts", "prompt", memwal::encode_record("prompt", record));
 }
 
-const PromptVersion& PromptPool::choose() {
+PromptVersion PromptPool::choose() {
   std::lock_guard lk(mu_);
   const PromptVersion* pick = &versions_.begin()->second;
   double top = -1;
@@ -178,13 +231,13 @@ const PromptVersion& PromptPool::choose() {
   return *pick;
 }
 
-const PromptVersion& PromptPool::get(int v) {
+PromptVersion PromptPool::get(int v) {
   std::lock_guard lk(mu_);
   auto it = versions_.find(v);
   return it == versions_.end() ? versions_.begin()->second : it->second;
 }
 
-const PromptVersion& PromptPool::best() {
+PromptVersion PromptPool::best() {
   std::lock_guard lk(mu_);
   const PromptVersion* b = &versions_.begin()->second;
   double top = -1;
@@ -207,14 +260,18 @@ void PromptPool::score(int v, int rating, bool implicit) {
              memwal::encode_record("score", {{"v", v}, {"r", rating > 0 ? 1 : -1}, {"src", implicit ? "implicit" : "user"}}));
 }
 
-void PromptPool::credit(const std::string& id, bool helpful) {
-  if (id.empty()) return;
+void PromptPool::credit(const std::vector<std::pair<std::string, bool>>& verdicts) {
+  json items = json::array();
   {
     std::lock_guard lk(mu_);
-    auto& c = credit_[id];
-    (helpful ? c.helpful : c.harmful)++;
+    for (auto& [id, helpful] : verdicts) {
+      if (id.empty()) continue;
+      auto& c = credit_[id];
+      (helpful ? c.helpful : c.harmful)++;
+      items.push_back({{"id", id}, {"helpful", helpful}});
+    }
   }
-  store_.put(scope_ + ":scores", "credit", memwal::encode_record("credit", {{"id", id}, {"helpful", helpful}}));
+  if (!items.empty()) store_.put(scope_ + ":scores", "credits", memwal::encode_record("credits", {{"items", items}}));
 }
 
 Credit PromptPool::credit_of(const std::string& id) const {
@@ -224,11 +281,15 @@ Credit PromptPool::credit_of(const std::string& id) const {
 }
 
 void PromptPool::add_critique(const std::string& c) {
-  std::lock_guard lk(mu_);
-  if (!c.empty()) {
+  if (c.empty()) return;
+  const std::string id = crypto::uuid4(), text = c.substr(0, 8192);
+  {
+    std::lock_guard lk(mu_);
     if (critiques_.size() >= 32) critiques_.erase(critiques_.begin());
-    critiques_.push_back(c.substr(0, 8192));
+    critiques_.emplace_back(id, text);
   }
+  store_.put(scope_ + ":critiques", "critique",
+             memwal::encode_record("critique", {{"id", id}, {"text", text}, {"ts", std::time(nullptr)}}));
 }
 
 size_t PromptPool::pending_critiques() const {
@@ -238,7 +299,7 @@ size_t PromptPool::pending_critiques() const {
 
 json PromptPool::evolve(agents::Agent& brain, const std::vector<ReplayCase>& cases, const sandbox::Sandbox* sb) {
   const PromptVersion parent = best();
-  std::vector<std::string> crit;
+  std::vector<std::pair<std::string, std::string>> crit;  // id, text
   int next_v, next_rule = 1;
   {
     std::lock_guard lk(mu_);
@@ -272,7 +333,7 @@ json PromptPool::evolve(agents::Agent& brain, const std::vector<ReplayCase>& cas
   }
   if (!dropped.empty()) prompt += "\nALREADY REMOVED (hurt more than they helped):\n" + dropped;
   prompt += "\nCRITIQUES OF RECENT TURNS THAT WENT BADLY:\n";
-  for (auto& c : crit) prompt += "- " + c + "\n";
+  for (auto& c : crit) prompt += "- " + c.second + "\n";
   prompt +=
       "\nPropose at most 3 small edits to the playbook so these failures stop, keeping every rule that works. "
       "Each rule is one concrete, general instruction under 200 characters, never about a single task. "
@@ -303,6 +364,7 @@ json PromptPool::evolve(agents::Agent& brain, const std::vector<ReplayCase>& cas
   child.rules = apply_ops(kept, j->value("ops", json::array()), next_rule);
   child.why = j->value("why", "");
   child.prompt = render_prompt(child.base, child.rules);
+  for (auto& c : crit) child.critiques.push_back(c.first);
   if (child.prompt == parent.prompt) return {{"error", "no change proposed"}};
 
   // Replay the owner's rated turns under both versions; an untested edit never goes live.

@@ -12,7 +12,7 @@ const char* kDefaults = R"({
   "brain": "claude-brain",
   "agents": [
     {"name": "claude", "kind": "claude-code", "description": "Claude Code: generalist, frontend, refactors, writing"},
-    {"name": "codex",  "kind": "codex", "model": "gpt-5.5", "description": "OpenAI Codex CLI: backend services, scripts, tests"},
+    {"name": "codex",  "kind": "codex", "model": "gpt-6.1-sol", "effort": "high", "description": "OpenAI Codex CLI: backend services, scripts, tests"},
     {"name": "grok",   "kind": "grok-cli", "description": "Grok Build CLI: fast iteration, reviews, research"},
     {"name": "claude-brain", "kind": "claude-code", "model": "sonnet", "description": "internal: reflection and prompt evolution"}
   ]

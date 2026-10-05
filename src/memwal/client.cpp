@@ -1,6 +1,7 @@
 #include "memwal/client.h"
 #include "memwal/redact.h"
 
+#include <cstdio>
 #include <ctime>
 #include <thread>
 
@@ -32,6 +33,80 @@ std::string for_storage(const std::string& text) {
 }
 
 }  // namespace
+
+namespace {
+thread_local bool tl_background = false;
+}
+
+BackgroundRequests::BackgroundRequests() : prev_(tl_background) { tl_background = true; }
+BackgroundRequests::~BackgroundRequests() { tl_background = prev_; }
+
+// The relayer's endpoint weights (services/server/src/rate_limit.rs). The owner read API has its own
+// budget, and the unauthenticated routes none.
+int RateBudget::weight(const std::string& method, const std::string& path) {
+  if (path.starts_with("/v1/owners/")) return 0;
+  if (method == "POST" && path == "/api/analyze") return 5;
+  if (method == "POST" && path == "/api/remember") return 5;
+  if (method == "POST" && path == "/api/remember/bulk") return 10;
+  if (path == "/api/restore") return 3;
+  return 1;
+}
+
+int RateBudget::used_locked(clock::time_point now) const {
+  while (!spent_.empty() && now - spent_.front().first >= std::chrono::seconds(60)) spent_.pop_front();
+  int used = 0;
+  for (auto& [_, w] : spent_) used += w;
+  return used;
+}
+
+void RateBudget::spend(int weight) {
+  if (weight <= 0) return;
+  std::lock_guard lk(mu_);
+  spent_.emplace_back(clock::now(), weight);
+}
+
+bool RateBudget::wait_for(int weight, const std::function<bool()>& stop) {
+  if (weight <= 0) return true;
+  for (;;) {
+    if (stop && stop()) return false;
+    clock::time_point until;
+    {
+      std::lock_guard lk(mu_);
+      const auto now = clock::now();
+      if (now >= hold_until_ && used_locked(now) + weight <= std::max(limit_ - kReserve, weight)) {
+        spent_.emplace_back(now, weight);
+        return true;
+      }
+      // Headroom returns when the oldest spend leaves the window, or the relayer's hold ends.
+      until = now < hold_until_ ? hold_until_ : spent_.front().first + std::chrono::seconds(60);
+    }
+    std::this_thread::sleep_for(std::min<clock::duration>(until - clock::now(), std::chrono::milliseconds(500)));
+  }
+}
+
+void RateBudget::denied(const std::string& body, int retry_after_s) {
+  std::lock_guard lk(mu_);
+  hold_until_ = std::max(hold_until_, clock::now() + std::chrono::seconds(retry_after_s));
+  // {"layer":"delegate_key","limit":"60 weighted-requests/min",...}
+  const auto j = json::parse(body, nullptr, false);
+  if (!j.is_object() || j.value("layer", "") != "delegate_key") return;
+  const std::string limit = j.value("limit", "");
+  if (!limit.ends_with("/min")) return;
+  try {
+    if (const int n = std::stoi(limit); n > 0) limit_ = n;
+  } catch (...) {
+  }
+}
+
+int RateBudget::limit() const {
+  std::lock_guard lk(mu_);
+  return limit_;
+}
+
+int RateBudget::spent() const {
+  std::lock_guard lk(mu_);
+  return used_locked(clock::now());
+}
 
 std::string canonical_message(const std::string& ts, const std::string& method, const std::string& path,
                               const std::string& body_sha256, const std::string& nonce,
@@ -98,7 +173,10 @@ std::string Client::seal_session() {
 json Client::signed_request(const std::string& method, const std::string& path, const json& body,
                             bool include_seal_session, long timeout_s) {
   const std::string body_str = (method == "GET" || body.is_null()) ? "" : body.dump();
+  const int weight = RateBudget::weight(method, path);
   for (int attempt = 0;; ++attempt) {
+    if (!tl_background) budget_.spend(weight);
+    else if (!budget_.wait_for(weight, background_stop_)) throw Error(0, method + " " + path + ": shutting down");
     const std::string ts = std::to_string(now_ms() / 1000);
     const std::string nonce = crypto::uuid4();
     const auto sig = key_.sign(
@@ -128,6 +206,9 @@ json Client::signed_request(const std::string& method, const std::string& path, 
       if (auto it = r.headers.find("retry-after"); it != r.headers.end()) {
         try { wait_s = std::max(1, std::stoi(it->second)); } catch (...) {}
       }
+      if (r.status == 429) budget_.denied(r.body, wait_s);
+      std::fprintf(stderr, "[memory] %s %s: %s, retrying in %ds\n", method.c_str(), path.c_str(),
+                   r.error.empty() ? ("HTTP " + std::to_string(r.status)).c_str() : r.error.c_str(), wait_s);
       std::this_thread::sleep_for(std::chrono::seconds(wait_s));
       continue;
     }
@@ -216,7 +297,9 @@ std::vector<Memory> Client::recall(const std::string& query, const std::string& 
 }
 
 json Client::analyze(const std::string& text, const std::string& ns) {
-  return signed_request("POST", "/api/analyze", {{"text", for_storage(text)}, {"namespace", ns}}, true, 120);
+  json res = signed_request("POST", "/api/analyze", {{"text", for_storage(text)}, {"namespace", ns}}, true, 120);
+  budget_.spend(static_cast<int>(res.value("facts", json::array()).size()));  // the relayer charges one per fact
+  return res;
 }
 
 json Client::restore(const std::string& ns, int limit) {

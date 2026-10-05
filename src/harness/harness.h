@@ -65,7 +65,7 @@ struct Turn {
   std::string history;                // the last few exchanges of this chat, for follow-ups
   int rating = 0;            // last signal: +1 / -1, from the user or implicit
   bool user_rated = false;
-  bool done = false;
+  std::atomic<bool> done{false};  // set by the turn's thread, read by the next turn and by feedback
   std::time_t started = 0;
   // Playbook rules and lessons that were in the agents' context, as credit ids ("b3", "lesson:<blob>")
   // with their text, so reflection can say which ones helped or hurt.
@@ -82,7 +82,7 @@ std::string ns_lessons(const std::string& agent, const std::string& uid);
 // Write one restored checkpoint file under `root` without following links; false = refused.
 bool write_in_workspace(const std::string& root, const std::string& rel, const std::string& content);
 std::string memory_protocol(const std::string& uid, const std::string& agent, bool can_run_shell,
-                            const std::string& saga_bin);
+                            const std::string& saga_bin, bool native_tools = false);
 
 class Harness {
  public:
@@ -102,7 +102,9 @@ class Harness {
   json evolve_now(const std::string& uid, const std::vector<std::string>& critiques);
 
   // Read-side views, all served from Walrus Memory.
-  json memory_view(const std::string& uid, const std::string& query);
+  // `parts` picks among facts, episodes, lessons, skills, improvements, prompts; empty = all. Each
+  // part is a relayer read, so the UI asks only for what a confirmed write changed.
+  json memory_view(const std::string& uid, const std::string& query, const std::set<std::string>& parts = {});
   json memory_stats(const std::string& uid);  // {blobs, bytes}: everything this user has on Walrus
   json chat_history(const std::string& uid);
   json chat_transcript(const std::string& uid, const std::string& session);
@@ -236,7 +238,7 @@ class Harness {
     double seconds = 0;
   };
   std::map<std::string, std::map<std::string, Usage>> usage_;  // uid -> agent -> today
-  std::set<std::string> seeded_;
+  std::map<std::string, std::shared_future<void>> seeding_;  // uid → settings read, done or in flight
   std::map<std::string, std::map<std::string, std::string>> model_picks_;  // uid → agent → model
   std::string model_pick(const std::string& uid, const std::string& agent) const;
   std::set<std::string> connecting_;                           // host-mode sign-ins in progress

@@ -29,7 +29,7 @@ TEST_CASE("private learning and critiques do not cross users") {
   auto& alice = h.prompts("alice");
   auto& bob = h.prompts("bob");
   alice.add_critique("synthetic private feedback from Alice");
-  alice.credit("b1", false); alice.credit("b1", false);
+  alice.credit({{"b1", false}, {"b1", false}});
   alice.score(0, -1);
   CHECK(bob.pending_critiques() == 0);
   CHECK_FALSE(bob.credit_of("b1").muted());

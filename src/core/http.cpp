@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <mutex>
+#include <vector>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -92,6 +94,44 @@ struct GlobalInit {
   ~GlobalInit() { curl_global_cleanup(); }
 };
 
+// Idle easy handles. A handle keeps its connections, TLS sessions and DNS answers across
+// curl_easy_reset, so the next request to the same host skips the TCP and TLS handshakes
+// (100-400 ms to the MemWal relayer, against ~25 ms on a warm connection). Each handle serves one
+// request at a time: libcurl does not support one connection cache shared by concurrent threads.
+class HandlePool {
+ public:
+  ~HandlePool() {
+    for (CURL* c : idle_) curl_easy_cleanup(c);
+  }
+  CURL* take() {
+    {
+      std::lock_guard lk(mu_);
+      if (!idle_.empty()) {
+        CURL* c = idle_.back();
+        idle_.pop_back();
+        return c;
+      }
+    }
+    return curl_easy_init();
+  }
+  void give(CURL* c) {
+    curl_easy_reset(c);
+    {
+      std::lock_guard lk(mu_);
+      if (idle_.size() < kMaxIdle) {
+        idle_.push_back(c);
+        return;
+      }
+    }
+    curl_easy_cleanup(c);
+  }
+
+ private:
+  static constexpr size_t kMaxIdle = 32;
+  std::mutex mu_;
+  std::vector<CURL*> idle_;
+};
+
 }  // namespace
 
 bool is_public_address(const std::string& ip) {
@@ -157,8 +197,10 @@ Response request(const std::string& method, const std::string& url, const Header
                  const std::string& body, long timeout_s, const ChunkFn& on_chunk, bool public_only,
                  size_t max_response_bytes, const CancelFn& cancelled) {
   static GlobalInit g;
+  static HandlePool pool;  // after g, so it is destroyed before curl_global_cleanup
   Response resp;
-  CURL* c = curl_easy_init();
+  // A public_only request never reuses a connection: its peer must pass open_public on this call.
+  CURL* c = public_only ? curl_easy_init() : pool.take();
   if (!c) {
     resp.error = "curl_easy_init failed";
     return resp;
@@ -201,7 +243,8 @@ Response request(const std::string& method, const std::string& url, const Header
   if (!ctx.blocked.empty()) resp.error = "refused: " + ctx.blocked + " is not a public address";
   curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &resp.status);
   curl_slist_free_all(hl);
-  curl_easy_cleanup(c);
+  if (public_only) curl_easy_cleanup(c);
+  else pool.give(c);
   return resp;
 }
 
