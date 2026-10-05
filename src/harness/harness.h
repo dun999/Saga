@@ -164,8 +164,10 @@ class Harness {
   PromptPool& prompts(const std::string& uid);
 
  private:
+  // `background`: the user's nearest other facts, given when few match the message (see chat()).
   std::string build_context(Turn& t, const agents::Agent& agent, const std::string& lesson_query,
-                            const std::vector<memwal::Memory>& facts, const std::vector<memwal::Memory>& episodes,
+                            const std::vector<memwal::Memory>& facts, const std::vector<memwal::Memory>& background,
+                            const std::vector<memwal::Memory>& episodes,
                             const std::vector<memwal::Memory>& skills, std::vector<memwal::Memory> lessons,
                             bool lessons_failed, const Emit& emit);
   // Memory reads run beside the turn, never in front of it: a slow relayer can't hold a reply hostage.

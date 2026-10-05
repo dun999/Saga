@@ -116,9 +116,14 @@ json memories_json(const std::vector<memwal::Memory>& ms, size_t text_limit = 30
 // Batches preserve the actual query and distinguish an empty match from a failed read.
 void record_recall(Turn& t, const std::string& ns, const std::string& query,
                    const std::vector<memwal::Memory>& memories, bool failed, const Emit& emit,
-                   const std::string& agent = "", int step = -1) {
+                   const std::string& agent = "", int step = -1, const std::vector<memwal::Memory>& background = {}) {
+  json items = memories_json(memories, kMemoryContextBytes);
+  for (auto item : memories_json(background, kMemoryContextBytes)) {  // given as context, not matched to the query
+    item["background"] = true;
+    items.push_back(std::move(item));
+  }
   json batch = {{"ns", ns}, {"query", clip(query, 400)}, {"query_truncated", query.size() > 400},
-                {"status", failed ? "unavailable" : "ok"}, {"items", memories_json(memories, kMemoryContextBytes)}};
+                {"status", failed ? "unavailable" : "ok"}, {"items", items}};
   if (!agent.empty()) batch["agent"] = agent;
   if (step >= 0) batch["step"] = step;
   t.recall_sources.push_back(batch);
@@ -362,6 +367,7 @@ void Harness::boot(const Emit& log) {
 
 std::string Harness::build_context(Turn& t, const agents::Agent& agent, const std::string& lesson_query,
                                    const std::vector<memwal::Memory>& facts,
+                                   const std::vector<memwal::Memory>& background,
                                    const std::vector<memwal::Memory>& episodes,
                                    const std::vector<memwal::Memory>& skills, std::vector<memwal::Memory> lessons,
                                    bool lessons_failed, const Emit& emit) {
@@ -394,14 +400,18 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
   c += "## Team\nYou are @" + agent.name() + " in a Saga team working for one user. Teammates:";
   for (auto& r : reg_.roster(t.uid))
     if (r["name"] != agent.name() && r["unavailable"].get<std::string>().empty())
-      c += " @" + r["name"].get<std::string>() + " (" + r["description"].get<std::string>() + ");";
+      c += " @" + r["name"].get<std::string>() + " (" + r["description"].get<std::string>() +
+           (r.value("edits_files", false) ? "; reads, edits and runs code in the workspace" : "") + ");";
   c += "\nTo hand part of the work to a teammate, write a line on its own: `@name <precise instruction>`. "
        "Only do this when it clearly helps; otherwise finish the work yourself.\n";
   if (agent.can_edit_files())
     c += "Shared workspace (every teammate sees the same files): " +
          (opt_.user_accounts ? std::string(sandbox::kWork) : t.workspace) + "\n";
   else
-    c += "You cannot edit files; put any code inline in fenced blocks.\n";
+    c += "You cannot read or edit files, see the repository, or run commands. When the user wants something built, "
+         "changed or checked in their workspace or repository, hand it to a teammate who works in the workspace "
+         "(`@name <precise instruction>` on its own line) instead of saying you will do it yourself. Otherwise put "
+         "any code inline in fenced blocks.\n";
 
   auto section = [&](const char* title, const std::vector<memwal::Memory>& ms) {
     if (ms.empty()) return;
@@ -409,6 +419,7 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
     for (auto& m : ms) c += "- " + clip(m.text, kMemoryContextBytes) + "\n";
   };
   section("What Saga remembers about this user (Walrus Memory)", facts);
+  section("Other things Saga remembers about this user (not matched to this message)", background);
   section("Relevant past episodes", episodes);
   section(("Lessons learned for @" + agent.name()).c_str(), lessons);
   section("Skills that worked before", skills);
@@ -562,7 +573,7 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   // user's prompt population and settings (on their first turn since a restart), and the chat so far.
   // Each agent's lessons are fetched as soon as it is known to be needed (a handoff's while the
   // previous agent is still working).
-  auto facts_r = recall_async(message, ns_user(uid, "facts"), {.limit = 10, .max_distance = 0.75, .recency_weight = 0.2});
+  auto facts_r = recall_async(message, ns_user(uid, "facts"), {.limit = 10, .recency_weight = 0.2});
   auto episodes_r = recall_async(message, ns_user(uid, "episodes"), {.limit = 3, .max_distance = 0.7});
   auto skills_r = recall_async(message, ns_user(uid, "skills"), {.limit = 2, .max_distance = 0.55});
   auto version_f = std::async(std::launch::async, [this, uid] { return prompts(uid).choose().v; });
@@ -619,12 +630,20 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   const auto names = reg_.names(uid);
   auto queue = plan_queue(names);
   for (auto& [seg, by] : queue) want_lessons(seg.agent, seg.instruction);
-  const auto facts = await(facts_r), episodes = await(episodes_r), skills = await(skills_r);
+  // A broad question ("what do you remember about me?") is far from every specific fact, so a distance
+  // cut-off alone hands the agent nothing. Facts within reach go in as relevant; when fewer than five
+  // are, the nearest of the rest go in separately as background, so the agent still knows the basics.
+  constexpr double kFactReach = 0.75;
+  constexpr size_t kFactFloor = 5;
+  std::vector<memwal::Memory> facts, background;
+  for (auto& m : await(facts_r)) (m.distance <= kFactReach ? facts : background).push_back(m);
+  background.resize(std::min(background.size(), facts.size() < kFactFloor ? kFactFloor - facts.size() : 0));
+  const auto episodes = await(episodes_r), skills = await(skills_r);
   trace("facts/episodes/skills recalled");
-  for (auto* ms : {&facts, &episodes, &skills})
+  for (const auto* ms : std::initializer_list<const std::vector<memwal::Memory>*>{&facts, &background, &episodes, &skills})
     for (auto& m : *ms) t->recalled.push_back(m.text);
   if (store_.enabled()) {
-    record_recall(*t, ns_user(uid, "facts"), message, facts, facts_r->failed, emit);
+    record_recall(*t, ns_user(uid, "facts"), message, facts, facts_r->failed, emit, "", -1, background);
     record_recall(*t, ns_user(uid, "episodes"), message, episodes, episodes_r->failed, emit);
     record_recall(*t, ns_user(uid, "skills"), message, skills, skills_r->failed, emit);
   }
@@ -645,7 +664,8 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     want_lessons(s.agent, s.instruction);
     auto lessons = await(lessons_r[s.agent]);  // usually already fetched while the previous agent worked
     trace("@" + s.agent + " lessons recalled");
-    const std::string ctx = build_context(*t, a ? *a : *reg_.primary(), lessons_r[s.agent]->query, facts, episodes, skills,
+    const std::string ctx = build_context(*t, a ? *a : *reg_.primary(), lessons_r[s.agent]->query, facts, background,
+                                          episodes, skills,
                                           std::move(lessons), lessons_r[s.agent]->failed, emit);
     const Snapshot before = snapshot(t->workspace);
     trace("@" + s.agent + " running");
