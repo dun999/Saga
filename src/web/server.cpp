@@ -190,8 +190,12 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     if (!req.path.starts_with("/api/")) return httplib::Server::HandlerResponse::Unhandled;
     if (req.path == "/api/login" || req.path.starts_with("/api/auth/"))
       return httplib::Server::HandlerResponse::Unhandled;
-    // Sign-in with Sui: every other API call needs a verified wallet session.
-    if (auth.config().required && auth.session_address(cookie(req, "saga_session")).empty()) {
+    // Sign-in with Sui: every other API call needs a verified wallet session, and using it keeps it alive.
+    const std::string token = cookie(req, "saga_session");
+    if (const int left = auth.touch(token); left > 0)
+      res.headers.emplace("Set-Cookie", "saga_session=" + token + "; Path=/; Max-Age=" + std::to_string(left) +
+                                            "; HttpOnly; SameSite=Lax" + sec);
+    else if (auth.config().required) {
       send_json(res, {{"error", "sign in required"}, {"login", true}, {"passwords", auth.config().passwords}}, 401);
       return httplib::Server::HandlerResponse::Handled;
     }

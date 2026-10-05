@@ -1,8 +1,8 @@
 #pragma once
 // Sign-in with Sui: a Wallet Standard wallet signs a one-time challenge as a Sui personal message;
 // the verified address becomes the user's Saga identity. Wallet-side Google accounts (e.g. Slush's
-// zkLogin) work too. An opaque, short-lived cookie identifies a revocable in-memory session;
-// the vault key is held only in that session after a second wallet signature.
+// zkLogin) work too. An opaque cookie identifies a revocable in-memory session that ends after an idle
+// hour or a week at most; the vault key is held only in that session after a second wallet signature.
 #include <chrono>
 #include <map>
 #include <mutex>
@@ -20,7 +20,8 @@ struct AuthConfig {
   bool passwords = true;   // username + password sign-in is offered beside wallets
   std::string graphql_url = "https://graphql.mainnet.sui.io/graphql";
   std::set<std::string> allowed;  // optional address allowlist (lower-case 0x…)
-  int session_ttl_s = 3600;
+  int session_ttl_s = 3600;           // idle time before a session ends; each signed-in request renews it
+  int session_max_s = 7 * 24 * 3600;  // a session ends this long after sign-in, however active
 };
 
 // "0x" + 64 lower-case hex, or "" if not a Sui address.
@@ -50,6 +51,8 @@ class Auth {
   std::string start_session(const std::string& username, const secrets::Key& vault);
   // The signed-in identity (Sui address or username) for a valid session token, else "".
   std::string session_address(const std::string& token) const;
+  // Renews a live session's idle expiry; the seconds it now has left (the cookie's Max-Age), else 0.
+  int touch(const std::string& token);
   // The unlock signature is checked against the address in this session before deriving its key.
   bool unlock(const std::string& token, const std::string& signature_b64, std::string* error);
   secrets::Key vault_key(const std::string& token) const;
@@ -66,8 +69,10 @@ class Auth {
   struct Session {
     std::string address;
     std::chrono::steady_clock::time_point expires;
+    std::chrono::steady_clock::time_point deadline;
     secrets::Key vault;
   };
+  Session new_session(const std::string& address, secrets::Key vault) const;
   void prune_locked() const;
   AuthConfig cfg_;
   mutable std::mutex mu_;

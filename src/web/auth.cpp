@@ -90,6 +90,13 @@ std::string vault_message(const std::string& address) {
 
 Auth::Auth(AuthConfig cfg) : cfg_(std::move(cfg)) {}
 
+Auth::Session Auth::new_session(const std::string& address, secrets::Key vault) const {
+  const auto now = std::chrono::steady_clock::now();
+  const auto deadline = now + std::chrono::seconds(std::max(1, cfg_.session_max_s));
+  return {address, std::min(now + std::chrono::seconds(std::max(1, cfg_.session_ttl_s)), deadline), deadline,
+          std::move(vault)};
+}
+
 void Auth::prune_locked() const {
   const auto now = std::chrono::steady_clock::now();
   for (auto it = sessions_.begin(); it != sessions_.end();) {
@@ -142,8 +149,7 @@ std::string Auth::verify(const std::string& address, const std::string& signatur
   std::lock_guard lk(mu_);
   prune_locked();
   expired_.erase(address);  // the sign-in handler ends this user's old context before issuing the cookie
-  sessions_[token] = {address, std::chrono::steady_clock::now() +
-                                  std::chrono::seconds(std::max(1, cfg_.session_ttl_s)), {}};
+  sessions_[token] = new_session(address, {});
   return token;
 }
 
@@ -152,8 +158,7 @@ std::string Auth::start_session(const std::string& username, const secrets::Key&
   std::lock_guard lk(mu_);
   prune_locked();
   expired_.erase(username);
-  sessions_[token] = {username, std::chrono::steady_clock::now() + std::chrono::seconds(std::max(1, cfg_.session_ttl_s)),
-                      vault};
+  sessions_[token] = new_session(username, vault);
   return token;
 }
 
@@ -162,6 +167,17 @@ std::string Auth::session_address(const std::string& token) const {
   prune_locked();
   auto it = sessions_.find(token);
   return it == sessions_.end() ? "" : it->second.address;
+}
+
+int Auth::touch(const std::string& token) {
+  std::lock_guard lk(mu_);
+  prune_locked();
+  auto it = sessions_.find(token);
+  if (it == sessions_.end()) return 0;
+  const auto now = std::chrono::steady_clock::now();
+  it->second.expires = std::min(now + std::chrono::seconds(std::max(1, cfg_.session_ttl_s)), it->second.deadline);
+  return static_cast<int>(std::max<long long>(
+      1, std::chrono::duration_cast<std::chrono::seconds>(it->second.expires - now).count()));
 }
 
 bool Auth::unlock(const std::string& token, const std::string& signature_b64, std::string* error) {
