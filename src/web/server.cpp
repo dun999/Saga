@@ -163,7 +163,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
       return httplib::Server::HandlerResponse::Unhandled;
     // Sign-in with Sui: every other API call needs a verified wallet session.
     if (auth.config().required && auth.session_address(cookie(req, "saga_session")).empty()) {
-      send_json(res, {{"error", "sign in required"}, {"login", true}}, 401);
+      send_json(res, {{"error", "sign in required"}, {"login", true}, {"passwords", auth.config().passwords}}, 401);
       return httplib::Server::HandlerResponse::Handled;
     }
     return httplib::Server::HandlerResponse::Unhandled;
@@ -255,8 +255,8 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     std::string page(kPrivacyHtml);
     const std::string marker = "__SAGA_ACCOUNT_NOTICE__";
     const char* notice = h.user_accounts()
-        ? "<strong>This server uses user account mode.</strong> Personal connections require a verified wallet. "
-          "Another wallet does not inherit them by choosing the same name. The built-in @saga assistant uses the operator's account."
+        ? "<strong>This server uses user account mode.</strong> Personal connections require a verified wallet or a "
+          "username signed in with its password. Nobody inherits them by choosing the same name. The built-in @saga assistant uses the operator's account."
         : "<strong>This server uses host account mode.</strong> Anyone using this Saga can use the host's connected "
           "agent accounts, even with a different username or wallet. A memory namespace does not isolate those logins.";
     if (const auto at = page.find(marker); at != std::string::npos) page.replace(at, marker.size(), notice);
@@ -267,10 +267,30 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   svr.Post("/api/login", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);
     if (!j.is_object()) return send_json(res, {{"error", "bad json"}}, 400);
-    if (auth.config().required) return send_json(res, {{"error", "This Saga only allows wallet sign-in."}}, 403);
     std::string handle = sanitize_uid(j.value("handle", ""));
     if (looks_like_address(handle))
       return send_json(res, {{"error", "That looks like a wallet address. Use Connect wallet to sign in with it."}}, 400);
+    std::string password = j.value("password", "");
+    secrets::WipeString wipe{password};
+    // Username + password: a session with its own vault key, like a wallet's. Where sign-in is required,
+    // this is the only way in without a wallet.
+    if (!password.empty() || auth.config().required) {
+      if (!auth.config().passwords) return send_json(res, {{"error", "This Saga only allows wallet sign-in."}}, 403);
+      if (handle.size() < 3 || handle.size() > 32 || handle.starts_with("anon-"))
+        return send_json(res, {{"error", "Pick a username of 3 to 32 letters, numbers, - or _."}}, 400);
+      if (password.empty())
+        return send_json(res, {{"error", "Enter a password. Your first sign-in with a new username sets it."}}, 400);
+      secrets::Key vault;
+      const json r = h.password_login(handle, password, vault);
+      if (r.contains("error")) return send_json(res, r, 403);
+      if (const std::string previous = auth.logout(cookie(req, "saga_session")); !previous.empty() && previous != handle)
+        h.end_session(previous);
+      h.end_session(handle);
+      res.set_header("Set-Cookie", "saga_session=" + auth.start_session(handle, vault) + "; Path=/; Max-Age=" +
+                                       std::to_string(auth.config().session_ttl_s) + "; HttpOnly; SameSite=Lax" + sec);
+      res.headers.emplace("Set-Cookie", "saga_uid=; Path=/; Max-Age=0; SameSite=Lax" + sec);
+      return send_json(res, {{"ok", true}, {"uid", handle}, {"created", r.value("created", false)}});
+    }
     if (!handle.empty()) {
       if (const std::string address = auth.logout(cookie(req, "saga_session")); !address.empty())
         h.end_session(address);
@@ -284,14 +304,18 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   svr.Get("/api/me", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string uid = uid_of(req, res);
     const std::string address = auth.session_address(cookie(req, "saga_session"));
-    // auth: signed in with a wallet. wallet_required: this deployment only allows wallets.
-    send_json(res, {{"uid", uid}, {"auth", !address.empty()},
-                    {"address", address}, {"wallet_required", auth.config().required}});
+    // auth: signed in (wallet or password). wallet: the identity is a Sui address. guests: a bare
+    // username works here (local serving). wallet_required: neither guests nor passwords are offered.
+    const bool wallet = looks_like_address(address);
+    send_json(res, {{"uid", uid}, {"auth", !address.empty()}, {"wallet", wallet}, {"address", wallet ? address : ""},
+                    {"guests", !auth.config().required}, {"passwords", auth.config().passwords},
+                    {"wallet_required", auth.config().required && !auth.config().passwords}});
   });
 
   // ---- Sign-in with Sui ----------------------------------------------------------------
   svr.Get("/api/auth/config", [&](const httplib::Request&, httplib::Response& res) {
-    send_json(res, {{"required", auth.config().required}, {"network", "mainnet"}});
+    send_json(res, {{"required", auth.config().required}, {"passwords", auth.config().passwords},
+                    {"network", "mainnet"}});
   });
   svr.Post("/api/auth/challenge", [&](const httplib::Request& req, httplib::Response& res) {
     auto j = json::parse(req.body, nullptr, false);

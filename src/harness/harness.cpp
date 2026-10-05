@@ -1417,12 +1417,80 @@ std::string strip_ansi(const std::string& s) {
 // its session proves the owner and its signature derives the vault key, which remains in server
 // memory for that session. A username is guest mode — anyone can type it — so it
 // gets an empty keyring nothing is ever saved to. '~' never appears in a uid.
-std::string Harness::keyring(const std::string& uid, const secrets::Key&) const {
-  return is_wallet(uid) ? uid : uid + "~guest";
+namespace {
+const json kWalletOnly = {{"error", "Sign in with a wallet or a password to connect accounts. Guest usernames can't keep credentials."}};
+}  // namespace
+
+// A wallet, or a username registered with a password and signed in (its vault key is present): both
+// seal credentials under a key only they can produce. A guest username has no secret, so it keeps none,
+// whatever key a caller hands in.
+bool Harness::keeps_credentials(const std::string& uid, const secrets::Key& vault) const {
+  if (is_wallet(uid)) return true;
+  return vault.size() == 32 && read_keys(opt_.keys_path).value("#accounts", json::object()).contains(uid);
 }
 
-namespace {
-const json kWalletOnly = {{"error", "Sign in with a wallet to connect accounts. Guest usernames can't keep credentials."}};
+std::string Harness::keyring(const std::string& uid, const secrets::Key& vault) const {
+  return keeps_credentials(uid, vault) ? uid : uid + "~guest";
+}
+
+json Harness::password_login(const std::string& name, const std::string& password, secrets::Key& vault) {
+  if (password.size() < 8 || password.size() > 256) return {{"error", "Use a password of 8 to 256 characters."}};
+  crypto::init();
+  // One sign-in at a time: each Argon2id run holds 64 MB, and a name is claimed exactly once.
+  static std::mutex mu;
+  std::lock_guard lk(mu);
+  const json account = read_keys(opt_.keys_path).value("#accounts", json::object()).value(name, json());
+  std::string salt_hex;
+  bool created = false;
+  if (account.is_object()) {
+    const std::string verifier = account.value("verifier", "");
+    if (verifier.empty() || crypto_pwhash_str_verify(verifier.c_str(), password.data(), password.size()) != 0)
+      return {{"error", "Wrong username or password."}};
+    salt_hex = account.value("salt", "");
+  } else {
+    // A name with memory but no password was made before passwords (a guest on this machine, or the
+    // operator's own tests on the same MemWal account): its memory isn't the first claimant's to read.
+    if (store_.enabled()) {
+      for (const char* k : {"facts", "episodes", "chat", "checkpoints", "settings", "cases"}) {
+        try {
+          if (store_.client()->stats(ns_user(name, k)).value("memory_count", 0L) > 0)
+            return {{"error", "That username is taken. Pick another, or sign in with a wallet."}};
+        } catch (const std::exception&) {
+          return {{"error", "Can't check that username right now. Try again in a minute."}};
+        }
+      }
+    }
+    char verifier[crypto_pwhash_STRBYTES];
+    if (crypto_pwhash_str(verifier, password.data(), password.size(), crypto_pwhash_OPSLIMIT_INTERACTIVE,
+                          crypto_pwhash_MEMLIMIT_INTERACTIVE) != 0)
+      return {{"error", "The server is busy. Try again."}};
+    salt_hex = crypto::random_hex(crypto_pwhash_SALTBYTES);
+    bool saved = false;
+    update_keys(opt_.keys_path, [&](json& keys) {
+      json& accounts = keys["#accounts"];
+      if (!accounts.is_object()) accounts = json::object();
+      if (accounts.contains(name)) return;
+      accounts[name] = {{"verifier", std::string(verifier)}, {"salt", salt_hex}, {"created", std::time(nullptr)}};
+      saved = true;
+    });
+    if (!saved) return {{"error", "Couldn't save the account. Try again."}};
+    created = true;
+  }
+  // The vault key comes from the password; Saga never stores it.
+  crypto::Bytes salt;
+  try {
+    salt = crypto::from_hex(salt_hex);
+  } catch (const std::exception&) {
+  }
+  if (salt.size() != crypto_pwhash_SALTBYTES) return {{"error", "This account's record is damaged."}};
+  vault.assign(32, 0);
+  if (crypto_pwhash(vault.data(), vault.size(), password.data(), password.size(), salt.data(),
+                    crypto_pwhash_OPSLIMIT_INTERACTIVE, crypto_pwhash_MEMLIMIT_INTERACTIVE,
+                    crypto_pwhash_ALG_ARGON2ID13) != 0) {
+    secrets::clear(vault);
+    return {{"error", "The server is busy. Try again."}};
+  }
+  return {{"uid", name}, {"created", created}};
 }
 
 std::optional<sandbox::Sandbox> Harness::sandbox_for(const std::string& uid, const std::string& workspace,
@@ -1539,7 +1607,7 @@ json Harness::agents_view(const std::string& uid, const secrets::Key& vault) {
 json Harness::connect_agent(const std::string& uid, const std::string& name, const secrets::Key& vault, bool remember) {
   agents::Agent* a = reg_.find(name);
   if (!a) return {{"error", "unknown agent"}};
-  if (opt_.user_accounts && !is_wallet(uid)) return kWalletOnly;
+  if (opt_.user_accounts && !keeps_credentials(uid, vault)) return kWalletOnly;
   if (opt_.user_accounts && vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
 
   if (!opt_.user_accounts) {
@@ -1638,7 +1706,7 @@ json Harness::connect_status(const std::string& uid, const std::string& name, co
 json Harness::set_credential(const std::string& uid, const std::string& name, const std::string& kind,
                              const std::string& value, const secrets::Key& vault, bool remember) {
   if (!opt_.user_accounts) return {{"error", "this Saga runs agents on the operator's own accounts"}};
-  if (!is_wallet(uid)) return kWalletOnly;
+  if (!keeps_credentials(uid, vault)) return kWalletOnly;
   if (vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
   agents::Agent* a = reg_.find(name);
   if (!a) return {{"error", "unknown agent"}};
@@ -1697,7 +1765,7 @@ json Harness::disconnect_agent(const std::string& uid, const std::string& name, 
   // erasing the Grok login below.
   const std::string& kind = a->spec().kind;
   if (kind != "claude-code" && kind != "codex" && kind != "grok-cli") return {{"error", "@" + name + " has nothing to disconnect"}};
-  if (!is_wallet(uid)) return kWalletOnly;
+  if (!keeps_credentials(uid, vault)) return kWalletOnly;
   cancel_active(uid);
   // Disconnect deletes the credential outright (sealed or not).
   const std::string ring = keyring(uid, vault);
@@ -1726,7 +1794,7 @@ json Harness::disconnect_agent(const std::string& uid, const std::string& name, 
 
 json Harness::vault_status(const std::string& uid, const secrets::Key& vault) {
   if (vault.size() != 32) return {{"state", "missing"}};
-  if (!is_wallet(uid)) return {{"state", "guest"}};  // guests keep no credentials
+  if (!keeps_credentials(uid, vault)) return {{"state", "guest"}};  // guests keep no credentials
   const std::string id = secrets::key_id(vault);
   std::string known;
   update_keys(opt_.keys_path, [&](json& keys) {
@@ -1749,7 +1817,7 @@ json Harness::vault_status(const std::string& uid, const secrets::Key& vault) {
 // Only a wallet can do this: its session proves the owner. A guest username has nothing to reset.
 json Harness::vault_reset(const std::string& uid, const secrets::Key& vault) {
   if (vault.size() != 32) return {{"error", "no vault key"}};
-  if (!is_wallet(uid)) return {{"error", "only a wallet's vault can be reset"}};
+  if (!keeps_credentials(uid, vault)) return {{"error", "only a signed-in account's vault can be reset"}};
   end_session(uid);
   if (!update_keys(opt_.keys_path, [&](json& keys) {
         if (keys.contains(kCreds)) keys[kCreds].erase(uid);
@@ -1817,7 +1885,7 @@ json Harness::add_agent(const std::string& uid, const json& body, const secrets:
     return {{"error", "remote API base URL must use HTTPS with no credentials, query or fragment"}};
   if (spec.model.empty()) return {{"error", "model is required"}};
   // A key is only kept sealed, under a wallet's vault.
-  if (!key.empty() && !is_wallet(uid)) return kWalletOnly;
+  if (!key.empty() && !keeps_credentials(uid, vault)) return kWalletOnly;
   if (!key.empty() && vault.size() != 32)
     return {{"error", "unlock your vault first (sign in again)"}};
   if (auto err = reg_.add(spec); !err.empty()) return {{"error", err}};
@@ -2043,7 +2111,7 @@ json Harness::github_status(const std::string& uid, const secrets::Key& vault) {
 
 json Harness::github_set_token(const std::string& uid, const std::string& token, const secrets::Key& vault,
                                const std::string& source, const std::atomic<bool>* cancelled, bool remember) {
-  if (!is_wallet(uid)) return kWalletOnly;
+  if (!keeps_credentials(uid, vault)) return kWalletOnly;
   if (vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
   const auto context = operation_cancel(uid);
   if (!cancelled) cancelled = context.get();
@@ -2087,7 +2155,7 @@ json Harness::github_oauth_finish(const std::string& uid, const std::string& cod
 
 json Harness::github_device(const std::string& uid, const secrets::Key& vault, bool remember) {
   const auto cancelled = operation_cancel(uid);
-  if (!is_wallet(uid)) return kWalletOnly;
+  if (!keeps_credentials(uid, vault)) return kWalletOnly;
   if (vault.size() != 32) return {{"error", "unlock your vault first (sign in again)"}};
   if (opt_.github_client_id.empty()) return {{"error", "GitHub sign-in isn't configured here — use a token"}};
   json start;

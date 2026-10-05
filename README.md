@@ -34,7 +34,7 @@ The browser UI brings the workflow together:
 - **Give feedback.** Rate an answer or explain what went wrong so Saga can reflect on the attempt.
 - **See memory being saved.** Pending writes become links to Walrus blobs when storage is confirmed.
 
-Saga also provides terminal chat. Sui wallet sign-in gives browser users an identity across devices within a deployment; local guest usernames support trying it on your own machine.
+Saga also provides terminal chat. Sui wallet sign-in, or a username with a password, gives browser users an identity across devices within a deployment; local guest usernames support trying it on your own machine.
 
 ## How the harness works
 
@@ -236,7 +236,7 @@ To explore persistence, tell Saga a project preference, wait for the memory writ
 
 `serve --no-memory` and `chat --no-memory` run without MemWal. A turn that calls `@saga` still needs `BOUNDLESS_API_KEY`. The CLI agents use the logins on this machine.
 
-Local serving defaults to the operator's accounts and runs CLI agents without Saga's sandbox. For a shared deployment, Saga supports wallet-only sign-in, user-owned provider accounts, encrypted credential storage, and bubblewrap isolation. Public serving requires `--accounts user --wallet-only --public-origin https://your.host --agent-cgroups PATH`. See [deploy/saga.service](deploy/saga.service) for the Linux service configuration and [deploy/saga.caddy](deploy/saga.caddy) for the reverse proxy; it requires systemd 254+, kernel 5.14+, bubblewrap 0.9+, delegated cgroup v2 controls, and separately configured filesystem quotas.
+Local serving defaults to the operator's accounts and runs CLI agents without Saga's sandbox. For a shared deployment, Saga supports wallet-only sign-in, user-owned provider accounts, encrypted credential storage, and bubblewrap isolation. Public serving requires `--accounts user --public-origin https://your.host --agent-cgroups PATH`. Every request then needs a signed-in session: a Sui wallet, or a username with a password (the first sign-in claims the name; a name that already has memory can't be claimed). Add `--wallet-only` to allow wallets alone. See [deploy/saga.service](deploy/saga.service) for the Linux service configuration and [deploy/saga.caddy](deploy/saga.caddy) for the reverse proxy; it requires systemd 254+, kernel 5.14+, bubblewrap 0.9+, delegated cgroup v2 controls, and separately configured filesystem quotas.
 
 ## Current boundaries
 

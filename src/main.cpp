@@ -418,19 +418,25 @@ int cmd_serve(const Args& a) {
   // A loopback bind is not a private deployment once a reverse proxy or a public origin is configured.
   const bool exposed = !local || !o.public_origin.empty() || o.trust_proxy;
   o.rate_limit = exposed;
-  // Sign in with a username (guest) or a Sui wallet; --wallet-only allows wallets only.
-  o.auth.required = a.has("wallet-only") && !a.has("no-auth");
+  // Sign in with a Sui wallet or a username. Served to other people, every request needs a signed-in
+  // session, so a username comes with a password; on this machine a bare guest username works too.
+  // --wallet-only allows wallets only.
+  o.auth.passwords = !a.has("wallet-only");
+  o.auth.required = (a.has("wallet-only") || exposed) && !a.has("no-auth");
   for (std::stringstream ss(a.get("allow")); ss.good();) {
     std::string addr;
     std::getline(ss, addr, ',');
     if (auto n = web::normalize_address(addr); !n.empty()) o.auth.allowed.insert(n);
   }
   // An allowlist only means something if every request has to prove a wallet: it implies wallet-only.
-  if (!o.auth.allowed.empty() && !a.has("no-auth")) o.auth.required = true;
+  if (!o.auth.allowed.empty() && !a.has("no-auth")) {
+    o.auth.required = true;
+    o.auth.passwords = false;
+  }
   if (exposed && (!ho.user_accounts || !o.auth.required || !o.public_origin.starts_with("https://"))) {
     std::fprintf(stderr,
-                 "saga: a public bind or a reverse proxy needs --accounts user --wallet-only --public-origin "
-                 "https://… — guest mode is only for this machine, with no public origin and no --trust-proxy.\n");
+                 "saga: a public bind or a reverse proxy needs --accounts user --public-origin https://… and sign-in "
+                 "(no --no-auth) — guest mode is only for this machine, with no public origin and no --trust-proxy.\n");
     return 1;
   }
   if (exposed && a.get("agent-cgroups").empty()) {
@@ -473,6 +479,7 @@ void usage() {
       "usage: saga <command> [flags]\n"
       "  serve   [--host H --port P] [--no-memory]  web UI (default http://127.0.0.1:8080)\n"
       "          [--accounts host|user] [--wallet-only] [--allow 0x…,0x…] [--trace]\n"
+      "          (served publicly, sign-in is a wallet or a username with a password; --wallet-only: wallets)\n"
       "          [--public-origin URL] [--trust-proxy] [--secure-cookies] [--operator-budget N]\n"
       "          [--agent-cgroups PATH]  delegated cgroup v2 subtree (required for public serving)\n"
       "  chat    [--user NAME] [--no-memory]         terminal chat\n"

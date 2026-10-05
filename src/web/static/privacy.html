@@ -51,7 +51,7 @@ li { margin: 6px 0; }
 
   <div class="summary">
     <p><strong>A memory namespace is a label, not a login or a password.</strong> Anyone entering the same guest username shares its memory, chats and workspace files.</p>
-    <p><strong>Access to connected accounts depends on the server's account mode.</strong> Host account mode shares the machine's agent logins. User account mode keeps personal credentials tied to a verified wallet.</p>
+    <p><strong>Access to connected accounts depends on the server's account mode.</strong> Host account mode shares the machine's agent logins. User account mode keeps personal credentials tied to a verified wallet or a password-protected username.</p>
     <p>Memory is encrypted for storage on Walrus, but Saga, its memory relayer and the AI services processing your requests can read the content they receive.</p>
   </div>
   <p class="mode" id="account-mode">__SAGA_ACCOUNT_NOTICE__</p>
@@ -61,11 +61,11 @@ li { margin: 6px 0; }
     <thead><tr><th>Account mode</th><th>What another user can access</th></tr></thead>
     <tbody>
       <tr><td><strong>Host account mode</strong><br>The default for localhost</td><td>Agents use the machine's provider logins. Another Saga user can use the same connected Claude, Codex or Grok account, <strong>even with a different username, wallet or namespace</strong>. Connecting a CLI account changes the host login; disconnecting signs that CLI out for other users and programs on the machine. These logins use the provider's local storage, not Saga's per-wallet vault, and agents run without a per-user sandbox.</td></tr>
-      <tr><td><strong>User account mode</strong><br>Personal accounts for each wallet</td><td>Only a verified wallet can save personal credentials. Saga uses a separate credential key and provider home for each wallet and provider. A different wallet cannot inherit a connection by reusing a name or memory namespace. Guests cannot connect personal accounts in this mode. Signing in with the same wallet represents the same identity; remembered connections can be reused after unlocking the same vault key.</td></tr>
+      <tr><td><strong>User account mode</strong><br>Personal accounts for each wallet</td><td>Only a verified wallet or a username signed in with its password can save personal credentials. Saga uses a separate credential key and provider home for each wallet and provider. A different wallet cannot inherit a connection by reusing a name or memory namespace. Guests cannot connect personal accounts in this mode. Signing in with the same wallet represents the same identity; remembered connections can be reused after unlocking the same vault key.</td></tr>
     </tbody>
   </table>
   <p><strong>Example:</strong> Alex enters guest username <code>A</code> and connects Claude Code in host account mode. Blair enters <code>A</code> and can use that Claude account and see A's history. Entering <code>B</code> selects different guest memory, but still allows use of the same host Claude account. Switching to a wallet alone does not change the server's account mode.</p>
-  <p>For an operator serving multiple people, Saga requires user account mode, wallet-only sign-in, HTTPS and sandbox configuration. The account and wallet flags are <code>--accounts user --wallet-only</code>. The built-in <code>@saga</code> assistant still uses the operator's inference account.</p>
+  <p>For an operator serving multiple people, Saga requires user account mode, sign-in for every request (a wallet, or a username with a password), HTTPS and sandbox configuration. The account flag is <code>--accounts user</code>; <code>--wallet-only</code> turns username sign-in off. The built-in <code>@saga</code> assistant still uses the operator's inference account.</p>
 
   <h2>Wallet or guest</h2>
   <ul>
@@ -81,9 +81,9 @@ li { margin: 6px 0; }
   <table>
     <thead><tr><th>Name</th><th>What it does</th><th>Lifetime</th></tr></thead>
     <tbody>
-      <tr><td><code>saga_session</code></td><td>A random ID for your wallet session. It contains no wallet address, vault key or provider credential, but possession of it grants access to the live session. <em>HttpOnly</em> keeps page scripts from reading it; public HTTPS deployments also mark it <em>Secure</em>.</td><td>1 hour by default; sign-out or a server restart invalidates the session sooner</td></tr>
+      <tr><td><code>saga_session</code></td><td>A random ID for your signed-in session (wallet or password). It contains no wallet address, vault key or provider credential, but possession of it grants access to the live session. <em>HttpOnly</em> keeps page scripts from reading it; public HTTPS deployments also mark it <em>Secure</em>.</td><td>1 hour by default; sign-out or a server restart invalidates the session sooner</td></tr>
       <tr><td><code>saga_csrf</code></td><td>A matching value the page sends with each change you make, so another site can't submit one for you (a double-submit check). <em>SameSite=Strict</em>. Page scripts can read it; it is not a login secret.</td><td>14 days</td></tr>
-      <tr><td><code>saga_uid</code></td><td>Your guest username, or an anonymous handle before you pick one. Not used once you sign in with a wallet.</td><td>1 year</td></tr>
+      <tr><td><code>saga_uid</code></td><td>Your guest username, or an anonymous handle before you pick one. Not used once you sign in with a wallet or a password.</td><td>1 year</td></tr>
       <tr><td><code>saga_gh_state</code></td><td>During GitHub OAuth sign-in: a one-time value that ties the reply to your request, plus your choice about remembering the connection.</td><td>10 minutes, or until the callback clears it</td></tr>
       <tr><td>Local storage: <code>saga-theme</code>, <code>saga-side</code>, <code>saga-cookies</code></td><td>Your theme, whether the sidebar is open, and that you've seen the cookie notice. Stays in your browser.</td><td>Until you clear it</td></tr>
     </tbody>
@@ -108,7 +108,7 @@ li { margin: 6px 0; }
   <h2>Your connected accounts</h2>
   <p>The vault protections below apply to personal connections saved through Saga. They do not apply to the host machine's CLI logins.</p>
   <ul>
-    <li><strong>Encrypted between uses.</strong> Saga seals credentials with XSalsa20-Poly1305 using keys derived from your wallet signature and separated by wallet and provider. Metadata such as the wallet address, provider name, credential type, remember choice and a vault-key fingerprint can remain unencrypted.</li>
+    <li><strong>Encrypted between uses.</strong> Saga seals credentials with XSalsa20-Poly1305 using keys derived from your wallet signature (or, for a username, from its password with Argon2id) and separated by account and provider. A username's password is kept only as an Argon2id verifier in the server's private key file, never in memory. Metadata such as the wallet address, provider name, credential type, remember choice and a vault-key fingerprint can remain unencrypted.</li>
     <li><strong>Temporary tool files.</strong> In user account mode, Saga seals CLI sign-ins and cleans provider homes after the last active call. Tools can write plaintext credentials, prompts, transcripts, logs and caches while running. A crash or cleanup failure can leave files until cleanup runs; chat workspaces and server backups are not erased by this cleanup.</li>
     <li><strong>Your choice to remember.</strong> New personal connections last until sign-out, session expiry or server restart. Their encrypted credentials stay in memory between operations. Choosing “Remember this account on this server” retains encrypted credentials on disk for future sessions. Host CLI logins are not governed by this choice.</li>
     <li><strong>Server access while unlocked.</strong> The vault key stays in server memory during an unlocked session and active operations. Saga decrypts credentials when needed. In user account mode, a CLI sees its own provider home inside its sandbox. These protections still require trust in the operator.</li>

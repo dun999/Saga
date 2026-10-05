@@ -16,7 +16,8 @@
 namespace saga::web {
 
 struct AuthConfig {
-  bool required = true;
+  bool required = true;    // every API call needs a signed-in session (wallet or password)
+  bool passwords = true;   // username + password sign-in is offered beside wallets
   std::string graphql_url = "https://graphql.mainnet.sui.io/graphql";
   std::set<std::string> allowed;  // optional address allowlist (lower-case 0x…)
   int session_ttl_s = 3600;
@@ -45,7 +46,9 @@ class Auth {
   std::string challenge(const std::string& address, const std::string& host);
   // Verifies the signature over the outstanding challenge; returns a session token or error.
   std::string verify(const std::string& address, const std::string& signature_b64, std::string* error);
-  // Address for a valid session token, else "".
+  // A session for a username whose password the harness checked; `vault` is its password-derived key.
+  std::string start_session(const std::string& username, const secrets::Key& vault);
+  // The signed-in identity (Sui address or username) for a valid session token, else "".
   std::string session_address(const std::string& token) const;
   // The unlock signature is checked against the address in this session before deriving its key.
   bool unlock(const std::string& token, const std::string& signature_b64, std::string* error);

@@ -144,4 +144,4 @@ Install and sign in only the CLIs you intend to use. A missing CLI is reported a
 
 `/quit` exits. With memory enabled, `/good` and `/bad <reason>` rate the last turn.
 
-Keep this trial on loopback. Serving any other host requires `--accounts user --wallet-only --public-origin https://… --agent-cgroups PATH`. That setup is in the README and in `deploy/saga.service`.
+Keep this trial on loopback. Serving any other host requires `--accounts user --public-origin https://… --agent-cgroups PATH`; sign-in is then a wallet or a username with a password (`--wallet-only` for wallets alone). That setup is in the README and in `deploy/saga.service`.

@@ -742,12 +742,13 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
     <span class="logo-mark" style="height:26px;margin-bottom:6px;align-self:flex-start" aria-hidden="true"></span>
     <b style="font-size:18px" id="gTitle">Sign in to Saga</b>
     <div class="empty" style="padding:0" id="gBody">Pick a guest username to try Saga, or connect a wallet to prove your identity.</div>
-    <input id="gHandle" placeholder="What should Saga call you?" aria-label="Username" autocomplete="off" spellcheck="false" autocapitalize="off">
-    <button class="btn">Continue as guest</button>
+    <input id="gHandle" placeholder="What should Saga call you?" aria-label="Username" autocomplete="username" spellcheck="false" autocapitalize="off">
+    <input id="gPass" type="password" placeholder="Password" aria-label="Password" autocomplete="current-password" hidden>
+    <button class="btn" id="gGo">Continue as guest</button>
     <div class="g-or" aria-hidden="true"><span>or</span></div>
     <button type="button" class="g-wallet" id="gWallet">Connect a Sui wallet</button>
     <button type="button" class="btn-ghost" id="gCancel" hidden>Cancel</button>
-    <div class="note">Anyone entering the same guest username shares its memory and chats. Host account mode shares the machine's agent logins across users. In user account mode, personal connections require a wallet. <a href="/privacy#account-mode">Check this server's account mode and privacy details.</a></div>
+    <div class="note" id="gNote">Anyone entering the same guest username shares its memory and chats. Host account mode shares the machine's agent logins across users. In user account mode, personal connections require a wallet. <a href="/privacy#account-mode">Check this server's account mode and privacy details.</a></div>
     <div id="gErr" class="note"></div>
   </form>
 </div>
@@ -806,7 +807,8 @@ async function api(path, body) {
   const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify(body)} : {});
   if (r.status === 401) {
     const j = await r.json().catch(() => ({}));
-    if (j.login) $("#signin").classList.add("open"); else showGate(false);
+    if (j.login && !j.passwords) $("#signin").classList.add("open");
+    else { if (j.login) signinMode = {guests: false, passwords: true}; showGate(false); }
     throw new Error("locked");
   }
   return r.json();
@@ -855,7 +857,7 @@ function renderProfilePane() {
     <div class="group-h">Profile</div>
     <div class="list">
       <div class="row"><div class="avatar">${esc(initial)}</div>
-        <div class="l"><b class="${me.auth ? "mono" : ""}">${esc(me.auth ? shortAddr(uid) : uid)}</b><span>${me.auth ? "Signed in with Sui. Your memory follows this wallet." : "Guest. Anyone who types this username sees this memory."}</span></div>
+        <div class="l"><b class="${me.wallet ? "mono" : ""}">${esc(me.wallet ? shortAddr(uid) : uid)}</b><span>${me.wallet ? "Signed in with Sui. Your memory follows this wallet." : me.auth ? "Signed in with a password. Your memory and saved keys open only with it." : "Guest. Anyone who types this username sees this memory."}</span></div>
         ${me.auth ? `<button class="btn-ghost" id="signOut">Sign out</button>` : `<button class="btn-connect" id="toWallet">Connect wallet</button><button class="btn-ghost" id="switchUser">Switch</button>`}</div>
       <div class="row"><div class="l"><b>Theme</b></div><div class="seg">${["system", "light", "dark"].map(x => `<button data-t="${x}" class="${t === x ? "on" : ""}">${x[0].toUpperCase() + x.slice(1)}</button>`).join("")}</div></div>
     </div>
@@ -885,6 +887,7 @@ function renderProfile() {
 // ---------- boot ----------
 async function boot() {
   me = await api("/api/me"); uid = me.uid;
+  signinMode = {guests: !!me.guests, passwords: !!me.passwords};
   // Not signed in yet (the server handed out a throwaway anon id): offer both ways in.
   if (!me.auth && !me.wallet_required && /^anon-/.test(uid)) showGate(false);
   if (me.auth) {
@@ -1916,9 +1919,17 @@ function addFeedback(turn, id) {
 }
 
 // The username screen: shown when the server asks for it, or when the user switches account.
+// Served to other people, a username needs a password (the first sign-in claims it); on this machine a
+// bare guest username works.
+let signinMode = {guests: true, passwords: true};
 function showGate(switching) {
+  const pw = !signinMode.guests && signinMode.passwords;
   $("#gTitle").textContent = switching ? "Switch account" : "Sign in to Saga";
-  $("#gBody").textContent = "Pick a guest username to try Saga, or connect a wallet to prove your identity.";
+  $("#gBody").textContent = pw ? "Sign in with a username and password, or connect a wallet. Your first sign-in claims the username."
+    : "Pick a guest username to try Saga, or connect a wallet to prove your identity.";
+  $("#gPass").hidden = !pw; $("#gPass").required = pw; $("#gPass").value = "";
+  $("#gGo").textContent = pw ? "Sign in" : "Continue as guest";
+  if (pw) $("#gNote").innerHTML = `Once claimed, a username's memory and saved keys open only with its password, and Saga can't recover a lost one. <a href="/privacy#account-mode">Privacy details.</a>`;
   $("#gCancel").hidden = !switching;
   $("#gErr").textContent = ""; $("#gHandle").value = "";
   $("#gate").style.display = "flex"; $("#gHandle").focus();
@@ -1936,10 +1947,10 @@ $("#gWallet").onclick = openWallet;
 $("#siBack").onclick = () => { $("#signin").classList.remove("open"); showGate(!$("#gCancel").hidden); };
 $("#gateForm").addEventListener("submit", async e => {
   e.preventDefault();
-  const handle = $("#gHandle").value.trim();
+  const handle = $("#gHandle").value.trim(), password = $("#gPass").hidden ? "" : $("#gPass").value;
   if (!handle) { $("#gErr").textContent = "Enter a username."; return; }
-  if (handle === uid) { $("#gate").style.display = "none"; return; }
-  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({handle})});
+  if (handle === uid && !password) { $("#gate").style.display = "none"; return; }
+  const r = await fetch("/api/login", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify(password ? {handle, password} : {handle})});
   const j = await r.json().catch(() => ({}));
   if (r.ok && j.uid) location.reload(); else $("#gErr").textContent = j.error || "That username can't be used. Try letters and numbers.";
 });

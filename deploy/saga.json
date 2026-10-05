@@ -1,0 +1,12 @@
+{
+  // usesaga.xyz: only the built-in assistant is offered. Users bring their own models from the UI
+  // ("+" in Agents) under their own @name and API key; nobody connects a Claude, ChatGPT or Grok
+  // account here. The built-in assistant is also the brain, so reflection and prompt evolution need
+  // no agent CLI on the host. Install as /etc/saga/saga.json.
+  "primary": "saga",
+  "brain": "saga",
+  "agents": [
+    {"name": "saga", "kind": "openai", "base_url": "https://api.inference.boundless.network/v1", "model": "dsv4",
+     "api_key_env": "BOUNDLESS_API_KEY", "locked": true, "description": "Saga: the built-in assistant, ready for everyone"}
+  ]
+}

@@ -143,8 +143,13 @@ class Harness {
   json github_repo(const std::string& uid, const std::string& session, const secrets::Key& vault);
   json github_open_pr(const std::string& uid, const std::string& session, const std::string& title,
                       const secrets::Key& vault);
-  // Where a user's connections live: the wallet address, or for a username "<uid>~<key id>" (see .cpp).
+  // Username + password sign-in. The first sign-in claims a name that has no memory yet; the Argon2id
+  // verifier and the vault salt stay in the 0600 keys file, never in memory. Fills `vault` with the
+  // password-derived key that seals this user's credentials. Returns {uid, created} or {error}.
+  json password_login(const std::string& name, const std::string& password, secrets::Key& vault);
+  // Where a user's connections live: the wallet address or signed-in username, or "<uid>~guest".
   std::string keyring(const std::string& uid, const secrets::Key& vault) const;
+  bool keeps_credentials(const std::string& uid, const secrets::Key& vault) const;
   // Vault: "ok" | "missing" (no key sent) | "mismatch" (secrets were sealed under another key).
   json vault_status(const std::string& uid, const secrets::Key& vault);
   json vault_reset(const std::string& uid, const secrets::Key& vault);  // forget old sealed secrets

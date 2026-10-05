@@ -147,6 +147,16 @@ std::string Auth::verify(const std::string& address, const std::string& signatur
   return token;
 }
 
+std::string Auth::start_session(const std::string& username, const secrets::Key& vault) {
+  const std::string token = crypto::random_hex(32);
+  std::lock_guard lk(mu_);
+  prune_locked();
+  expired_.erase(username);
+  sessions_[token] = {username, std::chrono::steady_clock::now() + std::chrono::seconds(std::max(1, cfg_.session_ttl_s)),
+                      vault};
+  return token;
+}
+
 std::string Auth::session_address(const std::string& token) const {
   std::lock_guard lk(mu_);
   prune_locked();
