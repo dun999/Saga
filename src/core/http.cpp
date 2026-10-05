@@ -195,7 +195,7 @@ int connect_public(const std::string& host, int port) {
 
 Response request(const std::string& method, const std::string& url, const Headers& headers,
                  const std::string& body, long timeout_s, const ChunkFn& on_chunk, bool public_only,
-                 size_t max_response_bytes, const CancelFn& cancelled) {
+                 size_t max_response_bytes, const CancelFn& cancelled, long stall_s) {
   static GlobalInit g;
   static HandlePool pool;  // after g, so it is destroyed before curl_global_cleanup
   Response resp;
@@ -218,6 +218,10 @@ Response request(const std::string& method, const std::string& url, const Header
   curl_easy_setopt(c, CURLOPT_HEADERDATA, &ctx);
   curl_easy_setopt(c, CURLOPT_TIMEOUT, timeout_s);
   curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
+  if (stall_s > 0) {  // a peer that sends nothing at all for stall_s seconds has hung
+    curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, stall_s);
+  }
   curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
   if (cancelled) {
     curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);

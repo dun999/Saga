@@ -423,6 +423,8 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
     if (!m.blob_id.empty()) note("lesson:" + m.blob_id, m.text);
 
   std::string c = pv.prompt + "\n\n";
+  // Without it a model can't answer "how many weeks until …" and guesses from its training data.
+  c += "## Today\nToday is " + today() + " (UTC).\n\n";
   // Identity: the base prompt speaks as Saga. Only the primary agent *is* Saga; a mentioned teammate
   // answers as itself, so "@claude who are you?" gets Claude Code, not Saga.
   if (&agent == reg_.primary())

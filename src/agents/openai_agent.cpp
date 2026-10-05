@@ -86,11 +86,17 @@ class OpenAIAgent : public Agent {
         spec_.public_only, 8 * 1024 * 1024, [&] {
           return (task.cancel && task.cancel->load()) ||
                  (task.sandbox && task.sandbox->cancel && task.sandbox->cancel->load());
-        });
+        },
+        // A streaming provider sends bytes (tokens, keep-alives, reasoning) the whole time it works. Two
+        // minutes of total silence is a hung request: end it with an error, which the harness can fall
+        // back from, instead of holding the turn until the 15-minute agent timeout.
+        120);
     r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!resp.ok() && r.error.empty()) {
       r.error = resp.error.empty() ? "HTTP " + std::to_string(resp.status) + ": " + resp.body.substr(0, 300)
-                                   : resp.error;
+                : resp.error.find("Timeout was reached") != std::string::npos && r.seconds < task.timeout_s
+                    ? "the provider stopped responding (no data for 2 minutes)"
+                    : resp.error;
     }
     r.ok = r.error.empty();
     r.text = memwal::redact_secrets(r.text);

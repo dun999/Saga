@@ -26,7 +26,7 @@ using CancelFn = std::function<bool()>;
 Response request(const std::string& method, const std::string& url, const Headers& headers = {},
                  const std::string& body = "", long timeout_s = 60, const ChunkFn& on_chunk = nullptr,
                  bool public_only = false, size_t max_response_bytes = 8 * 1024 * 1024,
-                 const CancelFn& cancelled = nullptr);
+                 const CancelFn& cancelled = nullptr, long stall_s = 0);  // stall_s: abort after this long with no bytes
 
 // A globally routable unicast IPv4/IPv6 address (text form)?
 bool is_public_address(const std::string& ip);
