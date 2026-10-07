@@ -19,36 +19,51 @@ jobs:
     container: registry.fedoraproject.org/fedora@sha256:f26286dae657dfce0fefcdca33d759fa565dbe772ed9f78e5608f1961dafc8cb
     steps:
       - name: Install toolchain
-        run: dnf -y install cmake ninja-build gcc-c++ libcurl-devel libsodium-devel zlib-devel git pkgconf
+        run: dnf -y install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf python3
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Configure
         run: cmake -S . -B build -G Ninja
       - name: Build
-        run: cmake --build build
+        run: cmake --build build --parallel 2
       - name: Shared memory regressions
         run: ctest --test-dir build --output-on-failure
       - name: Smoke test
-        run: ./build/saga help
+        run: python3 tests/local/smoke.py ./build/saga
+
+  ubuntu:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config python3
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Configure
+        run: cmake -S . -B build -G Ninja
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Shared memory regressions
+        run: ctest --test-dir build --output-on-failure
+      - name: Smoke test
+        run: python3 tests/local/smoke.py ./build/saga
 
   macos:
     runs-on: macos-latest
     steps:
       - name: Install toolchain
-        run: brew install cmake ninja libsodium pkgconf
+        run: brew install cmake ninja libsodium pkgconf python
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
       - name: Configure
         run: cmake -S . -B build -G Ninja
       - name: Build
-        run: cmake --build build -- -k 0
+        run: cmake --build build --parallel 2
       - name: Shared memory regressions
         run: ctest --test-dir build --output-on-failure
       - name: Smoke test
-        run: |
-          ./build/saga help
-          ./build/saga serve --no-memory --port 8090 &
-          for i in $(seq 1 40); do curl -fsS -o /dev/null http://127.0.0.1:8090/app && break; sleep 0.5; done
-          curl -fsS -o /dev/null -w "app: %{http_code}\n" http://127.0.0.1:8090/app
+        run: python3 tests/local/smoke.py ./build/saga

@@ -7,3 +7,4 @@ agent-homes/
 build-asan/
 tests/*
 !tests/shared_memory/
+!tests/local/

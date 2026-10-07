@@ -132,43 +132,61 @@ Saga draws on persistent-context ideas from [MemGPT](https://arxiv.org/abs/2310.
 
 ## Try it
 
-Saga builds on Linux and macOS with CMake 3.24+ and a C++23 compiler; on Windows, use WSL2. CI builds it with GCC 15 on Fedora and with Apple Clang on macOS, and it builds with GCC 13 and newer on Ubuntu 24.04 and 26.04. Install the dependencies for your system:
+Saga builds on Linux and macOS with CMake 3.24+ and a C++23 compiler (GCC 13+ or Apple Clang); on Windows, use WSL2. Use Ubuntu 24.04+, Debian 13+, or a current Fedora release for the packages below. Older distributions may supply a compiler or CMake that is too old. The first build downloads pinned dependencies from GitHub, so it needs internet access. Python 3 runs the local smoke check.
+
+| What you want to try | What you need |
+|---|---|
+| Build, tests, UI and guest sign-in | The packages below; no keys or wallet |
+| Chat with `@claude`, `@codex` or `@grok` | That CLI installed and signed in locally |
+| Chat with the default `@saga` assistant | `BOUNDLESS_API_KEY`; memory can stay off |
+| Save and recall real Walrus memory | `MEMWAL_PRIVATE_KEY` and `MEMWAL_ACCOUNT_ID`, plus a working chat provider |
+
+Install the dependencies for your system:
 
 ```bash
 # Fedora
-sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf
+sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-devel zlib-devel git pkgconf curl python3
 
 # Debian / Ubuntu (including Ubuntu on WSL2)
 sudo apt update
-sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config ripgrep
+sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config curl python3
 
 # macOS, with Homebrew (curl and zlib come with the system)
-brew install cmake ninja libsodium pkgconf
+brew install cmake ninja libsodium pkgconf python
 ```
 
 On **Windows**, install WSL2 with Ubuntu (`wsl --install` in PowerShell), open the Ubuntu terminal, and follow the Debian / Ubuntu steps there. Install and sign in to the `claude`, `codex`, and `grok` CLIs inside Ubuntu as well, since Saga runs them from there. Open the UI from your Windows browser at the same `http://127.0.0.1:8080`.
 
 Everything below runs the same on Linux, macOS, and WSL2. The one exception is serving other people (`--accounts user`): its agent sandbox needs Linux (bubblewrap, seccomp, and cgroup v2).
 
-On Linux, `g++` and `as` need to be that install. GCC 15 and newer emit a `.base64` assembler directive, and binutils older than 2.43 reject it with `unknown pseudo-op: .base64`. If `command -v as` is not `/usr/bin/as`, put the distro binaries first and delete the failed build directory:
+Clone the public repository and stay in its root for the following commands:
+
+```bash
+git clone https://github.com/dun999/Saga.git
+cd Saga
+```
+
+On Linux, the compiler and assembler need to come from the same toolchain. GCC 15 and newer emit a `.base64` assembler directive, and binutils older than 2.43 reject it with `unknown pseudo-op: .base64`. If `command -v as` selects an old custom installation, put the distro binaries first before configuring:
 
 ```bash
 export PATH=/usr/bin:$PATH
-rm -rf build
 ```
 
-This keeps the rest of your `PATH`, so the `claude`, `codex`, and `grok` CLIs, often in `~/.local/bin`, stay available to Saga.
+This keeps the rest of your `PATH`, so the `claude`, `codex`, and `grok` CLIs, often in `~/.local/bin`, stay available to Saga. If you already attempted a build, use `cmake --fresh -S . -B build -G Ninja` to reset its CMake cache, then build again.
 
 From the repository root:
 
 ```bash
 cmake -S . -B build -G Ninja
-cmake --build build
+cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
+python3 tests/local/smoke.py ./build/saga
 ./build/saga help
 ```
 
-Open the UI before creating any keys. Leave `.env` absent:
+Two compile jobs limit memory use on laptops; use `--parallel 1` if a compiler process is killed. The smoke check uses temporary files, hides your credentials and installed agent CLIs from the test process, and cleans up its servers. It checks startup, guest login, assets, expected missing-key failures, and streamed chat against a local provider fixture. It does not call a real model or Walrus. CI runs the build, shared-memory tests and smoke check on Fedora, Ubuntu 24.04 and macOS.
+
+Open the UI before creating any keys. In a fresh clone, leave `.env` absent (there is no need to delete an existing one):
 
 ```bash
 ./build/saga serve --no-memory
@@ -180,18 +198,22 @@ Without keys, talk to a CLI agent you are signed in to on this machine by mentio
 
 The same steps, written as a sequence an agent can follow, are in [llms.txt](llms.txt). The server also returns that file at `/llms.txt`.
 
-Walrus memory and the built-in `@saga` assistant need real keys. Copy the example and fill the empty lines. Keep each value alone on its line, because a `#` comment on that line is stored as part of the key.
+To enable providers or memory, create `.env` only if it does not already exist, then edit the values you need. Keep each value alone on its line, because a `#` comment on that line is stored as part of the key. Existing environment variables take precedence over `.env`.
 
 ```bash
-cp .env.example .env
+test -e .env || cp .env.example .env
 # MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID from https://memory.walrus.xyz
 # BOUNDLESS_API_KEY from https://inference.boundless.network
+```
 
+For `@saga` without memory, set just `BOUNDLESS_API_KEY` and restart with `./build/saga serve --no-memory`. For real Walrus memory, set both MemWal variables, stop the earlier server with Ctrl+C (or its saved PID), then run:
+
+```bash
 ./build/saga doctor
 ./build/saga serve
 ```
 
-`doctor` and `serve` exit until both MemWal variables are set. Install and authenticate the `claude`, `codex`, and `grok` CLIs for the teammates you want to use. Agent configuration lives in [saga.json](saga.json), and the variables are listed in [.env.example](.env.example).
+`doctor` performs a real write and recall on Walrus mainnet and prints a link to its probe blob. `doctor` and `serve` without `--no-memory` exit until both MemWal variables are set. Install and authenticate the `claude`, `codex`, and `grok` CLIs for the teammates you want to use. Agent configuration lives in [saga.json](saga.json), and the variables are listed in [.env.example](.env.example).
 
 To explore persistence, tell Saga a project preference, wait for the memory write to complete, then start a new chat under the same identity and ask for related work. To share a correction, submit a feedback comment and ask another teammate for related work.
 
@@ -226,7 +248,7 @@ Chat-history listing and restoration currently inspect at most 100 recent archiv
 | [src/core](src/core) | Cryptography, HTTP, subprocesses, sandboxes, and credentials |
 | [src/github](src/github) | Repository and pull request workflow |
 | [src/web](src/web) | Server, wallet authentication, and embedded UI |
-| [tests](tests) | Checked-in shared-memory regressions; optional local and sandbox tests |
+| [tests](tests) | Shared-memory regressions and a credential-free local smoke check; optional sandbox tests |
 
 ## License
 
