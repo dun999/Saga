@@ -1866,6 +1866,13 @@ $("#f").addEventListener("submit", async e => {
   busy = "pending"; sendBtn.disabled = false; sendBtn.classList.add("stop");
   sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`;
   const lanes = {};
+  const activityTimer = setInterval(() => {
+    for (const l of Object.values(lanes)) {
+      if (l.done) continue;
+      const quiet = Math.floor((Date.now() - l.lastUpdate) / 1000);
+      if (quiet >= 60) l.el.querySelector(".status").textContent = `waiting · ${quiet}s since last update`;
+    }
+  }, 1000);
   let turnId = "", turnDone = false, touchedWeb = false;
   const lastLane = () => Object.values(lanes).pop()?.el;
   try {
@@ -1882,6 +1889,7 @@ $("#f").addEventListener("submit", async e => {
       follow();
     }
   } catch (err) { turn.insertAdjacentHTML("beforeend", `<div class="note pop">${esc(err.message)}</div>`); }
+  finally { clearInterval(activityTimer); }
   recallPanel(turn, {pending: false, interrupted: !turnDone});
   for (const l of Object.values(lanes)) l.w.finish();  // a cut stream leaves no caret behind
   busy = null; sendBtn.classList.remove("stop");
@@ -1902,13 +1910,16 @@ $("#f").addEventListener("submit", async e => {
       if (ev.agent === "claude" && !turn.querySelector(".carry")) carryTo(turn);
       const el = document.createElement("div"); el.className = laneClass(ev.agent) + " rise";
       el.innerHTML = laneHtml(ev.agent, ev.instruction, ev.requested_by, "working", "working");
-      turn.appendChild(el); lanes[ev.step] = {el, w: writer(el.querySelector(".out"))};
+      turn.appendChild(el); lanes[ev.step] = {el, w: writer(el.querySelector(".out")), lastUpdate: Date.now(), done: false};
     } else if (ev.type === "fallback") {
       const l = lanes[ev.step]; l.el.querySelector(".lane-h").insertAdjacentHTML("afterend", `<div class="note pop">${agentName(ev.from)} unavailable, handed to ${agentName(ev.to)}</div>`);
     } else if (ev.type === "agent") {
       const l = lanes[ev.step]; if (!l) return;
+      l.lastUpdate = Date.now();
+      l.el.querySelector(".status").textContent = "working";
       const t = l.w.text;
       if (ev.kind === "tool") showStep(l.el, ev.text);
+      else if (ev.kind === "status") metaSlot(l.el, "steps").textContent = ev.text;
       else if (ev.kind === "delta") l.w.write(t + ev.text);
       else if (ev.kind === "text") l.w.write(t + (t ? "\n\n" : "") + ev.text);
     } else if (ev.type === "checkpoint") {
@@ -1922,6 +1933,7 @@ $("#f").addEventListener("submit", async e => {
       slot.textContent = `remembered ${facts.length} fact${facts.length === 1 ? "" : "s"}`; slot.title = facts.join("\n");
     } else if (ev.type === "step_done") {
       const l = lanes[ev.step]; if (!l) return;
+      l.done = true;
       const st = l.el.querySelector(".status");
       st.innerHTML = ev.ok ? `${icon("check", 12)}${Math.round(ev.seconds)}s` : "failed"; st.className = "status fade " + (ev.ok ? "ok" : "bad");
       l.w.finish(ev.ok && ev.output ? ev.output : undefined);

@@ -3,6 +3,7 @@
 # Sign-in requires a Sui wallet (--wallet-only). MemoryMax
 # covers Saga and every agent it runs: size it to the host (this one has 2 GB). Requires systemd >= 254
 # and cgroup v2. Create a dedicated `saga` account and keep its data on a filesystem with a disk quota.
+# Install ripgrep, git, Python and Node alongside the coding CLIs for workspace tools.
 [Unit]
 Description=Saga
 After=network-online.target
@@ -20,7 +21,7 @@ UMask=0077
 Delegate=cpu memory pids
 DelegateSubgroup=server
 MemoryMax=1200M
-TasksMax=512
+TasksMax=768
 ExecStart=/usr/local/bin/saga serve --config /etc/saga/saga.json --host 127.0.0.1 --port 8090 --accounts user --wallet-only --public-origin https://usesaga.xyz --trust-proxy --agent-cgroups /sys/fs/cgroup/system.slice/saga.service/agents
 Restart=on-failure
 RestartSec=5

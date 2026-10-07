@@ -168,7 +168,11 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
     if (std::chrono::steady_clock::now() > deadline) res.timed_out = true;
     if (opt.cancel && opt.cancel->load()) res.cancelled = true;
     if (opt.session_cancel && opt.session_cancel->load()) res.cancelled = true;
-    if (res.timed_out || res.cancelled || res.output_limited) {
+    if (opt.resource_error) {
+      const auto error = opt.resource_error();
+      if (!error.empty()) { res.resource_limited = true; res.err = error; }
+    }
+    if (res.timed_out || res.cancelled || res.output_limited || res.resource_limited) {
       kill(-pid, SIGTERM);
       usleep(300'000);
       kill(-pid, SIGKILL);
@@ -217,7 +221,7 @@ Result run(const std::vector<std::string>& argv, const Options& opt) {
       if (res.output_limited) break;
     }
   }
-  if (!line_buf.empty() && opt.on_stdout_line && !res.output_limited && !res.timed_out && !res.cancelled) {
+  if (!line_buf.empty() && opt.on_stdout_line && !res.output_limited && !res.timed_out && !res.cancelled && !res.resource_limited) {
     try { opt.on_stdout_line(line_buf); }
     catch (...) { res.output_limited = true; kill(-pid, SIGKILL); }
   }

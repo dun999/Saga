@@ -22,6 +22,7 @@ struct Options {
   std::string cgroup_procs;  // trusted cgroup v2 membership file, joined before exec
   int pass_fd = -1;          // handed to the child as fd 3 (bwrap --seccomp 3); every other fd is closed
   const std::atomic<bool>* session_cancel = nullptr;
+  std::function<std::string()> resource_error;  // checked while running; nonempty means stop the tree
   ~Options();
 };
 
@@ -30,6 +31,7 @@ struct Result {
   bool timed_out = false;
   bool cancelled = false;
   bool output_limited = false;
+  bool resource_limited = false;
   std::string out, err;
 };
 

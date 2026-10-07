@@ -44,7 +44,17 @@ void control(const fs::path& file, const std::string& value) {
   if (fd >= 0) ::close(fd);
   if (!ok) throw std::runtime_error("cannot apply agent limits at " + file.string());
 }
+uint64_t event_count(const fs::path& file, const std::string& event) {
+  std::ifstream in(file);
+  for (std::string key; in >> key;) {
+    uint64_t count = 0;
+    if (!(in >> count)) break;
+    if (key == event) return count;
+  }
+  return 0;
+}
 class ResourceGroup {
+  uint64_t pool_blocks_at_start_ = 0;
  public:
   fs::path path;
   ResourceGroup() {
@@ -52,18 +62,32 @@ class ResourceGroup {
     uint64_t memory;
     { std::lock_guard lk(mu); root = cgroup_root; memory = job_memory_max; }
     if (root.empty()) return;  // local operator/library mode only
+    pool_blocks_at_start_ = event_count(fs::path(root) / "pids.events.local", "max");
     path = fs::path(root) / ("job-" + crypto::random_hex(8));
     fs::create_directory(path);
     try {
       control(path / "memory.max", std::to_string(memory));
       control(path / "memory.swap.max", "0");
       control(path / "memory.oom.group", "1");
-      control(path / "pids.max", "64");
+      // Coding CLIs and their parallel shell runners create threads as well as processes.
+      control(path / "pids.max", "128");
       control(path / "cpu.max", "200000 100000");
     } catch (...) { fs::remove(path); throw; }
   }
+  std::string resource_error() const {
+    if (!path.empty() && event_count(path / "pids.events", "max") > 0)
+      return "agent sandbox process/thread limit reached; retry with fewer parallel tools";
+    if (!path.empty() && event_count(path.parent_path() / "pids.events.local", "max") > pool_blocks_at_start_)
+      return "shared agent process/thread limit reached; retry when fewer agents are running";
+    return "";
+  }
   proc::Result finish(proc::Result result) const {
     if (!path.empty()) {
+      if (const auto error = resource_error(); !error.empty()) {
+        result.resource_limited = true;
+        result.err = error;
+        if (result.exit_code == 0) result.exit_code = 125;
+      }
       std::ifstream events(path / "memory.events");
       for (std::string key; events >> key;) {
         uint64_t count = 0;
@@ -477,6 +501,7 @@ proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::
   try {
     ResourceGroup group;
     if (!group.path.empty()) o.cgroup_procs = (group.path / "cgroup.procs").string();
+    o.resource_error = [&group] { return group.resource_error(); };
     Fd filter;
     if (sb.runner.empty()) {  // offline library callers
       auto command = wrap(sb, argv);

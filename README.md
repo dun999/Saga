@@ -101,7 +101,7 @@ Agents use the same memory. In host account mode, Claude Code gets `memory_recal
 
 Saved transcripts retain up to 4,000 bytes of each user message and 6,000 bytes of each agent response, after redaction; longer entries carry truncation flags. Failed steps retain their partial response and error separately. Checkpoints save only eligible text files within their size budget. Restore skips a file whose newest checkpoint has no saved content, rather than overwriting it with an older version. With `--no-memory`, agents receive no memory tools and nothing is saved to Walrus.
 
-Sandboxed Claude runs preapprove shell tools in the default `acceptEdits` mode because Saga has no interactive permission responder; explicit modes such as `plan` remain in effect. Agent memory budgets respect the tightest ancestor cgroup limit and leave at least one quarter for Saga itself. With the deployment's 1,200 MiB service cap, agents share 900 MiB and each run is capped at 450 MiB. A sandbox memory kill is reported as a memory failure.
+Sandboxed Claude runs preapprove shell tools in the default `acceptEdits` mode because Saga has no interactive permission responder; explicit modes such as `plan` remain in effect. Agent memory budgets respect the tightest ancestor cgroup limit and leave at least one quarter for Saga itself. With the deployment's 1,200 MiB service cap, agents share 900 MiB and each run is capped at 450 MiB. Each run allows 128 processes/threads, with 256 shared across agents. The service permits 768 tasks to leave room for its web workers alongside the agent pool. A process/thread limit stops the run with a specific error; a sandbox memory kill is reported as a memory failure. Codex command completions appear in chat, and a quiet run shows how long it has been waiting for another update.
 
 Each chat turn has a **View sources** panel showing the memories Saga retrieved: the excerpt selected for context, the full copyable Walrus blob ID, a Walruscan link, and retrieval details (namespace, search query, distance, and write time or ranking score when supplied by the relayer). Agent lessons identify the step they were selected for; muted lessons and weak matches are excluded, except that when fewer than five facts match a message, the nearest other facts are given as background and marked as such. The source record is saved inside the turn's transcript, so reopening a chat shows its original recall, even if a fresh search would return different memories. Older transcripts explicitly say when sources were not recorded. Empty searches, failed reads, and disabled memory are shown separately.
 
@@ -184,7 +184,7 @@ sudo dnf install cmake ninja-build gcc-c++ binutils libcurl-devel libsodium-deve
 
 # Debian / Ubuntu (including Ubuntu on WSL2)
 sudo apt update
-sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config
+sudo apt install cmake ninja-build g++ binutils libcurl4-openssl-dev libsodium-dev zlib1g-dev git pkg-config ripgrep
 
 # macOS, with Homebrew (curl and zlib come with the system)
 brew install cmake ninja libsodium pkgconf

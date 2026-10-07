@@ -208,7 +208,8 @@ class CliAgent : public Agent {
     const ContextFile ctx(system_in_file() ? task.system : "", task.sandbox);
     auto p = exec(argv(task, ctx.path()), o, task.sandbox);
     r.seconds = since(t0);
-    if (p.output_limited) r.error = "agent output exceeded its limit";
+    if (p.resource_limited) r.error = memwal::redact_secrets(p.err).substr(0, 2000);
+    else if (p.output_limited) r.error = "agent output exceeded its limit";
     else if (p.timed_out) r.error = "timed out after " + std::to_string(task.timeout_s) + "s";
     else if (p.cancelled) r.error = "cancelled";
     else if (r.error.empty() && p.exit_code != 0)
@@ -599,12 +600,17 @@ class CodexAgent : public CliAgent {
         emit({"text", r.text});
       } else if (kind == "command_execution" && type == "item.started") {
         emit({"tool", "shell " + it.value("command", "").substr(0, 160)});
+      } else if (kind == "command_execution" && type == "item.completed") {
+        const auto code = it.find("exit_code");
+        const std::string exit = code != it.end() && code->is_number_integer()
+            ? " (exit " + std::to_string(code->get<int>()) + ")" : "";
+        emit({"status", "Command finished" + exit + ": " + it.value("command", "").substr(0, 160)});
       } else if (kind == "file_change" && type == "item.completed") {
         std::string files;
         for (auto& c : it.value("changes", json::array())) files += c.value("path", "") + " ";
         emit({"tool", "edit " + files});
       } else if (kind == "reasoning" && type == "item.completed") {
-        emit({"status", it.value("text", "").substr(0, 200)});
+        emit({"status", "Thinking"});
       }
       // `error` items are non-fatal warnings (e.g. metadata fallbacks); ignore.
     } else if (type == "turn.failed") {
