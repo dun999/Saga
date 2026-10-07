@@ -1837,7 +1837,8 @@ function addRecallBatch(turn, batch) {
   const panel = recallPanel(turn), s = panel.recallState;
   s.batches.push(batch);
   const items = batch.items.filter(m => m && typeof m.text === "string");
-  for (const m of items) s.ids.add(JSON.stringify([batch.ns, m.blob_id || m.id || m.text]));
+  // A queued memory keeps its content ID when Walrus later assigns its blob ID.
+  for (const m of items) s.ids.add(JSON.stringify([batch.ns, m.id || m.blob_id || m.text]));
   const kind = batch.agent ? "Shared knowledge for this step" : ({shared: "Shared knowledge", facts: "Facts & corrections", episodes: "Past episodes", skills: "Reusable skills"})[String(batch.ns || "").split(":").pop()] || "Memories";
   const scope = batch.agent ? `Selected for @${batch.agent}${Number.isInteger(batch.step) ? ` · step ${batch.step + 1}` : ""}` : "Shared context";
   const group = document.createElement("section"); group.className = "recall-group";
