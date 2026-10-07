@@ -159,8 +159,8 @@ Gate::Gate(Client& client, Store* store, std::string recall_uid, Observer observ
   addr.sun_family = AF_UNIX;
   std::memcpy(addr.sun_path, path_.c_str(), path_.size() + 1);
   const int bound = ::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof addr);
-  if (bound != 0 || ::chmod(path_.c_str(), 0600) != 0 || ::fchmod(listen_fd_, 0600) != 0 ||
-      ::listen(listen_fd_, 16) != 0)
+  // Set permissions on the filesystem socket; macOS rejects fchmod on socket descriptors.
+  if (bound != 0 || ::chmod(path_.c_str(), 0600) != 0 || ::listen(listen_fd_, 16) != 0)
     fail("cannot bind memory socket " + path_);
   thread_ = std::thread([this] { serve(); });
 }

@@ -240,6 +240,11 @@ TEST_CASE("memory tools share pending records, reject other users and remove fai
   REQUIRE(proposed.value("ok", false));
   CHECK_FALSE(store.remember("alice", "User's password is secret-password").value("ok", true));
   memwal::Gate gate(client, &store, "alice");
+  const auto socket_status = std::filesystem::status(gate.path());
+  CHECK(socket_status.type() == std::filesystem::file_type::socket);
+  CHECK(socket_status.permissions() == (std::filesystem::perms::owner_read | std::filesystem::perms::owner_write));
+  CHECK(std::filesystem::status(std::filesystem::path(gate.path()).parent_path()).permissions() ==
+        std::filesystem::perms::owner_all);
   const auto hits = memwal::gate_transact(gate.path(), {{"op", "recall"}, {"text", "database"}, {"ns", "u:alice:shared"}});
   REQUIRE(hits["hits"].size() == 1);
   CHECK(hits["hits"][0]["status"] != "done");
