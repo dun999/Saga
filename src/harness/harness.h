@@ -102,6 +102,8 @@ class Harness {
   json memory_stats(const std::string& uid);  // {blobs, bytes}: everything this user has on Walrus
   json chat_history(const std::string& uid);
   json chat_transcript(const std::string& uid, const std::string& session);
+  // Remove a chat from this server's history; shared memory, archives and files stay intact.
+  json delete_chat(const std::string& uid, const std::string& session);
   json checkpoints(const std::string& uid, const std::string& session);
   json restore_checkpoints(const std::string& uid, const std::string& session);
   json state() const;
@@ -174,6 +176,8 @@ class Harness {
                        bool remember, bool api = false, const std::atomic<bool>* cancelled = nullptr);
   bool forget_connection(const std::string& uid, const std::string& provider, bool api = false);
   std::string session_history(const std::string& uid, const std::string& session);
+  std::string deleted_chat_path(const std::string& uid, const std::string& session) const;
+  bool chat_deleted(const std::string& uid, const std::string& session) const;
   void seed_user(const std::string& uid);
   std::string github_token(const std::string& uid, const secrets::Key& vault);
   std::string api_key_for(const std::string& uid, const std::string& agent, const secrets::Key& vault);

@@ -34,6 +34,7 @@ The browser UI brings the workflow together:
 - **Work on a repository.** Connect GitHub, select a repo, and let coding agents work in a chat workspace. Open a pull request from the resulting changes.
 - **Give feedback.** Explain what went wrong so every teammate can recall the correction.
 - **See memory being saved.** Pending writes become links to Walrus blobs when storage is confirmed.
+- **Clear chat history without losing memory.** Delete a chat from the sidebar; saved facts, corrections and lessons remain available to your agents.
 
 Saga also provides terminal chat. Sui wallet sign-in, or a username with a password, gives browser users an identity across devices within a deployment; local guest usernames support trying it on your own machine.
 
@@ -81,6 +82,8 @@ The store validates and queues new knowledge through one capture path. Within th
 
 Saved transcripts, file checkpoints and user settings keep separate archive namespaces (`u:<user>:chat`, `:checkpoints`, `:settings`). They are searched or restored separately, rather than competing with knowledge during ordinary recall.
 
+The trash button beside a chat removes it from your history on this Saga server, across browsers and restarts. It keeps shared memory, workspace files, checkpoints and archived Walrus transcripts. Deletion markers live in `~/.config/saga/deleted-chats/`; include that directory when moving or backing up the server to keep deleted chats hidden. This action does not erase stored Walrus blobs.
+
 Older facts, episodes, skills and per-agent lessons are included automatically in shared recall. Saga discovers their namespaces through the relayer inventory, with a fallback to known namespaces on older relayers. Their original blob IDs and namespaces remain intact; no copy or destructive migration is required. Historical prompt populations and learning scores are no longer loaded or changed.
 
 ### Why Walrus
@@ -93,7 +96,7 @@ A turn starts one shared-knowledge search alongside settings and conversation-hi
 
 The relayer limits each delegate key to 60 weighted requests a minute (recalls and status checks count 1, a write 5, a batch of writes 10). Saga tracks that budget itself: background work (writes, status checks, index restores) waits for headroom and leaves a reserve, so a user's reads are not refused with a minute-long `Retry-After` because of writes that could have been spaced out. Connections to the relayer are reused, which saves a TLS handshake (100–400 ms) on every call.
 
-Saga has no application database, but it does keep local workspaces, agent homes, and optionally encrypted provider credentials.
+Saga has no application database, but it does keep local workspaces, agent homes, chat deletion markers, and optionally encrypted provider credentials.
 
 Agents use the same memory. In host account mode, Claude Code gets `memory_recall` and `memory_remember` from `saga mcp`, while other CLI agents use `saga mem` from their shell. In user account mode, sandboxed CLI agents can also search saved transcripts and other memory on demand: Claude gets the read-only `memory_recall` tool, and Grok and Codex use `saga mem recall`. A per-run socket permits at most eight searches of the current user's content namespaces, rejects other users and direct writes, and keeps the delegate key on the server. New facts are proposed with `#remember`. Claude Code's own auto-memory and claude.ai connectors are switched off in Saga runs.
 

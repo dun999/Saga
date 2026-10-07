@@ -217,6 +217,89 @@ TEST_CASE("explicit corrections are shared without calling a reflection model") 
   store.flush(std::chrono::seconds(5));
 }
 
+TEST_CASE("deleting a chat survives restart while shared knowledge, other users and files remain") {
+  Relayer r;
+  const std::string fact = "The menu API uses PostgreSQL.";
+  const std::string correction = "Keep explanations brief.";
+  r.reply("claude", "Done.\n#remember " + fact);
+  r.reply("grok", "Reviewed.");
+  json memories, checkpoints;
+  const auto archive = memwal::encode_record("chat", {{"session", "menu"}, {"ts", 1}, {"user", "Build the menu"}});
+  r.add("u:bob:chat", archive);
+  {
+    memwal::Client client(r.config); memwal::Store store(&client, true);
+    auto reg = r.registry(); harness::Harness h(reg, store, r.options());
+    const auto turn = h.chat("alice", "menu", "Build the menu", nullptr);
+    REQUIRE(h.feedback("alice", turn, -1, correction).value("saved", false));
+    store.flush(std::chrono::seconds(5));
+    REQUIRE(h.chat_history("alice").size() == 1);
+    REQUIRE(h.chat_transcript("alice", "menu")["turns"].size() == 1);
+    memories = h.memory_view("alice", "")["items"];
+    REQUIRE(memories.size() >= 3);  // fact, episode, correction
+    std::ofstream(std::filesystem::path(h.workspace_for("alice", "menu")) / "index.html") << "Keep this file";
+    r.add("u:alice:checkpoints", memwal::encode_record("checkpoint", {{"session", "menu"}, {"ts", 1},
+          {"files", {{{"path", "index.html"}, {"bytes", 14}, {"content", "Keep this file"}}}}}));
+    checkpoints = h.checkpoints("alice", "menu");
+    REQUIRE(checkpoints.size() == 1);
+
+    REQUIRE(h.delete_chat("alice", "menu").value("ok", false));
+    CHECK(h.delete_chat("alice", "menu").value("ok", false));  // retries are harmless
+    CHECK(h.chat_history("alice").empty());
+    CHECK(h.chat_transcript("alice", "menu").value("deleted", false));
+    CHECK(h.chat_transcript("alice", "menu")["turns"].empty());
+    CHECK(h.memory_view("alice", "")["items"] == memories);
+    CHECK(h.checkpoints("alice", "menu") == checkpoints);
+    CHECK(h.chat_history("bob").size() == 1);
+    CHECK(h.chat_transcript("bob", "menu")["turns"].size() == 1);
+    CHECK_THROWS_WITH(h.chat("alice", "menu", "Reopen", nullptr), "This chat was deleted. Start a new chat.");
+  }
+
+  // A delayed archive write must not bring the deleted session back.
+  r.add("u:alice:chat", archive);
+  r.add("u:alice:chat", memwal::encode_record("chat", {{"session", "keep"}, {"ts", 2}, {"user", "Keep this chat"}}));
+  memwal::Client client(r.config); memwal::Store store(&client, true);
+  auto reg = r.registry(); harness::Harness restarted(reg, store, r.options());
+  const auto history = restarted.chat_history("alice");
+  REQUIRE(history.size() == 1);
+  CHECK(history[0]["session"] == "keep");
+  CHECK(restarted.chat_transcript("alice", "menu").value("deleted", false));
+  CHECK(restarted.memory_view("alice", "")["items"] == memories);
+  CHECK(restarted.checkpoints("alice", "menu") == checkpoints);
+  CHECK(harness::read_in_workspace(restarted.workspace_for("alice", "menu"), "index.html", 100) == "Keep this file");
+  CHECK_THROWS_WITH(restarted.chat("alice", "menu", "Reopen", nullptr), "This chat was deleted. Start a new chat.");
+  restarted.chat("alice", "review", "@grok review the menu", nullptr);
+  CHECK(r.prompts().back().find(fact) != std::string::npos);
+  CHECK(r.prompts().back().find(correction) != std::string::npos);
+  store.flush(std::chrono::seconds(5));
+}
+
+TEST_CASE("chat deletion refuses active turns and reports persistence failures without removing history") {
+  Relayer r; r.reply("claude", "Done.");
+  memwal::Client client(r.config); memwal::Store store(&client, true);
+  auto reg = r.registry(); harness::Harness h(reg, store, r.options());
+  bool checked_active = false;
+  h.chat("alice", "menu", "Build the menu", [&](const json& e) {
+    if (e.value("type", "") == "turn") {
+      const auto result = h.delete_chat("alice", "menu");
+      CHECK(result.value("busy", false));
+      CHECK_FALSE(result.value("ok", false));
+      checked_active = true;
+    }
+  });
+  REQUIRE(checked_active);
+  store.flush(std::chrono::seconds(5));
+  const auto history = h.chat_history("alice");
+  REQUIRE(history.size() == 1);
+  std::ofstream(r.root / "deleted-chats") << "Block marker directory creation";
+  CHECK(h.delete_chat("alice", "menu").contains("error"));
+  std::filesystem::remove(r.root / "deleted-chats");
+  CHECK(h.chat_history("alice") == history);
+  CHECK(h.chat_transcript("alice", "menu")["turns"].size() == 1);
+  r.fail(true, true);  // history removal works even while the relayer is unavailable
+  CHECK(h.delete_chat("alice", "menu").value("ok", false));
+  CHECK(h.chat_transcript("alice", "menu").value("deleted", false));
+}
+
 TEST_CASE("old lessons from removed agents remain available to every current teammate") {
   Relayer r;
   r.add("u:alice:lessons:retired-agent", "Run migrations before deployment.");

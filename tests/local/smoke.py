@@ -119,7 +119,7 @@ def main():
             print("PASS embedded pages, assets, llms.txt, guest login and memory-off state", flush=True)
 
             for message in ("hello", "@claude hello"):
-                events = [json.loads(line) for line in request("/api/chat", {"message": message}).splitlines()]
+                events = [json.loads(line) for line in request("/api/chat", {"message": message, "session": "delete-smoke"}).splitlines()]
                 failures = [event for event in events if event["type"] == "step_done" and not event["ok"]]
                 check(failures and failures[-1]["error"] == "BOUNDLESS_API_KEY not set", f"Unexpected events: {events}")
                 check(events[-1]["type"] == "done", "The failed turn did not finish")
@@ -130,6 +130,15 @@ def main():
             check(result.returncode == 1 and "cannot listen" in result.stdout, f"Missing occupied-port error: {result.stdout}")
             check(json.loads(request("/api/state"))["uid"] == "judge-smoke", "Server stopped after a failed turn")
             print("PASS missing-provider errors, CLI fallback, occupied port and server recovery", flush=True)
+
+            check(json.loads(request("/api/chats/delete-smoke/delete", {})).get("ok"), "Chat deletion failed")
+            check(json.loads(request("/api/chats/delete-smoke")).get("deleted"), "Deleted chat can still be opened")
+            events = [json.loads(line) for line in request("/api/chat", {"message": "Reopen", "session": "delete-smoke"}).splitlines()]
+            check(any(event["type"] == "error" and "deleted" in event.get("text", "") for event in events),
+                  f"Deleted chat accepted a new turn: {events}")
+            request("/api/login", {"handle": "other-judge"})
+            check(not json.loads(request("/api/chats/delete-smoke")).get("deleted"), "Deletion affected another user")
+            print("PASS chat deletion API, blocked reopening and user isolation", flush=True)
 
         (root / ".env").write_text("MEMWAL_PRIVATE_KEY=\nMEMWAL_ACCOUNT_ID=\nBOUNDLESS_API_KEY=\n")
         result = run("chat", "--user", "judge-smoke", "--no-memory", stdin="hello\n/quit\n")
@@ -165,6 +174,8 @@ def main():
                 }]}
                 (root / "fixture.json").write_text(json.dumps(config))
                 with serve("--config", "fixture.json") as (_, request):
+                    request("/api/login", {"handle": "judge-smoke"})
+                    check(json.loads(request("/api/chats/delete-smoke")).get("deleted"), "Deletion was lost after restart")
                     events = [json.loads(line) for line in request("/api/chat", {"message": "Reply OK"}).splitlines()]
                     check(any(event["type"] == "step_done" and event["ok"] for event in events), f"No successful step: {events}")
                     check(events[-1]["type"] == "done" and events[-1]["final"] == "SAGA_SMOKE_OK", f"Bad response: {events}")

@@ -82,6 +82,16 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: r
 .item.click { cursor: pointer; }
 .item.click:hover, .item.active { background: var(--hover); }
 .item .m { font-size: 11px; color: var(--faint); margin-top: 2px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.chat-row { padding: 0; }
+.chat-row-head { display: flex; align-items: center; }
+.chat-open { flex: 1; min-width: 0; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }
+.chat-open:hover { background: var(--hover); }
+.chat-open .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-delete { flex: none; width: 30px; height: 30px; margin-right: 3px; }
+.chat-delete:hover { color: var(--bad); }
+.chat-delete-confirm { padding: 2px 8px 10px; font-size: 12px; color: var(--muted); }
+.chat-delete-confirm p { margin: 6px 0; }
+.chat-delete-confirm .actions { display: flex; gap: 6px; }
 .empty { color: var(--faint); font-size: 12.5px; padding: 4px 8px; }
 .blob { color: var(--accent-text); text-decoration: none; font-family: ui-monospace, monospace; font-size: 11px; }
 .blob:hover { text-decoration: underline; }
@@ -788,6 +798,7 @@ const ICON_PATHS = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   chev: '<path d="m6 9 6 6 6-6"/>',
   refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>',
+  trash: '<path d="M3 6h18M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M5 6l1 14a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1l1-14M10 10v7M14 10v7"/>',
 };
 ICON_PATHS.gh = '<path fill="currentColor" stroke="none" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/>';
 ICON_PATHS.history = '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>';
@@ -1361,18 +1372,59 @@ $("#repoBtn").onclick = e => { e.stopPropagation(); openRepoPicker(); };
 document.addEventListener("click", e => { const pop = $("#repoPop"); if (pop.classList.contains("open") && !pop.contains(e.target)) pop.classList.remove("open"); });
 
 async function reloadAgents() { const st = await api("/api/state"); agents = st.agents; state = st; refreshModels(); }
+let chatRequest = 0, chatDelete = null;
+const deletedChats = new Set();
+function renderChats() {
+  const list = chatsCache || [];
+  $("#nChats").textContent = list.length || "";
+  $("#chats").innerHTML = list.length ? list.map(c => {
+    const d = chatDelete?.sid === c.session ? chatDelete : null;
+    return `<div class="item chat-row ${c.session === session ? "active" : ""}" data-s="${esc(c.session)}">
+      <div class="chat-row-head"><button class="chat-open" type="button"><span class="t">${colorMentions(esc(c.title || "Untitled"))}</span><span class="m">${c.turns} turn${c.turns > 1 ? "s" : ""} · ${ago(c.updated)}</span></button>
+      <button class="icon-btn chat-delete" type="button" aria-label="Delete chat: ${esc(c.title || "Untitled")}" title="Delete chat" ${chatDelete?.pending ? "disabled" : ""}>${icon("trash", 15)}</button></div>
+      ${d ? `<div class="chat-delete-confirm"><p>Delete this chat from history? Saved memory and workspace files will stay.</p>${d.error ? `<p class="off" role="alert">${esc(d.error)}</p>` : ""}<div class="actions"><button class="mini-btn off" data-confirm-delete ${d.pending ? "disabled" : ""}>${d.pending ? "Deleting…" : "Delete chat"}</button><button class="mini-btn" data-cancel-delete ${d.pending ? "disabled" : ""}>Cancel</button></div></div>` : ""}</div>`;
+  }).join("") : `<div class="empty">No chats in history yet.</div>`;
+  $("#chats").querySelectorAll(".chat-row").forEach(row => {
+    row.querySelector(".chat-open").onclick = () => openChat(row.dataset.s);
+    row.querySelector(".chat-delete").onclick = () => {
+      chatDelete = {sid: row.dataset.s, pending: false, error: ""}; renderChats();
+      $("#chats [data-cancel-delete]")?.focus();
+    };
+    row.querySelector("[data-cancel-delete]")?.addEventListener("click", () => { chatDelete = null; renderChats(); });
+    row.querySelector("[data-confirm-delete]")?.addEventListener("click", () => deleteChat(row.dataset.s));
+  });
+}
+function forgetChat(sid) {
+  deletedChats.add(sid); ++chatRequest;  // invalidate lists that started before deletion
+  chatsCache = (chatsCache || []).filter(c => c.session !== sid);
+  if (chatDelete?.sid === sid) chatDelete = null;
+  renderChats();
+  thread.querySelector(".welcome")?.classList.remove("filled"); fillWelcome(true);
+  if (session === sid) startNewChat();
+}
+async function deleteChat(sid) {
+  if (chatDelete?.pending) return;
+  chatDelete = {sid, pending: true, error: ""}; renderChats();
+  const result = await api("/api/chats/" + encodeURIComponent(sid) + "/delete", {}).catch(e => ({error: e.message}));
+  if (!result?.ok) {
+    chatDelete = {sid, pending: false, error: result?.error || "Could not delete this chat. Try again."};
+    renderChats(); return;
+  }
+  forgetChat(sid);
+}
 async function refreshChats() {
+  const request = ++chatRequest;
   const list = await api("/api/chats").catch(() => null);
+  if (request !== chatRequest) return;
   if (!Array.isArray(list)) {
     chatsCache ??= []; fillWelcome();
     if (!$("#chatError")) $("#chats").insertAdjacentHTML("afterbegin", `<div class="empty" id="chatError">${esc(list?.error || "Could not load chats. Check your connection.")} <button class="mini-btn" id="retryChats">Retry</button></div>`);
     $("#retryChats").onclick = refreshChats; return;
   }
-  chatsCache = list; fillWelcome();
-  $("#nChats").textContent = list.length || "";
-  $("#chats").innerHTML = list.length ? list.map(c => `<div class="item click ${c.session === session ? "active" : ""}" data-s="${esc(c.session)}"><div class="t">${colorMentions(esc(c.title || "Untitled"))}</div><div class="m">${c.turns} turn${c.turns > 1 ? "s" : ""} · ${ago(c.updated)}</div></div>`).join("")
-    : `<div class="empty">No chats on Walrus yet.</div>`;
-  $("#chats").querySelectorAll(".item").forEach(el => el.onclick = () => openChat(el.dataset.s));
+  const removed = (chatsCache || []).some(c => !list.some(next => next.session === c.session));
+  chatsCache = list.filter(c => !deletedChats.has(c.session)); renderChats();
+  if (removed) thread.querySelector(".welcome")?.classList.remove("filled");
+  fillWelcome();
 }
 let memoryRequest = 0;
 async function refreshMemory() {
@@ -1746,11 +1798,12 @@ function clearChatDetails() {
   previewUrl = ""; showPreview(false); $("#previewBtn").hidden = true;
   $("#checkpoints").innerHTML = `<div class="empty">Loading this chat's checkpoints…</div>`;
 }
-$("#newChat").onclick = () => {
+function startNewChat() {
   stopRun(); activeRun = null; busy = null; ++viewEpoch;
   session = newSessionId(); clearChatDetails(); resetComposer(); showWelcome(); refreshChats(); refreshCheckpoints(); refreshRepo(); refreshPreview();
   app.classList.remove("side-open"); q.focus();
-};
+}
+$("#newChat").onclick = startNewChat;
 function userMsg(text, live) {
   thread.insertAdjacentHTML("beforeend", `<div class="msg user-msg"><div class="bubble${live ? " pop" : ""}">${colorMentions(esc(text))}</div></div>`);
 }
@@ -1866,10 +1919,12 @@ function addRecallBatch(turn, batch) {
 
 async function openChat(sid) {
   if (busy) return;
+  if (deletedChats.has(sid)) return;
   session = sid; const view = ++viewEpoch; clearChatDetails(); app.classList.remove("side-open");
   thread.innerHTML = `<div class="empty fade working" style="text-align:center;margin-top:20vh">Loading transcript from Walrus…</div>`;
   const t = await api("/api/chats/" + encodeURIComponent(sid)).catch(e => ({error: e.message}));
   if (view !== viewEpoch || sid !== session) return;
+  if (t.deleted) { forgetChat(sid); return; }
   if (t.error || !Array.isArray(t.turns)) {
     thread.innerHTML = `<div class="empty">${esc(t.error || "Could not load this chat.")} <button class="mini-btn" id="retryChat">Try again</button></div>`;
     $("#retryChat").onclick = () => openChat(sid); return;

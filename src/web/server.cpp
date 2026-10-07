@@ -464,12 +464,16 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
     send_json(res, h.memory_view(uid, req.get_param_value("q")));
   });
 
-  // Chat history and transcripts are read back from Walrus, not from a local store.
+  // Read archives from Walrus, excluding chats removed from this server's history.
   svr.Get("/api/chats", [&](const httplib::Request& req, httplib::Response& res) {
     send_json(res, h.chat_history(uid_of(req, res)));
   });
   svr.Get(R"(/api/chats/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
     send_json(res, h.chat_transcript(uid_of(req, res), sanitize_uid(req.matches[1])));
+  });
+  svr.Post(R"(/api/chats/([A-Za-z0-9_-]+)/delete)", [&](const httplib::Request& req, httplib::Response& res) {
+    const auto result = h.delete_chat(uid_of(req, res), sanitize_uid(req.matches[1]));
+    send_json(res, result, result.value("ok", false) ? 200 : result.value("busy", false) ? 409 : 500);
   });
   svr.Get("/api/checkpoints", [&](const httplib::Request& req, httplib::Response& res) {
     send_json(res, h.checkpoints(uid_of(req, res), sanitize_uid(req.get_param_value("session"))));

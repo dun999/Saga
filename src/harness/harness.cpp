@@ -9,6 +9,7 @@
 #include <sodium.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -605,9 +606,17 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   t->session_cancel = session_cancel;
   t->session = session;
   t->message = message;
+  t->started = std::time(nullptr);
+  {
+    // Register before starting reads so deletion cannot race a new turn into this session.
+    std::lock_guard lk(mu_);
+    if (chat_deleted(uid, session)) throw std::runtime_error("This chat was deleted. Start a new chat.");
+    prune_turns();
+    turns_[t->id] = t;
+    session_turns_[uid + "/" + session].push_back(t->id);
+  }
   t->workspace = workspace_for(uid, session);
   fs::create_directories(t->workspace);
-  t->started = std::time(nullptr);
 
   // One knowledge search for the whole team. Legacy namespaces are read by the store only when
   // they exist; prompts are fixed and never require a learning-state read.
@@ -633,12 +642,6 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     }
     return queue;
   };
-  {
-    std::lock_guard lk(mu_);
-    prune_turns();
-    turns_[t->id] = t;
-    session_turns_[uid + "/" + session].push_back(t->id);
-  }
   if (emit) emit({{"type", "turn"}, {"turn_id", t->id}, {"workspace", t->workspace}, {"memory_enabled", store_.enabled()}});
   trace("turn started, reads in flight");
 
@@ -985,6 +988,48 @@ std::vector<json> Harness::recall_records(const std::string& ns, const std::stri
   return out;
 }
 
+std::string Harness::deleted_chat_path(const std::string& uid, const std::string& session) const {
+  // Keep markers outside agent workspaces and checkpoints. Hash both components so names cannot
+  // escape the directory or collide between users. Back up this directory with the server's config.
+  const fs::path root = opt_.keys_path.empty() ? fs::path(opt_.workspaces_dir) / ".deleted-chats"
+                                            : fs::path(opt_.keys_path).parent_path() / "deleted-chats";
+  return (root / crypto::sha256_hex(json::array({uid, session}).dump())).string();
+}
+
+bool Harness::chat_deleted(const std::string& uid, const std::string& session) const {
+  // An unreadable marker directory is an error, never permission to reopen a deleted chat.
+  return fs::exists(fs::symlink_status(deleted_chat_path(uid, session)));
+}
+
+json Harness::delete_chat(const std::string& uid, const std::string& session) {
+  std::lock_guard lk(mu_);
+  for (const auto& [_, turn] : turns_)
+    if (turn->uid == uid && turn->session == session && !turn->done.load())
+      return {{"error", "Stop the response and wait for it to finish before deleting this chat."}, {"busy", true}};
+
+  try {
+    const fs::path path = deleted_chat_path(uid, session);
+    const auto root = path.parent_path();
+    if (!root.parent_path().empty()) fs::create_directories(root.parent_path());
+    if (::mkdir(root.c_str(), 0700) != 0 && errno != EEXIST)
+      return {{"error", "Could not save the chat deletion. Try again."}};
+    const int dir = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (dir < 0) return {{"error", "Could not save the chat deletion. Try again."}};
+    const int fd = ::openat(dir, path.filename().c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    const bool saved = fd >= 0 || errno == EEXIST;
+    if (fd >= 0) ::close(fd);
+    ::close(dir);
+    if (!saved) return {{"error", "Could not save the chat deletion. Try again."}};
+  } catch (const fs::filesystem_error&) {
+    return {{"error", "Could not save the chat deletion. Try again."}};
+  }
+
+  // Do not touch the store: facts, corrections, episodes and original Walrus records are retained.
+  std::erase_if(turns_, [&](const auto& entry) { return entry.second->uid == uid && entry.second->session == session; });
+  session_turns_.erase(uid + "/" + session);
+  return {{"ok", true}, {"session", session}};
+}
+
 json Harness::chat_history(const std::string& uid) {
   std::map<std::string, json> sessions;
   bool failed = false;
@@ -1004,15 +1049,20 @@ json Harness::chat_history(const std::string& uid) {
     }
   }
   json arr = json::array();
-  for (auto& [k, v] : sessions) arr.push_back(v);
+  for (auto& [k, v] : sessions)
+    if (!chat_deleted(uid, k)) arr.push_back(v);
   std::sort(arr.begin(), arr.end(), [](const json& a, const json& b) { return a["updated"] > b["updated"]; });
   return arr;
 }
 
 json Harness::chat_transcript(const std::string& uid, const std::string& session) {
+  const json deleted = {{"session", session}, {"turns", json::array()}, {"deleted", true},
+                        {"error", "This chat was deleted. Saved memory is still available."}};
+  if (chat_deleted(uid, session)) return deleted;
   json turns = json::array();
   bool failed = false;
   auto records = recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100, &failed);
+  if (chat_deleted(uid, session)) return deleted;  // deletion may have completed during the read
   if (failed) return {{"error", "Could not read this chat from Walrus. Try again."}};
   for (auto& r : records)
     if (r.value("session", "") == session) turns.push_back(r);
