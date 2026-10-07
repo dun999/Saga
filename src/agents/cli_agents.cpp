@@ -450,7 +450,8 @@ class GrokCliAgent : public CliAgent {
   std::string exe() const override { return "grok"; }
   // Grok Build only takes the prompt as an argument.
   std::vector<std::string> argv(const Task& t, const std::string&) const override {
-    std::vector<std::string> a = {"grok", "-p", with_system(t), "--output-format", "streaming-messages-json"};
+    std::vector<std::string> a = {"grok", "-p", with_system(t), "--output-format", "streaming-messages-json",
+                                  "--permission-mode", spec_.permission_mode};
     if (!t.workspace.empty()) a.insert(a.end(), {"--cwd", t.workspace});
     if (!model_for(t).empty()) a.insert(a.end(), {"--model", model_for(t)});
     a.insert(a.end(), spec_.extra_args.begin(), spec_.extra_args.end());
@@ -621,7 +622,7 @@ Spec spec_from_json(const json& j) {
   s.description = j.value("description", "");
   s.base_url = j.value("base_url", "");
   s.api_key_env = j.value("api_key_env", "");
-  s.permission_mode = j.value("permission_mode", s.permission_mode);
+  s.permission_mode = j.value("permission_mode", s.kind == "grok-cli" ? "auto" : s.permission_mode);
   s.extra_args = j.value("extra_args", std::vector<std::string>{});
   s.owner = j.value("owner", "");
   s.locked = j.value("locked", false);

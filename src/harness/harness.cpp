@@ -35,6 +35,7 @@ json make_slot(const std::string& value, const secrets::Key& vault,
                const std::string& uid, const std::string& provider);
 std::string open_slot(const json& slot, const secrets::Key& vault,
                       const std::string& uid, const std::string& provider);
+json read_marker(const std::string& workspace);
 }  // namespace
 
 namespace {
@@ -507,7 +508,19 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
       res.error = "today's budget for the built-in assistant is used up; add your own agent with + to keep going";
       return res;
     }
-    agents::Task task{s.instruction, context, sbp ? sandbox::kWork : t.workspace, t.cancel.get(),
+    std::string working_dir = sbp ? sandbox::kWork : t.workspace;
+    if (a->spec().kind == "grok-cli") {
+      const json repo = read_marker(t.workspace);
+      if (repo.is_object()) {
+        const std::string dir = repo.value("dir", "");
+        const fs::path path = fs::path(t.workspace) / dir;
+        std::error_code ec;
+        if (fs::is_directory(fs::symlink_status(path, ec)) &&
+            fs::is_directory(fs::symlink_status(path / ".git", ec)))
+          working_dir = sbp ? std::string(sandbox::kWork) + "/" + dir : path.string();
+      }
+    }
+    agents::Task task{s.instruction, context, working_dir, t.cancel.get(),
                       opt_.agent_timeout_s, {}, sbp};
     if (!sbp) {
       task.env = {{"SAGA_UID", t.uid}, {"SAGA_BIN", opt_.saga_bin}};
@@ -2192,7 +2205,8 @@ std::string Harness::repo_context(const Turn& t) {
   const std::string root = opt_.user_accounts ? std::string(sandbox::kWork) : t.workspace;
   return "\n## Repository\nThis chat is working on the GitHub repo " + m.value("full_name", "") + ", cloned at " + root +
          "/" + m.value("dir", "") + " on branch `" + m.value("branch", "") + "` (base `" + m.value("base", "") +
-         "`). Make changes there and commit them with clear messages (`git add` / `git commit`). Do not push or "
+         "`). Run repository commands in that directory, not the shared workspace root. "
+         "Make changes there and commit them with clear messages (`git add` / `git commit`). Do not push or "
          "change branches — the user opens the pull request from Saga.\n";
 }
 

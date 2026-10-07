@@ -10,6 +10,6 @@
      "api_key_env": "BOUNDLESS_API_KEY", "locked": true, "description": "Saga: the built-in assistant, ready for everyone"},
     {"name": "claude", "kind": "claude-code", "description": "Claude Code: generalist, frontend, refactors, writing"},
     {"name": "codex",  "kind": "codex", "model": "gpt-6.1-sol", "effort": "high", "description": "OpenAI Codex CLI: backend services, scripts, tests"},
-    {"name": "grok",   "kind": "grok-cli", "description": "Grok Build CLI: fast iteration, reviews, research"}
+    {"name": "grok",   "kind": "grok-cli", "permission_mode": "auto", "description": "Grok Build CLI: fast iteration, reviews, research"}
   ]
 }

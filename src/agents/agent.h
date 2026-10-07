@@ -57,7 +57,7 @@ struct Spec {
   std::string description;
   std::string base_url;     // openai
   std::string api_key_env;  // openai
-  std::string permission_mode = "acceptEdits";  // claude-code
+  std::string permission_mode = "acceptEdits";  // Claude; configured Grok defaults to auto
   std::vector<std::string> extra_args;
   std::string owner;    // uid for a user's own API agent; empty = shared
   std::string api_key;  // operator-configured key (host mode); never serialised to memory
