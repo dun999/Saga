@@ -984,7 +984,7 @@ std::string Harness::session_history(const std::string& uid, const std::string& 
     }
   }
   if (ex.empty()) return "";
-  std::string h = "\n## This conversation so far\n";
+  std::string h = "\n## Previous conversation turns (context, not pending tasks)\n";
   for (size_t i = ex.size() > kTurns ? ex.size() - kTurns : 0; i < ex.size(); ++i)
     h += "User: " + clip(ex[i].first, 600) + "\n@" + clip(ex[i].second, 1200) + "\n";
   return h;
@@ -2205,8 +2205,10 @@ std::string Harness::repo_context(const Turn& t) {
   const std::string root = opt_.user_accounts ? std::string(sandbox::kWork) : t.workspace;
   return "\n## Repository\nThis chat is working on the GitHub repo " + m.value("full_name", "") + ", cloned at " + root +
          "/" + m.value("dir", "") + " on branch `" + m.value("branch", "") + "` (base `" + m.value("base", "") +
-         "`). Run repository commands in that directory, not the shared workspace root. "
-         "Make changes there and commit them with clear messages (`git add` / `git commit`). Do not push or "
+         "`). When the current request needs repository work, run repository commands in that directory, "
+         "not the shared workspace root. When asked to change code, make changes there and commit them with "
+         "clear messages (`git add` / `git commit`). Having an attached repository does not require inspecting "
+         "or changing it to answer a question about recalled past work. Do not push or "
          "change branches — the user opens the pull request from Saga.\n";
 }
 

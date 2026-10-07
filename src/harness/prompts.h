@@ -53,7 +53,7 @@ struct ReplayCase {
 };
 
 // PROMPT.md is embedded at build time. Bump the revision when changing the foundation.
-inline constexpr int kFoundationRevision = 2;
+inline constexpr int kFoundationRevision = 3;
 extern const std::string_view kSeedPrompt;
 
 std::string render_prompt(const std::string& base, const std::vector<Rule>& rules);
