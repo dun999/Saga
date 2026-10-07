@@ -241,11 +241,18 @@ class CliAgent : public Agent {
 void parse_anthropic_stream(const json& j, Result& r, const std::function<void(Event)>& emit) {
   const std::string type = j.value("type", "");
   if (type == "assistant" && j.contains("message")) {
+    std::string text;
     for (auto& c : j["message"].value("content", json::array())) {
       const std::string ct = c.value("type", "");
-      if (ct == "text") emit({"text", c.value("text", "")});
+      if (ct == "text") {
+        const auto block = c.value("text", "");
+        text += (text.empty() ? "" : "\n") + block;
+        emit({"text", block});
+      }
       else if (ct == "tool_use") emit({"tool", c.value("name", "tool") + " " + brief(c.value("input", json::object()))});
     }
+    // A cancelled/failed run may have no final result text. Keep its last assistant response.
+    if (!text.empty()) r.text = std::move(text);
   } else if (type == "result") {
     if (j.value("is_error", false)) {
       const auto result = j.find("result");
@@ -374,6 +381,10 @@ class ClaudeCodeAgent : public CliAgent {
   std::vector<std::string> argv(const Task& t, const std::string& system_file) const override {
     std::vector<std::string> a = {"claude", "-p", "--output-format", "stream-json", "--verbose",
                                   "--permission-mode", spec_.permission_mode, "--no-session-persistence"};
+    // There is no interactive permission responder in Saga. In the default edit mode, allow
+    // shell work inside the existing user sandbox; explicit plan/other permission modes still apply.
+    if (t.sandbox && spec_.permission_mode == "acceptEdits")
+      a.insert(a.end(), {"--allowedTools", "Bash"});
     if (!system_file.empty()) a.insert(a.end(), {"--append-system-prompt-file", system_file});
     if (!model_for(t).empty()) a.insert(a.end(), {"--model", model_for(t)});
     // Memory as native tools: `saga mcp` serves memory_recall and memory_remember over the memory
@@ -387,7 +398,9 @@ class ClaudeCodeAgent : public CliAgent {
         if (auto ro = t.env.find("SAGA_MEM_READ_ONLY"); ro != t.env.end()) memory_env[ro->first] = ro->second;
         const json server = {{"type", "stdio"}, {"command", bin->second}, {"args", {"mcp"}}, {"env", memory_env}};
         a.insert(a.end(), {"--mcp-config", json{{"mcpServers", {{"saga", server}}}}.dump()});
-        allowed.insert(allowed.end(), {"mcp__saga__memory_recall", "mcp__saga__memory_remember"});
+        allowed.push_back("mcp__saga__memory_recall");
+        if (!memory_env.contains("SAGA_MEM_READ_ONLY") || memory_env["SAGA_MEM_READ_ONLY"] != "1")
+          allowed.push_back("mcp__saga__memory_remember");
       }
       for (auto& tool : allowed) a.insert(a.end(), {"--allowedTools", tool});
     }
@@ -460,10 +473,6 @@ class GrokCliAgent : public CliAgent {
   }
   void parse(const json& j, Result& r, const std::function<void(Event)>& emit) override {
     parse_anthropic_stream(j, r, emit);
-    // Grok's result line has no `result` text; keep the last assistant text as the answer.
-    if (j.value("type", "") == "assistant" && r.error.empty() && j.contains("message") && j["message"].is_object())
-      for (auto& c : j["message"].value("content", json::array()))
-        if (c.value("type", "") == "text") r.text = c.value("text", "");
   }
 };
 

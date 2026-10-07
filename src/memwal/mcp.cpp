@@ -14,7 +14,8 @@ std::string ns_of(const std::string& uid, const std::string& what) { return "u:"
 json tool_list(const std::string& uid, bool read_only) {
   const std::string facts = ns_of(uid, "facts");
   const std::string spaces = facts + " (facts and preferences, the default), " + ns_of(uid, "episodes") +
-                             " (past turns), " + ns_of(uid, "chat") + " (transcripts), " + ns_of(uid, "skills") +
+                             " (past turns), " + ns_of(uid, "chat") + " (saved transcripts; check truncation flags), " +
+                             ns_of(uid, "checkpoints") + " (partial file snapshots), " + ns_of(uid, "skills") +
                              ", " + ns_of(uid, "lessons:<agent>");
   json tools = json::array({
       {{"name", "memory_recall"},

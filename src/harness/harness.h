@@ -179,7 +179,8 @@ class Harness {
   // Memory reads run beside the turn, never in front of it: a slow relayer can't hold a reply hostage.
   struct PendingRecall;
   std::shared_ptr<PendingRecall> recall_async(std::string query, std::string ns, memwal::RecallOptions opt);
-  void run_step(Turn& t, Step& s, const std::string& context, const Emit& emit);
+  void run_step(Turn& t, Step& s, const std::function<std::string(const agents::Agent&)>& context_for,
+                const Emit& emit);
   void apply_directives(Turn& t, const Step& s, const Emit& emit);
   json reflect(const Turn& t, int rating, const std::string& comment, const secrets::Key& vault,
                const std::shared_ptr<std::atomic<bool>>& cancelled);

@@ -73,6 +73,9 @@ void verify(const std::string& runner);  // fail at startup if namespaces or the
 void set_hidden(std::vector<std::string> paths);
 // Public serving requires an empty delegated cgroup v2 subtree with cpu/memory/pids controllers.
 void set_cgroup_root(const std::string& path);
+struct MemoryLimits { uint64_t pool_bytes, job_bytes; };
+// Read ancestor cgroup caps and leave one quarter of a finite parent budget for Saga itself.
+MemoryLimits memory_limits(const std::string& parent);
 // Wrap `argv` (argv[0] is a command on PATH) so it runs inside `sb`.
 std::vector<std::string> wrap(const Sandbox& sb, const std::vector<std::string>& argv);
 // The sandbox's whole environment. It is given to bwrap as its own environment, not as --setenv

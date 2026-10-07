@@ -36,6 +36,7 @@ namespace {
 std::mutex mu;
 std::vector<std::string> hidden;
 std::string cgroup_root;
+uint64_t job_memory_max = 2147483648ULL;
 
 void control(const fs::path& file, const std::string& value) {
   const int fd = ::open(file.c_str(), O_WRONLY | O_CLOEXEC);
@@ -48,17 +49,33 @@ class ResourceGroup {
   fs::path path;
   ResourceGroup() {
     std::string root;
-    { std::lock_guard lk(mu); root = cgroup_root; }
+    uint64_t memory;
+    { std::lock_guard lk(mu); root = cgroup_root; memory = job_memory_max; }
     if (root.empty()) return;  // local operator/library mode only
     path = fs::path(root) / ("job-" + crypto::random_hex(8));
     fs::create_directory(path);
     try {
-      control(path / "memory.max", "2147483648");
+      control(path / "memory.max", std::to_string(memory));
       control(path / "memory.swap.max", "0");
       control(path / "memory.oom.group", "1");
       control(path / "pids.max", "64");
       control(path / "cpu.max", "200000 100000");
     } catch (...) { fs::remove(path); throw; }
+  }
+  proc::Result finish(proc::Result result) const {
+    if (!path.empty()) {
+      std::ifstream events(path / "memory.events");
+      for (std::string key; events >> key;) {
+        uint64_t count = 0;
+        if (!(events >> count)) break;
+        if (key == "oom_kill" && count > 0) {
+          result.err = "agent sandbox ran out of memory";
+          if (result.exit_code == 0) result.exit_code = 137;
+          break;
+        }
+      }
+    }
+    return result;
   }
   ~ResourceGroup() {
     if (path.empty()) return;
@@ -248,6 +265,20 @@ void end_session(const std::string& home_root) {
 
 bool available() { return proc::on_path("bwrap"); }
 
+MemoryLimits memory_limits(const std::string& parent) {
+  uint64_t pool = 4294967296ULL;
+  for (fs::path path = fs::absolute(parent);; path = path.parent_path()) {
+    std::ifstream in(path / "memory.max");
+    std::string cap;
+    if (in >> cap; !cap.empty() && cap != "max") {
+      const uint64_t bytes = std::stoull(cap);
+      pool = std::min(pool, bytes - bytes / 4);
+    }
+    if (path == path.parent_path()) break;
+  }
+  return {pool, std::min<uint64_t>(2147483648ULL, pool / 2)};
+}
+
 void verify(const std::string& runner) {
   std::string pattern = (fs::temp_directory_path() / "saga-check-XXXXXX").string();
   if (!::mkdtemp(pattern.data())) throw std::runtime_error("cannot check agent sandbox");
@@ -293,11 +324,12 @@ void set_cgroup_root(const std::string& path) {
   if (!available()) control(root.parent_path() / "cgroup.subtree_control", "+cpu +memory +pids");
   control(root / "cgroup.subtree_control", "+cpu +memory +pids");
   // Bound aggregate demand too: creating more wallets must not multiply the host's resource budget.
-  control(root / "memory.max", "4294967296");
+  const auto memory = memory_limits(root.parent_path().string());
+  control(root / "memory.max", std::to_string(memory.pool_bytes));
   control(root / "memory.swap.max", "0");
   control(root / "pids.max", "256");
   control(root / "cpu.max", "200000 100000");
-  { std::lock_guard lk(mu); cgroup_root = root.string(); }
+  { std::lock_guard lk(mu); cgroup_root = root.string(); job_memory_max = memory.job_bytes; }
   ResourceGroup probe;  // fail at startup if per-call limits cannot actually be applied
   proc::Options options;
   options.inherit_env = false; options.timeout_s = 2;
@@ -449,7 +481,7 @@ proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::
     if (sb.runner.empty()) {  // offline library callers
       auto command = wrap(sb, argv);
       with_seccomp(command, o, filter);
-      return proc::run(command, o);
+      return group.finish(proc::run(command, o));
     }
     proxy::Broker broker;
     const std::string dir = fs::path(broker.path()).parent_path().string();
@@ -466,7 +498,7 @@ proc::Result run(const Sandbox& sb, const std::vector<std::string>& argv, proc::
     marker = std::find(marker, command.end(), "--");
     command.insert(marker + 1, {"/mnt/bin/saga", "sandbox-exec", "/mnt/proxy.sock"});
     with_seccomp(command, o, filter);
-    return proc::run(command, o);
+    return group.finish(proc::run(command, o));
   } catch (const std::exception& e) {
     proc::Result r; r.exit_code = 126; r.err = e.what(); return r;
   }

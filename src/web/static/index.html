@@ -1836,6 +1836,8 @@ async function openChat(sid) {
       lane = document.createElement("div"); lane.className = laneClass(s.agent);
       lane.innerHTML = laneHtml(s.agent, s.instruction, s.requested_by, s.ok ? "" : "failed", s.ok ? "" : "bad");
       if (s.output) lane.querySelector(".out").innerHTML = md(s.output);
+      if (s.error) metaSlot(lane, "error").textContent = s.error;
+      if (s.output_truncated) metaSlot(lane, "truncated").textContent = "Saved response is shortened";
       el.appendChild(lane);
     }
     if (lane) {

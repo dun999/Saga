@@ -66,13 +66,28 @@ class OpenAIAgent : public Agent {
             pending.erase(0, nl + 1);
             if (!line.starts_with("data:")) continue;
             line.erase(0, 5);
-            if (line.find("[DONE]") != std::string::npos) continue;
+            const auto first = line.find_first_not_of(" \t\r");
+            const auto last = line.find_last_not_of(" \t\r");
+            if (first != std::string::npos && line.substr(first, last - first + 1) == "[DONE]") continue;
             if (memwal::json_nesting(line) > memwal::kMaxJsonDepth) {
               r.error = "provider response exceeded its JSON depth limit";
               return false;
             }
             auto j = json::parse(line, nullptr, false);
-            if (j.is_discarded() || !j.contains("choices") || j["choices"].empty()) continue;
+            if (!j.is_object()) continue;
+            if (j.contains("error") && !j["error"].is_null()) {
+              const auto& error = j["error"];
+              r.error = error.is_string() ? error.get<std::string>() :
+                        error.is_object() && error.contains("message") && error["message"].is_string()
+                            ? error["message"].get<std::string>() : "provider stream failed";
+              if (r.error.empty()) r.error = "provider stream failed";
+              return false;
+            }
+            if (!j.contains("choices") || !j["choices"].is_array() || j["choices"].empty()) continue;
+            if (!j["choices"][0].is_object()) {
+              r.error = "provider returned malformed stream choices";
+              return false;
+            }
             const json d = j["choices"][0].value("delta", json::object());
             if (d.contains("content") && d["content"].is_string()) {
               const std::string piece = d["content"];

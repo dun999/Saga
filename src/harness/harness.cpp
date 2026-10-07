@@ -238,8 +238,8 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
       "those blobs. The sections above were already recalled for you. Namespaces:\n"
       "- " + ns_user(uid, "facts") + " — durable facts & preferences about the user\n"
       "- " + ns_user(uid, "episodes") + " — summaries of past turns\n"
-      "- " + ns_user(uid, "chat") + " — full chat transcripts\n"
-      "- " + ns_user(uid, "checkpoints") + " — snapshots of files you change (restorable)\n"
+      "- " + ns_user(uid, "chat") + " — saved chat transcripts (long messages may be marked truncated)\n"
+      "- " + ns_user(uid, "checkpoints") + " — partial file snapshots (restorable when content was saved)\n"
       "- " + ns_lessons(agent, uid) + " — lessons learned about how you should work\n"
       "- " + ns_user(uid, "skills") + ", " + ns_user(uid, "learning") + ":prompts, " +
       ns_user(uid, "improvements") + " — how Saga improves for this user\n"
@@ -247,7 +247,7 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
       "Never put a secret in memory: no passwords, API keys, tokens, private keys, seed phrases or anything that "
       "grants access. Memory is recalled into future conversations, possibly by someone else using this identity. "
       "If the user shares one, use it only for the task at hand, don't repeat it back, don't #remember it, and "
-      "tell them it won't be kept. Saga strips recognisable secrets before anything reaches Walrus, including "
+      "explain that Saga redacts recognisable credentials before storage. Saga strips recognisable secrets before anything reaches Walrus, including "
       "unlabelled 64-character hex strings. A wallet address already stored as an identity is kept.\n"
       "To propose a NEW durable fact grounded in what the user said or what you verified, write it on its own "
       "line as:\n#remember <one self-contained fact, third person, e.g. \"User deploys to Fly.io\">\n"
@@ -479,12 +479,15 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
   c += t.history;
   c += repo_context(t);
   // Sandboxed agents query a per-run, user-scoped gate; the delegate key stays on the server.
-  const bool memory_access = agent.can_edit_files() && !opt_.saga_bin.empty() &&
-                             (!opt_.user_accounts || store_.enabled());
-  c += memory_protocol(t.uid, agent.name(), memory_access,
+  const bool memory_access = store_.enabled() && agent.can_edit_files() && !opt_.saga_bin.empty();
+  if (store_.enabled()) c += memory_protocol(t.uid, agent.name(), memory_access,
                        opt_.user_accounts ? "/mnt/bin/saga" : opt_.saga_bin,
                        memory_access && (opt_.user_accounts || !opt_.mem_sock.empty()) &&
                            agent.spec().kind == "claude-code", opt_.user_accounts && memory_access);
+  else c += "\n## Memory availability\nMemory is disabled for this run. No Walrus recall or memory tools "
+            "are available, and transcripts, episodes, facts and checkpoints are not saved to Walrus. "
+            "Work from this conversation and the available workspace. Do not claim anything was recalled, "
+            "queued or saved to memory, and do not emit #remember directives.\n";
 
   if (!t.steps.empty()) {
     c += "\n## Blackboard — work already done in this task\n";
@@ -497,7 +500,8 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
   return c;
 }
 
-void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit& emit) {
+void Harness::run_step(Turn& t, Step& s,
+                       const std::function<std::string(const agents::Agent&)>& context_for, const Emit& emit) {
   agents::Agent* agent = reg_.find(s.agent, t.uid);
   const size_t idx = &s - t.steps.data();
   // Gate on availability, the user's own sign-in and the provider's usage windows, then record
@@ -537,7 +541,7 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
           working_dir = sbp ? std::string(sandbox::kWork) + "/" + dir : path.string();
       }
     }
-    agents::Task task{s.instruction, context, working_dir, t.cancel.get(),
+    agents::Task task{s.instruction, context_for(*a), working_dir, t.cancel.get(),
                       opt_.agent_timeout_s, {}, sbp};
     std::mutex recall_mu;
     std::unique_ptr<memwal::Gate> memory_gate;
@@ -557,7 +561,7 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
                   {"SAGA_MEM_SOCK", sandbox::kMemorySock}, {"SAGA_MEM_READ_ONLY", "1"}};
       for (const auto& [key, value] : task.env) sb->env[key] = value;
     }
-    if (!sbp) {
+    if (!sbp && store_.enabled()) {
       task.env = {{"SAGA_UID", t.uid}, {"SAGA_BIN", opt_.saga_bin}};
       if (!opt_.mem_sock.empty()) task.env["SAGA_MEM_SOCK"] = opt_.mem_sock;
     }
@@ -745,16 +749,17 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
     if (emit)
       emit({{"type", "step"}, {"step", idx}, {"agent", s.agent}, {"instruction", s.instruction}, {"requested_by", by}});
 
-    agents::Agent* a = reg_.find(s.agent, uid);
-    want_lessons(s.agent, s.instruction);
-    auto lessons = await(lessons_r[s.agent]);  // usually already fetched while the previous agent worked
-    trace("@" + s.agent + " lessons recalled");
-    const std::string ctx = build_context(*t, a ? *a : *reg_.primary(), lessons_r[s.agent]->query, facts, background,
-                                          episodes, skills,
-                                          std::move(lessons), lessons_r[s.agent]->failed, emit);
+    auto context_for = [&](const agents::Agent& target) {
+      want_lessons(target.name(), s.instruction);
+      auto recalled = lessons_r[target.name()];
+      auto lessons = await(recalled);
+      trace("@" + target.name() + " lessons recalled");
+      return build_context(*t, target, recalled->query, facts, background, episodes, skills,
+                           std::move(lessons), recalled->failed, emit);
+    };
     const Snapshot before = snapshot(t->workspace);
     trace("@" + s.agent + " running");
-    run_step(*t, s, ctx, emit);
+    run_step(*t, s, context_for, emit);
     trace("@" + s.agent + " finished");
 
     // Checkpoint: every file this step created or changed goes to Walrus, restorable later.
@@ -804,7 +809,7 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
   // Episode memory: what happened, compactly, for future continuity. A cancelled turn is in the
   // transcript; as an episode it would only be recalled as noise.
   if (!t->cancel->load() && !t->steps.empty()) {
-    std::string ep = "Episode " + today() + ": user asked \"" + clip(message, 240) + "\". ";
+    std::string ep = "Episode " + today() + ": user asked \"" + clip(memwal::redact_secrets(message), 240) + "\". ";
     for (auto& s : t->steps)
       ep += "@" + s.agent + (s.fallback ? " (fallback)" : "") + (s.error.empty() ? " did: " : " failed: ") +
             clip(s.error.empty() ? s.output : s.error, 220) + " ";
@@ -826,13 +831,18 @@ std::string Harness::chat(const std::string& uid, const std::string& session, co
 
   // Transcript: the conversation itself lives on Walrus, so history survives any restart or machine.
   json steps = json::array();
-  for (auto& s : t->steps)
-    steps.push_back({{"agent", s.agent}, {"instruction", clip(s.instruction, 400)}, {"requested_by", s.requested_by},
-                     {"fallback", s.fallback}, {"ok", s.error.empty()},
-                     {"output", clip(s.error.empty() ? s.output : s.error, 6000)}});
+  for (auto& s : t->steps) {
+    const std::string output = memwal::redact_secrets(s.output);
+    steps.push_back({{"agent", s.agent}, {"instruction", clip(memwal::redact_secrets(s.instruction), 400)},
+                     {"requested_by", s.requested_by}, {"fallback", s.fallback}, {"ok", s.error.empty()},
+                     {"output", clip(output, 6000)}, {"output_truncated", output.size() > 6000},
+                     {"error", s.error}});
+  }
+  const std::string user_message = memwal::redact_secrets(message);
   store_.put(ns_user(uid, "chat"), "chat",
              memwal::encode_record("chat", {{"session", session}, {"turn", t->id}, {"ts", std::time(nullptr)},
-                                            {"user", clip(message, 4000)}, {"steps", steps},
+                                            {"user", clip(user_message, 4000)}, {"user_truncated", user_message.size() > 4000},
+                                            {"steps", steps},
                                             {"prompt_version", t->prompt_version},
                                             {"memory_enabled", store_.enabled()}, {"recall_sources", t->recall_sources}}),
              t->id);
@@ -1003,25 +1013,31 @@ std::shared_ptr<Turn> Harness::last_turn(const std::string& uid, const std::stri
 std::string Harness::session_history(const std::string& uid, const std::string& session) {
   constexpr size_t kTurns = 4;
   std::vector<std::pair<std::string, std::string>> ex;  // user message, final answer
+  auto answer = [](const std::string& agent, const std::string& output, const std::string& error) {
+    return agent + ": " + (error.empty() ? "" : "[Failed: " + clip(error, 240) + "] ") + output;
+  };
   {
     std::lock_guard lk(mu_);
     if (auto it = session_turns_.find(uid + "/" + session); it != session_turns_.end())
       for (auto& id : it->second)
         if (auto t = turns_.find(id); t != turns_.end() && t->second->done && !t->second->steps.empty())
-          ex.push_back({t->second->message, t->second->steps.back().agent + ": " +
-                                                (t->second->steps.back().error.empty() ? t->second->steps.back().output
-                                                                                       : "(failed)")});
+          ex.push_back({t->second->message, answer(t->second->steps.back().agent, t->second->steps.back().output,
+                                                 t->second->steps.back().error)});
   }
   if (ex.empty()) {  // a chat reopened after a restart: its transcript is on Walrus
     for (auto& r : chat_transcript(uid, session)["turns"]) {
       const json steps = r.value("steps", json::array());
-      if (!steps.empty()) ex.push_back({r.value("user", ""), steps.back().value("agent", "") + ": " + steps.back().value("output", "")});
+      if (!steps.empty()) {
+        const auto& step = steps.back();
+        ex.push_back({r.value("user", ""), answer(step.value("agent", ""), step.value("output", ""),
+                       step.value("ok", true) ? "" : step.value("error", "run failed"))});
+      }
     }
   }
   if (ex.empty()) return "";
   std::string h = "\n## Previous conversation turns (context, not pending tasks)\n";
   for (size_t i = ex.size() > kTurns ? ex.size() - kTurns : 0; i < ex.size(); ++i)
-    h += "User: " + clip(ex[i].first, 600) + "\n@" + clip(ex[i].second, 1200) + "\n";
+    h += "User: " + clip(memwal::redact_secrets(ex[i].first), 600) + "\n@" + clip(ex[i].second, 1200) + "\n";
   return h;
 }
 
@@ -1321,13 +1337,24 @@ json Harness::restore_checkpoints(const std::string& uid, const std::string& ses
   auto recs = recall_records(ns_user(uid, "checkpoints"), "checkpoint", "workspace file checkpoint", 100);
   std::sort(recs.begin(), recs.end(), [](const json& a, const json& b) { return a.value("ts", 0L) < b.value("ts", 0L); });
   std::map<std::string, std::string> latest;
+  std::set<std::string> missing;
   for (auto& r : recs) {
     if (r.value("session", "") != session) continue;
-    for (auto& f : r.value("files", json::array()))
-      if (f.contains("content") && safe_relative(f.value("path", ""))) latest[f["path"]] = f["content"];
+    for (auto& f : r.value("files", json::array())) {
+      const std::string path = f.value("path", "");
+      if (!safe_relative(path)) continue;
+      if (f.contains("content") && f["content"].is_string()) {
+        latest[path] = f["content"];
+        missing.erase(path);
+      } else {
+        latest.erase(path);  // An older saved body is not the latest version.
+        missing.insert(path);
+      }
+    }
   }
   const fs::path root = workspace_for(uid, session);
   json restored = json::array(), skipped = json::array();
+  for (const auto& path : missing) skipped.push_back(path);
   for (auto& [path, content] : latest)
     (write_in_workspace(root.string(), path, content) ? restored : skipped).push_back(path);
   return {{"session", session}, {"workspace", root.string()}, {"restored", restored}, {"skipped", skipped}};
