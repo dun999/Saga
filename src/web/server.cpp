@@ -652,6 +652,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
       EventQueue lines;
       bool done = false;
       bool overflow = false;
+      bool disconnected = false;
       std::string turn_id;
     };
     auto st = std::make_shared<Stream>();
@@ -661,9 +662,10 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
         std::string cancel;
         {
           std::lock_guard lk(st->mu);
-          if (st->overflow) return;
           if (e.value("type", "") == "turn") st->turn_id = e.value("turn_id", "");
-          if (!st->lines.push(e.dump() + "\n")) {
+          if (st->disconnected) cancel = st->turn_id;
+          else if (st->overflow) return;
+          else if (!st->lines.push(e.dump() + "\n")) {
             st->overflow = true;
             st->lines.clear();
             st->lines.push("{\"type\":\"error\",\"text\":\"Browser stream exceeded its buffer limit\"}\n");
@@ -686,32 +688,53 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
 
     res.set_header("Cache-Control", "no-cache");
     res.set_header("X-Accel-Buffering", "no");
-    res.set_chunked_content_provider("application/x-ndjson", [&h, st, uid](size_t, httplib::DataSink& sink) {
+    // A browser can stop before the first turn event, or while headers are being sent.
+    // Remember the disconnect so a late turn ID is cancelled too.
+    auto disconnect = [&h, st, uid] {
+      std::string turn;
+      {
+        std::lock_guard lk(st->mu);
+        if (st->done || st->disconnected) return;
+        st->disconnected = true;
+        st->lines.clear();
+        turn = st->turn_id;
+        st->cv.notify_all();
+      }
+      if (!turn.empty()) h.cancel(uid, turn);
+    };
+    res.set_chunked_content_provider("application/x-ndjson", [st, disconnect](size_t, httplib::DataSink& sink) {
       std::unique_lock lk(st->mu);
-      st->cv.wait_for(lk, std::chrono::seconds(15), [&] { return st->done || !st->lines.empty(); });
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+      while (!st->done && !st->disconnected && st->lines.empty()) {
+        st->cv.wait_for(lk, std::chrono::milliseconds(250));
+        lk.unlock();
+        const bool alive = sink.is_writable();
+        lk.lock();
+        if (!alive) { lk.unlock(); disconnect(); return false; }
+        if (std::chrono::steady_clock::now() >= deadline) break;
+      }
+      if (st->disconnected) return false;
       if (st->lines.empty() && !st->done) {
-        const std::string turn = st->turn_id;
         lk.unlock();
         const std::string ping = "{\"type\":\"ping\"}\n";
         if (!sink.write(ping.data(), ping.size())) {
-          if (!turn.empty()) h.cancel(uid, turn);
+          disconnect();
           return false;
         }
         return true;
       }
       while (!st->lines.empty()) {
         std::string line = st->lines.pop();
-        const std::string turn = st->turn_id;
         lk.unlock();
         if (!sink.write(line.data(), line.size())) {  // browser went away → stop the agents
-          if (!turn.empty()) h.cancel(uid, turn);
+          disconnect();
           return false;
         }
         lk.lock();
       }
       if (st->done) sink.done();
       return true;
-    });
+    }, [disconnect](bool) { disconnect(); });
   });
 
   svr.Post("/api/feedback", [&](const httplib::Request& req, httplib::Response& res) {

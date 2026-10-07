@@ -617,7 +617,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
           <button type="button" class="repo-btn" id="repoBtn" title="Work on a GitHub repo" aria-label="Work on a GitHub repo"></button>
           <div class="field">
             <div class="hl" id="hl" aria-hidden="true"></div>
-            <textarea id="q" rows="1" placeholder="Message Saga — @ to hand off to an agent" autofocus></textarea>
+            <textarea id="q" aria-label="Message Saga" rows="1" placeholder="Message Saga — @ to hand off to an agent" autofocus></textarea>
           </div>
           <button type="button" class="model-chip" id="modelChip" aria-haspopup="menu" aria-expanded="false" hidden></button>
           <button class="send" id="send" disabled aria-label="Send">
@@ -677,8 +677,17 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
 </div>
 <script type="module">
   // Wallet Standard discovery: every installed Sui wallet registers itself here.
-  import { getWallets } from "https://esm.sh/@mysten/wallet-standard@0.21.27";
-  const registry = getWallets();
+  let registry, discoveryTimer;
+  try {
+    const { getWallets } = await Promise.race([
+      import("https://esm.sh/@mysten/wallet-standard@0.21.27"),
+      new Promise((_, reject) => { discoveryTimer = setTimeout(() => reject(new Error("wallet discovery timed out")), 15000); }),
+    ]);
+    registry = getWallets();
+  } catch {
+    document.querySelector("#wallets").innerHTML = `<div class="empty">Wallet discovery could not load. Check your connection and reload this page.</div><button class="btn-connect" id="retryWallets">Reload wallet discovery</button>`;
+    document.querySelector("#retryWallets").onclick = () => location.reload();
+  } finally { clearTimeout(discoveryTimer); }
   const isSui = w => w.chains.some(c => c.startsWith("sui:")) && w.features["standard:connect"] && w.features["sui:signPersonalMessage"];
   const status = t => { document.querySelector("#siStatus").textContent = t; };
   const csrfToken = () => document.querySelector('meta[name="saga-csrf"]')?.content || "";
@@ -739,9 +748,11 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
       document.querySelectorAll(".wallet").forEach(x => x.disabled = false);
     }
   }
-  registry.on("register", render);
-  registry.on("unregister", render);
-  render();
+  if (registry) {
+    registry.on("register", render);
+    registry.on("unregister", render);
+    render();
+  }
 </script>
 <div class="cookie-note" id="cookieNote" role="region" aria-label="Cookie notice">
   Saga uses only essential cookies — to keep you signed in and confirm your own requests. Your vault key stays in server memory for this session. No analytics, no ads. <a href="/privacy">Privacy &amp; cookies</a>
@@ -798,7 +809,7 @@ ICON_PATHS.history = '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8
 ICON_PATHS.branch ='<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>';
 const icon = (n, size = 14) => `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[n]}</svg>`;
 const KNOWN = ["saga", "claude", "codex", "grok", "xai", "qwen"];
-let agents = [], busy = null, uid = "", state = {}, me = {}, vault = {state: "ok"}, session = newSessionId();
+let agents = [], busy = null, activeRun = null, viewEpoch = 0, uid = "", state = {}, me = {}, vault = {state: "ok"}, session = newSessionId();
 
 function newSessionId() { return "s-" + Math.random().toString(36).slice(2, 10); }
 const agentName = n => `<span class="ag ${KNOWN.includes(n) ? "ag-" + n : ""}">@${esc(n)}</span>`;
@@ -825,11 +836,40 @@ async function api(path, body) {
   const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify(body)} : {});
   if (r.status === 401) {
     const j = await r.json().catch(() => ({}));
-    if (j.login && !j.passwords) $("#signin").classList.add("open");
-    else { if (j.login) signinMode = {guests: false, passwords: true}; showGate(false); }
-    throw new Error("locked");
+    requireSignin(j);
+    throw new Error("Your session expired. Sign in again to continue.");
   }
   return r.json();
+}
+
+function requireSignin(j) {
+  closeModal();
+  if (j.login && !j.passwords) {
+    me.wallet_required = true;
+    openWallet();
+    $("#siStatus").textContent = "Your session expired. Reconnect your wallet to continue.";
+  } else {
+    if (j.login) signinMode = {guests: false, passwords: true};
+    showGate(false);
+  }
+}
+
+// Preserve forms only across a redraw, in memory. Credentials never enter browser storage.
+function preserveForms(root) {
+  const key = f => f.id || `${f.dataset.cred}:${f.dataset.kind}`;
+  const saved = [...root.querySelectorAll("form")].map(f => ({key: key(f), fields: [...f.querySelectorAll("input,textarea,select")].map(e => ({name: e.name, value: e.value, checked: e.checked, focused: e === document.activeElement, start: e.selectionStart, end: e.selectionEnd}))}));
+  const details = [...root.querySelectorAll("details")].map(e => e.open);
+  return () => {
+    for (const f of root.querySelectorAll("form")) {
+      const old = saved.find(v => v.key === key(f));
+      for (const e of f.querySelectorAll("input,textarea,select")) {
+        const v = old?.fields.find(v => v.name === e.name); if (!v) continue;
+        e.value = v.value; e.checked = v.checked;
+        if (v.focused) { e.focus(); if (v.start != null && e.setSelectionRange) e.setSelectionRange(v.start, v.end); }
+      }
+    }
+    root.querySelectorAll("details").forEach((e, i) => { if (details[i] != null) e.open = details[i]; });
+  };
 }
 
 // ---------- theme ----------
@@ -905,9 +945,16 @@ function renderProfile() {
 // ---------- live preview ----------
 // The page agents built in this chat, served from its workspace in a sandboxed origin: its scripts run,
 // but can't see your session or call Saga as you.
-let previewUrl = "";
+let previewUrl = "", previewRequest = 0;
 async function refreshPreview({open = false, reload = false} = {}) {
-  const r = await api("/api/preview", {session}).catch(() => null);
+  const sid = session, view = viewEpoch, request = ++previewRequest;
+  const r = await api("/api/preview", {session: sid}).catch(() => null);
+  if (view !== viewEpoch || sid !== session || request !== previewRequest) return;
+  if (!r || r.error) {
+    $("#previewBtn").title = r?.error || "Could not refresh the preview. Try again.";
+    return;
+  }
+  $("#previewBtn").title = "See the page the agents built in this chat";
   const btn = $("#previewBtn"), pane = $("#preview"), frame = $("#previewFrame");
   if (!r?.available) {
     previewUrl = ""; btn.hidden = true; pane.hidden = true; frame.removeAttribute("src");
@@ -979,8 +1026,11 @@ const BRANDS = {
   codex: {by: "OpenAI", mark: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>'},
   "grok-cli": {by: "xAI", mark: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815"/></svg>'},
 };
+let usageRequest = 0;
 async function refreshUsage() {
-  const list = await api("/api/agents").catch(() => null); if (!list) return;
+  const request = ++usageRequest;
+  const list = await api("/api/agents").catch(() => null); if (!Array.isArray(list) || request !== usageRequest) return;
+  const restoreForms = preserveForms($("#agents"));
   // One card per agent: logo, name and status, then its actions (refresh usage, connect or
   // disconnect, and a chevron that shows or hides the card's body: usage limits or a sign-in in progress).
   const tile = x => {
@@ -1076,6 +1126,7 @@ async function refreshUsage() {
     ? `<div class="foot">Host account mode: these CLI logins are shared across Saga users and namespaces. Disconnect signs the provider CLI out on this machine. <a href="/privacy" target="_blank">Privacy</a></div>`
     : me.auth && vault.state !== "mismatch" ? `<div class="foot">${icon("save", 12)} Personal connections last until sign-out unless you choose to remember them. Disconnect removes the saved credential from Saga; provider revocation is separate. <a href="/privacy" target="_blank">Privacy</a></div>` : "";
   $("#agents").innerHTML = vaultNote + `<div class="deck">${list.map(tile).join("")}${addOpen ? addForm : addTile}</div>` + foot;
+  restoreForms();
   $("#agWallet")?.addEventListener("click", openWallet);
   $("#vaultReset")?.addEventListener("click", async () => { await api("/api/vault/reset", {}); vault = {state: "ok"}; refreshUsage(); });
 
@@ -1090,7 +1141,7 @@ async function refreshUsage() {
     }
     if (how.includes("device") || how.includes("browser")) {
       connectState[x.name] = {mode: "busy"}; refreshUsage();
-      const r = await fetch("/api/agents/connect", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({agent: x.name})}).then(r => r.json());
+      const r = await api("/api/agents/connect", {agent: x.name}).catch(e => ({error: e.message}));
       connectState[x.name] = r.error ? {error: r.error} : (r.command ? {error: `Finish signing in in the browser window that opened on the Saga host (${r.command}).`} : null);
       if (!connectState[x.name]) delete connectState[x.name];
       refreshUsage(); poll();
@@ -1101,7 +1152,7 @@ async function refreshUsage() {
   $("#agents").querySelectorAll("[data-start]").forEach(b => b.onclick = async () => {
     const agent = b.dataset.start, remember = b.closest("[data-choice]").querySelector('[name="remember"]').checked;
     connectState[agent] = {mode: "busy"}; refreshUsage();
-    const r = await api("/api/agents/connect", {agent, remember});
+    const r = await api("/api/agents/connect", {agent, remember}).catch(e => ({error: e.message}));
     connectState[agent] = r.error ? {error: r.error} : {};
     refreshUsage(); poll();
   });
@@ -1126,7 +1177,7 @@ async function refreshUsage() {
     const kind = f.dataset.kind !== "auto" ? f.dataset.kind : /^sk-ant-oat/.test(value) ? "oauth_token" : "api_key";
     const remember = f.querySelector('[name="remember"]').checked;
     f.value.value = "";
-    const r = await fetch("/api/agents/credential", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({agent, kind, value, remember})}).then(r => r.json());
+    const r = await api("/api/agents/credential", {agent, kind, value, remember}).catch(e => ({error: e.message}));
     if (r.error) { connectState[agent] = {...connectState[agent], error: r.error}; refreshUsage(); return; }
     delete connectState[agent]; refreshUsage();
   });
@@ -1134,7 +1185,7 @@ async function refreshUsage() {
     const name = b.dataset.disconnect, userMode = state.accounts === "user";
     if (!userMode && !b.dataset.sure) { connectState[name] = {mode: "confirm"}; refreshUsage(); return; }
     b.disabled = true; b.textContent = userMode ? "Disconnecting…" : "Signing out…";
-    const r = await api("/api/agents/disconnect", {agent: name});
+    const r = await api("/api/agents/disconnect", {agent: name}).catch(e => ({error: e.message}));
     connectState[name] = r.ok ? {note: userMode ? "Disconnected. The stored credential was deleted." : "Signed out on this computer."}
                               : {error: r.error || "Could not disconnect."};
     refreshUsage();
@@ -1182,8 +1233,8 @@ async function refreshUsage() {
       body.remember = f.querySelector('[name="remember"]')?.checked || false;
       if (f.api_key) f.api_key.value = "";
       body.name = body.name.replace(/^@/, "").trim().toLowerCase();
-      const r = await fetch("/api/agents", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify(body)}).then(r => r.json());
-      if (r.error) { $("#addErr").textContent = r.error; return; }
+      const r = await api("/api/agents", body).catch(e => ({error: e.message}));
+      if (r.error) { if (f.isConnected) f.querySelector("#addErr").textContent = r.error; return; }
       addOpen = false; await reloadAgents(); refreshUsage();
     };
   }
@@ -1191,17 +1242,19 @@ async function refreshUsage() {
 // ---------- GitHub ----------
 let gh = {connected: false}, ghRepos = null, repo = null, ghPoll = null, ghNotice = null, ghRemember = false;
 async function refreshGitHub() {
-  gh = await api("/api/github").catch(() => ({connected: false}));
-  renderGhPane();
+  const r = await api("/api/github").catch(() => null);
+  if (!r || r.error) return;
+  gh = r; renderGhPane();
 }
 function renderGhPane() {
   const box = $("#ghPane"); if (!box) return;
+  const restoreForms = preserveForms(box);
   const dev = gh.device && gh.device.status === "waiting" ? gh.device : null;
   const note = ghNotice ? `<div class="notice ${ghNotice.error ? "bad" : ""}">${esc(ghNotice.error || ghNotice.ok)}</div>` : "";
   if (gh.connected) {
     box.innerHTML = note + `<div class="list"><div class="row">${icon("gh", 22)}<div class="l"><b>@${esc(gh.login)}</b><span>${gh.unlocked ? "Connected. Agents commit to a saga/… branch; you open the pull request." : "Connected, but locked on this device. Unlock your vault to use it."}</span></div><button class="btn-ghost" id="ghOff">Disconnect</button></div></div>`;
     $("#ghOff").onclick = async () => {
-      const result = await api("/api/github/disconnect", {});
+      const result = await api("/api/github/disconnect", {}).catch(e => ({error: e.message}));
       ghRepos = null;
       ghNotice = result.error ? {error: result.error}
         : result.revocation_error ? {error: result.revocation_error} : null;
@@ -1223,8 +1276,9 @@ function renderGhPane() {
     <details class="alt" ${signIn ? "" : "open"}><summary>Use a token instead</summary>
       <form class="token" id="ghTokenForm"><input name="token" type="password" placeholder="github_pat_…" autocomplete="off" required aria-label="GitHub token"><button class="btn-connect">Connect</button>
         <span class="m">A <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a> with Contents and Pull requests set to read &amp; write. <span class="off" id="ghErr"></span></span></form></details>`;
+  restoreForms();
   $("#ghDevice")?.addEventListener("click", async () => {
-    const r = await api("/api/github/device", {remember: $("#ghRemember").checked});
+    const r = await api("/api/github/device", {remember: $("#ghRemember").checked}).catch(e => ({error: e.message}));
     if (r.error) { ghNotice = {error: r.error}; renderGhPane(); return; }
     await refreshGitHub();
     clearInterval(ghPoll); let n = 0;
@@ -1235,7 +1289,7 @@ function renderGhPane() {
   $("#ghTokenForm").onsubmit = async e => {
     e.preventDefault();
     const token = e.target.token.value.trim(); e.target.token.value = "";
-    const r = await api("/api/github/token", {token, remember: $("#ghRemember").checked});
+    const r = await api("/api/github/token", {token, remember: $("#ghRemember").checked}).catch(e => ({error: e.message}));
     if (r.error) { $("#ghErr").textContent = r.error; return; }
     ghRepos = null; refreshGitHub(); refreshRepo();
   };
@@ -1255,8 +1309,11 @@ async function finishGitHub() {
   openModal("github");
 }
 // The chat's repository: chip + Open PR above the composer, picker behind the GitHub button.
+let repoRequest = 0;
 async function refreshRepo() {
-  const r = await api("/api/github/repo?session=" + encodeURIComponent(session)).catch(() => ({repo: null}));
+  const sid = session, view = viewEpoch, request = ++repoRequest;
+  const r = await api("/api/github/repo?session=" + encodeURIComponent(sid)).catch(() => null);
+  if (!r || r.error || view !== viewEpoch || sid !== session || request !== repoRequest) return;
   repo = r.repo;
   const bar = $("#repoBar");
   $("#repoBtn").classList.toggle("on", !!repo);
@@ -1264,12 +1321,14 @@ async function refreshRepo() {
   const n = (repo.commits || 0) + (repo.uncommitted ? 1 : 0);
   bar.innerHTML = `<span class="repo-chip">${icon("gh", 13)} ${esc(repo.full_name)} <span class="mono">${icon("branch", 12)} ${esc(repo.branch)}</span></span>
     <span>${repo.commits || 0} commit${repo.commits === 1 ? "" : "s"}${repo.uncommitted ? ` · ${repo.uncommitted} uncommitted` : ""}</span>
-    <button class="pr-btn" id="prBtn" ${n ? "" : "disabled"}>Open pull request</button><span id="prOut"></span>`;
+    <button class="pr-btn" id="prBtn" ${n && !busy ? "" : "disabled"}>Open pull request</button><span id="prOut"></span>`;
   bar.classList.add("show");
   $("#prBtn").onclick = async () => {
+    if (busy) return;
     const b = $("#prBtn"); b.disabled = true; b.textContent = "Pushing…";
     const title = $("#title").textContent || "Changes from Saga";
-    const r = await fetch("/api/github/pr", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({session, title})}).then(r => r.json());
+    const r = await api("/api/github/pr", {session: sid, title}).catch(e => ({error: e.message}));
+    if (view !== viewEpoch || sid !== session || !b.isConnected) return;
     if (r.error) { $("#prOut").innerHTML = `<span class="off">${esc(r.error)}</span>`; b.disabled = false; b.textContent = "Open pull request"; return; }
     $("#prOut").innerHTML = `<a href="${esc(r.url)}" target="_blank" rel="noopener">PR #${r.number} ↗</a>`;
     b.textContent = r.created ? "Opened" : "Updated"; refreshRepo();
@@ -1287,9 +1346,11 @@ async function openRepoPicker() {
   }
   pop.innerHTML = `<input id="repoQ" placeholder="Search your repositories…" autocomplete="off"><div class="repo-list" id="repoList"><div class="empty">Loading…</div></div>`;
   pop.classList.add("open"); $("#repoQ").focus();
+  const input = $("#repoQ"), listBox = $("#repoList");
   if (!ghRepos) {
     const r = await api("/api/github/repos").catch(e => ({error: e.message}));
-    if (r.error) { $("#repoList").innerHTML = `<div class="m off" style="padding:8px">${esc(r.error)}</div>`; return; }
+    if (!input.isConnected || !pop.classList.contains("open")) return;
+    if (r.error) { listBox.innerHTML = `<div class="m off" style="padding:8px">${esc(r.error)}</div>`; return; }
     ghRepos = r.repos;
   }
   const draw = q => {
@@ -1302,7 +1363,9 @@ async function openRepoPicker() {
 }
 async function attachRepo(full) {
   $("#repoPop").innerHTML = `<div class="m" style="padding:10px">Cloning ${esc(full)}…</div>`;
-  const r = await fetch("/api/github/attach", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({session, repo: full})}).then(r => r.json());
+  const sid = session, view = viewEpoch;
+  const r = await api("/api/github/attach", {session: sid, repo: full}).catch(e => ({error: e.message}));
+  if (view !== viewEpoch || sid !== session) return;
   if (r.error) { $("#repoPop").innerHTML = `<div class="m off" style="padding:10px">${esc(r.error)}</div>`; return; }
   $("#repoPop").classList.remove("open");
   if (!$("#title").textContent) $("#title").textContent = full;
@@ -1315,7 +1378,11 @@ document.addEventListener("click", e => { const pop = $("#repoPop"); if (pop.cla
 async function reloadAgents() { const st = await api("/api/state"); agents = st.agents; state = st; refreshModels(); }
 async function refreshChats() {
   const list = await api("/api/chats").catch(() => null);
-  if (!list) { chatsCache ??= []; fillWelcome(); return; }
+  if (!Array.isArray(list)) {
+    chatsCache ??= []; fillWelcome();
+    if (!$("#chatError")) $("#chats").insertAdjacentHTML("afterbegin", `<div class="empty" id="chatError">${esc(list?.error || "Could not load chats. Check your connection.")} <button class="mini-btn" id="retryChats">Retry</button></div>`);
+    $("#retryChats").onclick = refreshChats; return;
+  }
   chatsCache = list; fillWelcome();
   $("#nChats").textContent = list.length || "";
   $("#chats").innerHTML = list.length ? list.map(c => `<div class="item click ${c.session === session ? "active" : ""}" data-s="${esc(c.session)}"><div class="t">${colorMentions(esc(c.title || "Untitled"))}</div><div class="m">${c.turns} turn${c.turns > 1 ? "s" : ""} · ${ago(c.updated)}</div></div>`).join("")
@@ -1334,7 +1401,7 @@ function evalText(e, parent) {
 async function refreshMemory(parts) {
   if (!memCache?.prompts) parts = null;  // nothing to merge into yet: load every part
   const got = await api("/api/memory" + (parts ? "?parts=" + parts.join(",") : "")).catch(() => null);
-  if (!got) { memCache ??= {facts: []}; fillWelcome(); return; }
+  if (!got || got.error) { memCache ??= {facts: []}; fillWelcome(); return; }
   const m = memCache = parts ? {...memCache, ...got} : got; fillWelcome();
   if (m.prompts?.versions?.length) setPromptVersion(liveVersion(m.prompts), pvShown >= 0);
   const items = arr => `<div class="list">` + arr.map(x => `<div class="tile"><div>${x.agent ? agentName(x.agent) + " " : ""}${colorMentions(esc(x.text))}</div><div class="m">${blob(x.blob_id)}</div></div>`).join("") + `</div>`;
@@ -1364,15 +1431,31 @@ async function refreshMemory(parts) {
       (v.rules?.length ? `<ul class="rules">` + v.rules.map(r => `<li class="${r.harmful >= 2 && r.harmful > r.helpful ? "muted" : ""}">${esc(r.text)}${r.helpful || r.harmful ? ` <span>+${r.helpful} −${r.harmful}</span>` : ""}</li>`).join("") + `</ul>` : "") +
       `<details class="prompt"><summary>show prompt</summary><div>${esc(v.prompt)}</div></details></div>`).join("") + `</div>`;
 }
+let checkpointRequest = 0, restoreRun = null;
 async function refreshCheckpoints() {
-  const list = await api("/api/checkpoints?session=" + encodeURIComponent(session)).catch(() => null); if (!list) return;
+  if (restoreRun?.sid === session && restoreRun.view === viewEpoch) return;
+  const sid = session, view = viewEpoch, request = ++checkpointRequest;
+  const list = await api("/api/checkpoints?session=" + encodeURIComponent(sid)).catch(() => null);
+  if (view !== viewEpoch || sid !== session || request !== checkpointRequest) return;
+  if (!Array.isArray(list)) {
+    $("#checkpoints").innerHTML = `<div class="empty">${esc(list?.error || "Could not load checkpoints. Check your connection.")} <button class="mini-btn" id="retryCheckpoints">Retry</button></div>`;
+    $("#retryCheckpoints").onclick = refreshCheckpoints; return;
+  }
   $("#checkpoints").innerHTML = list.length
     ? `<div class="list">` + list.map(c => `<div class="tile"><div>${agentName(c.agent)} <span style="color:var(--muted)">${esc(c.instruction)}</span></div><div class="m">${c.files.map(f => `<span class="mono">${esc(f.path)}</span>`).join(" ")} · ${ago(c.ts)} ${blob(c.blob_id)}</div></div>`).join("") + `</div>` +
-      `<div style="padding:6px 0"><button class="mini-btn" id="restoreBtn">Restore this chat's files from Walrus</button></div>`
+      `<div style="padding:6px 0"><button class="mini-btn" id="restoreBtn" ${busy ? "disabled" : ""}>Restore this chat's files from Walrus</button><div id="restoreStatus" class="m" role="status"></div></div>`
     : `<div class="empty">No checkpoints in this chat yet. Files agents change are snapshotted to Walrus.</div>`;
-  $("#restoreBtn")?.addEventListener("click", async () => {
-    const r = await api("/api/checkpoints/restore", {session});
-    $("#restoreBtn").outerHTML = `<div class="empty">restored ${r.restored?.length ?? 0} file(s) into ${esc(r.workspace || "")}${r.skipped?.length ? ` · skipped ${r.skipped.length} behind a link` : ""}</div>`;
+  $("#restoreBtn")?.addEventListener("click", async e => {
+    const b = e.currentTarget, status = $("#restoreStatus");
+    if (busy) { status.textContent = "Stop the current run before restoring files."; return; }
+    const operation = restoreRun = {sid, view}; ++checkpointRequest;
+    b.disabled = true; status.textContent = "Restoring files…"; syncField();
+    const r = await api("/api/checkpoints/restore", {session: sid}).catch(e => ({error: e.message}));
+    if (restoreRun === operation) restoreRun = null;
+    if (view !== viewEpoch || sid !== session || !b.isConnected) return;
+    b.disabled = false; syncField();
+    status.textContent = r.error || `Restored ${r.restored?.length ?? 0} file(s).${r.skipped?.length ? ` Could not restore ${r.skipped.length} file(s): ${r.skipped.join(", ")}. Some stored content is unavailable or the path cannot be written safely.` : ""}`;
+    if (!r.error) { refreshRepo(); refreshPreview({reload: true}); }
   });
 }
 const writes = new Map();
@@ -1431,12 +1514,13 @@ function renderWrites() {
 // By the composer: a live count of blobs landing on Walrus, which ticks as each one confirms.
 let liveShown = -1;
 function renderLive() {
-  const n = totalBlobs() ?? doneWrites(), writing = [...writes.values()].some(w => w.status === "running" || w.status === "pending");
+  const list = [...writes.values()], n = totalBlobs() ?? doneWrites();
+  const writing = list.some(w => ["queued", "retrying", "running", "pending"].includes(w.status)), failed = list.some(w => w.status === "failed");
   const dot = $("#liveDot"), text = $("#liveText");
   if (!state.memory_enabled) { dot.className = "dot"; text.textContent = "Memory is off: nothing is saved to Walrus"; return; }
-  dot.className = "dot on" + (writing ? " busy" : "");
-  text.innerHTML = n ? `<b id="liveN">${n}</b> blob${n === 1 ? "" : "s"} on Walrus`
-    : writing ? "Writing to Walrus…" : "Saved on Walrus";
+  dot.className = "dot" + (failed ? "" : " on") + (writing ? " busy" : "");
+  text.innerHTML = n ? `<b id="liveN">${n}</b> blob${n === 1 ? "" : "s"} on Walrus${failed ? " · write failed" : writing ? " · saving…" : ""}`
+    : failed ? "Some memory was not saved" : writing ? "Writing to Walrus…" : "Walrus memory";
   if (liveShown >= 0 && n > liveShown && !calm) {
     $("#liveN").animate([{transform: "translateY(5px) scale(.8)", opacity: 0}, {transform: "none", opacity: 1}], {duration: 380, easing: "cubic-bezier(.34,1.36,.64,1)"});
     dot.animate([{boxShadow: "0 0 0 0 rgba(111,191,159,.7)"}, {boxShadow: "0 0 0 9px rgba(111,191,159,0)"}], {duration: 800, easing: "ease-out"});
@@ -1465,7 +1549,7 @@ function syncField() {
   hl.innerHTML = colorMentions(esc(q.value)) + "​";
   q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 160) + "px";
   hl.scrollTop = q.scrollTop;
-  sendBtn.disabled = !busy && !q.value.trim();
+  sendBtn.disabled = !busy && (!q.value.trim() || (restoreRun?.sid === session && restoreRun.view === viewEpoch));
 }
 q.addEventListener("input", () => { syncField(); showAc(); renderChip(); });
 q.addEventListener("scroll", () => { hl.scrollTop = q.scrollTop; });
@@ -1621,7 +1705,7 @@ function writer(out) {
   const settle = () => { if (done && shown >= target.length) { waiters.forEach(f => f()); waiters = []; } };
   const tick = t => {
     raf = 0;
-    if (!out.isConnected) return;
+    if (!out.isConnected) { done = true; shown = target.length; settle(); return; }
     const dt = last ? Math.min(t - last, 50) : 16; last = t;
     const left = target.length - shown;  // ~110 chars/s at rest; any backlog drains in about half a second
     shown += Math.min(left, Math.max(1, Math.round(dt / 1000 * Math.max(110, left * 2.2))));
@@ -1701,9 +1785,26 @@ function showWelcome() {
   });
   if (ready) fillWelcome(true);
 }
+function resetComposer() {
+  sendBtn.classList.remove("stop"); sendBtn.setAttribute("aria-label", "Send");
+  sendBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
+  syncField();
+}
+function stopRun() {
+  if (!activeRun) return;
+  activeRun.stopped = true;
+  activeRun.controller.abort();
+  if (activeRun.id) api("/api/cancel", {turn_id: activeRun.id}).catch(() => {});
+}
+function clearChatDetails() {
+  repo = null; $("#repoBar").classList.remove("show"); $("#repoBar").innerHTML = "";
+  $("#repoBtn").classList.remove("on"); $("#repoPop").classList.remove("open"); $("#repoPop").innerHTML = "";
+  previewUrl = ""; showPreview(false); $("#previewBtn").hidden = true;
+  $("#checkpoints").innerHTML = `<div class="empty">Loading this chat's checkpoints…</div>`;
+}
 $("#newChat").onclick = () => {
-  if (busy) api("/api/cancel", {turn_id: busy});
-  session = newSessionId(); showWelcome(); refreshChats(); refreshCheckpoints(); refreshRepo(); showPreview(false); refreshPreview();
+  stopRun(); activeRun = null; busy = null; ++viewEpoch;
+  session = newSessionId(); clearChatDetails(); resetComposer(); showWelcome(); refreshChats(); refreshCheckpoints(); refreshRepo(); refreshPreview();
   app.classList.remove("side-open"); q.focus();
 };
 function userMsg(text, live) {
@@ -1820,13 +1921,19 @@ function addRecallBatch(turn, batch) {
 
 async function openChat(sid) {
   if (busy) return;
-  session = sid; app.classList.remove("side-open");
+  session = sid; const view = ++viewEpoch; clearChatDetails(); app.classList.remove("side-open");
   thread.innerHTML = `<div class="empty fade working" style="text-align:center;margin-top:20vh">Loading transcript from Walrus…</div>`;
-  const t = await api("/api/chats/" + encodeURIComponent(sid));
+  const t = await api("/api/chats/" + encodeURIComponent(sid)).catch(e => ({error: e.message}));
+  if (view !== viewEpoch || sid !== session) return;
+  if (t.error || !Array.isArray(t.turns)) {
+    thread.innerHTML = `<div class="empty">${esc(t.error || "Could not load this chat.")} <button class="mini-btn" id="retryChat">Try again</button></div>`;
+    $("#retryChat").onclick = () => openChat(sid); return;
+  }
   thread.innerHTML = "";
   if (!calm) thread.animate([{opacity: 0, transform: "translateY(6px)"}, {opacity: 1, transform: "none"}], {duration: 320, easing: "cubic-bezier(.2,.7,.2,1)"});
   for (const turn of t.turns) {
     userMsg(turn.user);
+    if (turn.user_truncated) thread.lastElementChild.insertAdjacentHTML("beforeend", `<div class="note">Saved message is shortened</div>`);
     const el = document.createElement("div"); el.className = "msg";
     const sources = Array.isArray(turn.recall_sources) ? turn.recall_sources : null;
     recallPanel(el, {enabled: turn.memory_enabled !== false, recorded: sources !== null});
@@ -1853,17 +1960,22 @@ async function openChat(sid) {
 
 $("#f").addEventListener("submit", async e => {
   e.preventDefault();
-  if (busy) { if (busy !== "pending") api("/api/cancel", {turn_id: busy}); return; }
+  if (busy) { stopRun(); return; }
+  if (restoreRun?.sid === session && restoreRun.view === viewEpoch) return;
   const text = q.value.trim(); if (!text) return;
+  const run = {id: "", sid: session, view: ++viewEpoch, controller: new AbortController(), stopped: false};
+  activeRun = run; busy = "pending";
   q.value = ""; syncField(); ac.style.display = "none";
   const hello = thread.querySelector(".welcome");
-  if (hello) { $("#title").textContent = text.slice(0, 80); await leave(hello); thread.innerHTML = ""; }
+  if (hello) { $("#title").textContent = text.slice(0, 80); await leave(hello); if (activeRun !== run) return; thread.innerHTML = ""; }
   userMsg(text, true);
   const turn = document.createElement("div"); turn.className = "msg";
   recallPanel(turn, {enabled: state.memory_enabled, pending: true});
   thread.appendChild(turn);
   stick = true; log.scrollTo({top: log.scrollHeight, behavior: calm ? "auto" : "smooth"});
-  busy = "pending"; sendBtn.disabled = false; sendBtn.classList.add("stop");
+  sendBtn.disabled = false; sendBtn.classList.add("stop"); sendBtn.setAttribute("aria-label", "Stop response");
+  $("#restoreBtn")?.setAttribute("disabled", "");
+  $("#prBtn")?.setAttribute("disabled", "");
   sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`;
   const lanes = {};
   const activityTimer = setInterval(() => {
@@ -1873,11 +1985,16 @@ $("#f").addEventListener("submit", async e => {
       if (quiet >= 60) l.el.querySelector(".status").textContent = `waiting · ${quiet}s since last update`;
     }
   }, 1000);
-  let turnId = "", turnDone = false, touchedWeb = false;
+  let turnId = "", turnDone = false, touchedWeb = false, accepted = false, streamError = "";
   const lastLane = () => Object.values(lanes).pop()?.el;
   try {
-    const r = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({message: text, session})});
-    if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+    const r = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrfToken()}, body: JSON.stringify({message: text, session: run.sid}), signal: run.controller.signal});
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401) requireSignin(j);
+      throw new Error(j.error || r.statusText);
+    }
+    accepted = true;
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for (;;) {
       const {value, done} = await reader.read(); if (done) break;
@@ -1888,20 +2005,36 @@ $("#f").addEventListener("submit", async e => {
       }
       follow();
     }
-  } catch (err) { turn.insertAdjacentHTML("beforeend", `<div class="note pop">${esc(err.message)}</div>`); }
+    buf += dec.decode();
+    if (buf.trim()) onEvent(JSON.parse(buf));
+  } catch (err) { if (!run.stopped) streamError = err.message; }
   finally { clearInterval(activityTimer); }
-  recallPanel(turn, {pending: false, interrupted: !turnDone});
-  for (const l of Object.values(lanes)) l.w.finish();  // a cut stream leaves no caret behind
-  busy = null; sendBtn.classList.remove("stop");
-  sendBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>`;
-  syncField();
+  for (const l of Object.values(lanes)) {
+    if (!l.done) {
+      l.done = true;
+      const st = l.el.querySelector(".status"); st.textContent = run.stopped ? "stopped" : "interrupted"; st.className = "status";
+      foldSteps(l.el);
+    }
+    l.w.finish();
+  }
+  if (activeRun !== run || viewEpoch !== run.view) return;
+  if (!accepted) {
+    turn.querySelector(".recall")?.remove();
+    if (!run.stopped && !q.value) { q.value = text; syncField(); }
+  } else recallPanel(turn, {pending: false, interrupted: !turnDone});
+  const note = run.stopped ? "Response stopped. Any partial answer is kept here."
+    : streamError || (!turnDone ? "The connection ended before the response finished. Partial output is kept here. Check this chat's history before retrying; work may already have run." : "");
+  if (note) turn.insertAdjacentHTML("beforeend", `<div class="note pop" role="status">${esc(note)}</div>`);
+  activeRun = null; busy = null; resetComposer();
+  refreshCheckpoints();
   if (modal.classList.contains("open")) refreshUsage();  // memory panels follow confirmed writes (markChanged)
   refreshRepo();
   refreshPreview({open: touchedWeb, reload: touchedWeb});  // a turn that built or changed a page shows it
 
   function onEvent(ev) {
+    if (activeRun !== run || viewEpoch !== run.view || run.stopped) return;
     if (ev.type === "turn") {
-      busy = turnId = ev.turn_id;
+      busy = turnId = run.id = ev.turn_id;
       recallPanel(turn, {enabled: ev.memory_enabled !== false});
     }
     else if (ev.type === "recall") {
@@ -1930,7 +2063,7 @@ $("#f").addEventListener("submit", async e => {
     } else if (ev.type === "remember") {
       const el = lastLane(); if (!el) return;
       const slot = metaSlot(el, "mem"), facts = [...(el.facts ||= []), ev.text]; el.facts = facts;
-      slot.textContent = `remembered ${facts.length} fact${facts.length === 1 ? "" : "s"}`; slot.title = facts.join("\n");
+      slot.textContent = `${facts.length} fact${facts.length === 1 ? "" : "s"} queued for memory`; slot.title = facts.join("\n");
     } else if (ev.type === "step_done") {
       const l = lanes[ev.step]; if (!l) return;
       l.done = true;
@@ -1946,7 +2079,7 @@ $("#f").addEventListener("submit", async e => {
       const el = lastLane();
       if (state.memory_enabled && el && !el.querySelector('.meta [data-k="blob"]')) awaitBlob(metaSlot(el, "blob"), ev.turn_id);
       // rate the answer once it has finished writing, not while it's still appearing
-      Promise.all(Object.values(lanes).map(l => l.w.idle())).then(() => addFeedback(turn, ev.turn_id));
+      Promise.all(Object.values(lanes).map(l => l.w.idle())).then(() => { if (turn.isConnected && !run.stopped) addFeedback(turn, ev.turn_id); });
     } else if (ev.type === "error") {
       turn.insertAdjacentHTML("beforeend", `<div class="note pop">${esc(ev.text)}</div>`);
     }
@@ -2002,6 +2135,8 @@ function openWallet() {
   closeModal();
   const si = $("#signin"); delete si.dataset.mode;
   $("#siTitle").textContent = "Connect a Sui wallet";
+  $("#siBody").textContent = "Connect a Sui wallet. Your memory on Walrus is keyed to your address, and a second signature unlocks your private vault. Neither sends a transaction or costs gas.";
+  $("#siStatus").textContent = "";
   $("#siBack").hidden = !!me.wallet_required;
   $("#gate").style.display = "none"; si.classList.add("open");
 }

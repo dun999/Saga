@@ -1258,6 +1258,7 @@ std::string Harness::workspace_for(const std::string& uid, const std::string& se
 
 // `#remember <fact>` lines in any agent's output become user facts on Walrus.
 void Harness::apply_directives(Turn& t, const Step& s, const Emit& emit) {
+  if (!store_.enabled()) return;
   std::istringstream in(s.output);
   for (std::string line; std::getline(in, line);) {
     const auto p = line.find_first_not_of(" \t>*-`");
@@ -1291,7 +1292,10 @@ std::vector<json> Harness::recall_records(const std::string& ns, const std::stri
 
 json Harness::chat_history(const std::string& uid) {
   std::map<std::string, json> sessions;
-  for (auto& r : recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100)) {
+  bool failed = false;
+  auto records = recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100, &failed);
+  if (failed) return {{"error", "Could not read chats from Walrus. Try again."}};
+  for (auto& r : records) {
     const std::string sid = r.value("session", "");
     if (sid.empty()) continue;
     auto& s = sessions[sid];
@@ -1312,7 +1316,10 @@ json Harness::chat_history(const std::string& uid) {
 
 json Harness::chat_transcript(const std::string& uid, const std::string& session) {
   json turns = json::array();
-  for (auto& r : recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100))
+  bool failed = false;
+  auto records = recall_records(ns_user(uid, "chat"), "chat", "conversation with the user", 100, &failed);
+  if (failed) return {{"error", "Could not read this chat from Walrus. Try again."}};
+  for (auto& r : records)
     if (r.value("session", "") == session) turns.push_back(r);
   std::sort(turns.begin(), turns.end(), [](const json& a, const json& b) { return a["ts"] < b["ts"]; });
   return {{"session", session}, {"turns", turns}};
@@ -1320,7 +1327,10 @@ json Harness::chat_transcript(const std::string& uid, const std::string& session
 
 json Harness::checkpoints(const std::string& uid, const std::string& session) {
   json arr = json::array();
-  for (auto& r : recall_records(ns_user(uid, "checkpoints"), "checkpoint", "workspace file checkpoint", 100)) {
+  bool failed = false;
+  auto records = recall_records(ns_user(uid, "checkpoints"), "checkpoint", "workspace file checkpoint", 100, &failed);
+  if (failed) return {{"error", "Could not read checkpoints from Walrus. Try again."}};
+  for (auto& r : records) {
     if (!session.empty() && r.value("session", "") != session) continue;
     json files = json::array();
     for (auto& f : r.value("files", json::array()))
@@ -1334,7 +1344,9 @@ json Harness::checkpoints(const std::string& uid, const std::string& session) {
 
 // Rebuild a session's workspace from Walrus checkpoints (latest version of each file wins).
 json Harness::restore_checkpoints(const std::string& uid, const std::string& session) {
-  auto recs = recall_records(ns_user(uid, "checkpoints"), "checkpoint", "workspace file checkpoint", 100);
+  bool failed = false;
+  auto recs = recall_records(ns_user(uid, "checkpoints"), "checkpoint", "workspace file checkpoint", 100, &failed);
+  if (failed) return {{"error", "Could not read checkpoints from Walrus. No files were restored. Try again."}};
   std::sort(recs.begin(), recs.end(), [](const json& a, const json& b) { return a.value("ts", 0L) < b.value("ts", 0L); });
   std::map<std::string, std::string> latest;
   std::set<std::string> missing;
