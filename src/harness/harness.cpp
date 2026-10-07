@@ -1,6 +1,7 @@
 #include "harness/harness.h"
 #include "core/http.h"
 #include "memwal/redact.h"
+#include "memwal/gate.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -229,7 +230,7 @@ std::string ns_lessons(const std::string& agent, const std::string& uid) {
 
 // Injected into every agent's context: what Saga's memory is and how to use it.
 std::string memory_protocol(const std::string& uid, const std::string& agent, bool can_run_shell,
-                            const std::string& saga_bin, bool native_tools) {
+                            const std::string& saga_bin, bool native_tools, bool read_only) {
   std::string p =
       "\n## Memory protocol — Walrus mainnet\n"
       "Saga has no database. Every memory is SEAL-encrypted by the Walrus Memory (MemWal) relayer and stored as "
@@ -256,14 +257,23 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
       "Never store secrets, keys or passwords.\n";
   if (native_tools)
     p += "You also have memory tools: memory_recall (semantic search; default namespace " + ns_user(uid, "facts") +
-         ") and memory_remember (queues one fact, like #remember). Use memory_recall when the user refers to "
+         (read_only ? "). " : ") and memory_remember (queues one fact, like #remember). ") +
+         "Use memory_recall when the user refers to "
          "something from the past that is not in the sections above.\n";
   else if (can_run_shell && !saga_bin.empty())
     p += "You can also query memory on demand from the shell:\n"
-         "  " + saga_bin + " mem recall \"<query>\" [--ns <namespace>] [--limit N]\n"
-         "  " + saga_bin + " mem remember \"<text>\" [--ns <namespace>]\n"
+         "  " + saga_bin + " mem recall \"<query>\" [--ns <namespace>] [--limit N]\n" +
+         (read_only ? "" : "  " + saga_bin + " mem remember \"<text>\" [--ns <namespace>]\n") +
          "(default namespace: " + ns_user(uid, "facts") + "). Use recall when the user refers to something from "
          "the past that is not in the sections above.\n";
+  if (native_tools || (can_run_shell && !saga_bin.empty()))
+    p += "If an episode is too short to answer a history question, search " + ns_user(uid, "chat") +
+         " for the original transcript, using the teammate, project, and recorded date as query terms. "
+         "Searching memory does not require inspecting /mnt/work or running git.\n";
+  if (read_only)
+    p += "This run can recall only this user's facts, episodes, chat transcripts, checkpoints, skills, and "
+         "agent lessons (at most eight searches). Other namespaces and direct writes are unavailable; use "
+         "#remember to propose facts.\n";
   return p;
 }
 
@@ -463,11 +473,13 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
   section("Skills that worked before", skills);
   c += t.history;
   c += repo_context(t);
-  // Shell access to memory needs the Walrus delegate key, which never enters a user's sandbox.
-  // Claude Code gets the same memory as native tools through `saga mcp` (ClaudeCodeAgent::argv).
-  const bool host_shell = agent.can_edit_files() && !opt_.user_accounts;
-  c += memory_protocol(t.uid, agent.name(), host_shell, opt_.saga_bin,
-                       host_shell && !opt_.mem_sock.empty() && agent.spec().kind == "claude-code");
+  // Sandboxed agents query a per-run, user-scoped gate; the delegate key stays on the server.
+  const bool memory_access = agent.can_edit_files() && !opt_.saga_bin.empty() &&
+                             (!opt_.user_accounts || store_.enabled());
+  c += memory_protocol(t.uid, agent.name(), memory_access,
+                       opt_.user_accounts ? "/mnt/bin/saga" : opt_.saga_bin,
+                       memory_access && (opt_.user_accounts || !opt_.mem_sock.empty()) &&
+                           agent.spec().kind == "claude-code", opt_.user_accounts && memory_access);
 
   if (!t.steps.empty()) {
     c += "\n## Blackboard — work already done in this task\n";
@@ -522,6 +534,24 @@ void Harness::run_step(Turn& t, Step& s, const std::string& context, const Emit&
     }
     agents::Task task{s.instruction, context, working_dir, t.cancel.get(),
                       opt_.agent_timeout_s, {}, sbp};
+    std::mutex recall_mu;
+    std::unique_ptr<memwal::Gate> memory_gate;
+    if (sb && a->can_edit_files() && store_.enabled() && !sb->runner.empty()) {
+      memory_gate = std::make_unique<memwal::Gate>(*store_.client(), nullptr, t.uid,
+          [&](const json& req, const json& reply) {
+            std::vector<memwal::Memory> hits;
+            for (const auto& m : reply.value("hits", json::array()))
+              hits.push_back({m.value("blob_id", ""), m.value("text", ""), m.value("distance", 0.0)});
+            std::lock_guard lk(recall_mu);
+            for (const auto& m : hits) t.recalled.push_back(m.text);
+            record_recall(t, req.value("ns", ""), req.value("text", ""), hits,
+                          !reply.value("ok", false), emit, a->name(), static_cast<int>(idx));
+          });
+      sb->memory_sock = memory_gate->path();
+      task.env = {{"SAGA_UID", t.uid}, {"SAGA_BIN", "/mnt/bin/saga"},
+                  {"SAGA_MEM_SOCK", sandbox::kMemorySock}, {"SAGA_MEM_READ_ONLY", "1"}};
+      for (const auto& [key, value] : task.env) sb->env[key] = value;
+    }
     if (!sbp) {
       task.env = {{"SAGA_UID", t.uid}, {"SAGA_BIN", opt_.saga_bin}};
       if (!opt_.mem_sock.empty()) task.env["SAGA_MEM_SOCK"] = opt_.mem_sock;

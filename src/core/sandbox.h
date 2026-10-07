@@ -27,11 +27,13 @@ struct Sandbox {
   std::string login_file;                 // the sole login file this worker may unseal
   std::shared_ptr<std::atomic<bool>> cancel;  // session cancellation, including learning jobs
   std::shared_ptr<memwal::SecretScope> sensitive;
+  std::string memory_sock;  // per-run, user-scoped read-only gate; never the operator gate
   ~Sandbox();
 };
 
 constexpr const char* kHome = "/mnt/home";
 constexpr const char* kWork = "/mnt/work";
+constexpr const char* kMemorySock = "/mnt/memory.sock";
 
 // CLI login files that hold a user's provider credentials, relative to their agent home. They are
 // sealed at rest with a provider key (core/secrets.h) and only exist in plaintext while a

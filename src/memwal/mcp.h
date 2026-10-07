@@ -10,6 +10,7 @@
 namespace saga::memwal {
 
 // One JSON-RPC line in, the reply to write out; nullopt for a notification or a line that isn't a request.
-std::optional<nlohmann::json> mcp_reply(const std::string& line, const std::string& uid, const std::string& sock);
+std::optional<nlohmann::json> mcp_reply(const std::string& line, const std::string& uid, const std::string& sock,
+                                     bool read_only = false);
 
 }  // namespace saga::memwal

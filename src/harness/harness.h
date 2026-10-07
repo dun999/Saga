@@ -85,7 +85,7 @@ bool write_in_workspace(const std::string& root, const std::string& rel, const s
 // links, no hidden (dot) components, a regular file of at most `max_bytes`. nullopt = refused or missing.
 std::optional<std::string> read_in_workspace(const std::string& root, const std::string& rel, size_t max_bytes);
 std::string memory_protocol(const std::string& uid, const std::string& agent, bool can_run_shell,
-                            const std::string& saga_bin, bool native_tools = false);
+                            const std::string& saga_bin, bool native_tools = false, bool read_only = false);
 
 class Harness {
  public:

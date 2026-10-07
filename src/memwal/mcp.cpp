@@ -11,12 +11,12 @@ namespace {
 // Kept in step with harness::ns_user / ns_lessons; memwal sits below the harness.
 std::string ns_of(const std::string& uid, const std::string& what) { return "u:" + uid + ":" + what; }
 
-json tool_list(const std::string& uid) {
+json tool_list(const std::string& uid, bool read_only) {
   const std::string facts = ns_of(uid, "facts");
   const std::string spaces = facts + " (facts and preferences, the default), " + ns_of(uid, "episodes") +
                              " (past turns), " + ns_of(uid, "chat") + " (transcripts), " + ns_of(uid, "skills") +
                              ", " + ns_of(uid, "lessons:<agent>");
-  return json::array({
+  json tools = json::array({
       {{"name", "memory_recall"},
        {"description", "Semantic search over this user's Saga memory, stored as encrypted blobs on Walrus mainnet. "
                        "Use it when the user refers to something from before that your context does not cover. "
@@ -35,6 +35,8 @@ json tool_list(const std::string& uid) {
                                         {"namespace", {{"type", "string"}, {"description", "default " + facts}}}}},
                         {"required", {"text"}}}}},
   });
+  if (read_only) tools.erase(1);
+  return tools;
 }
 
 json tool_text(const std::string& text, bool error) {
@@ -68,7 +70,7 @@ json call_tool(const json& params, const std::string& uid, const std::string& so
 
 }  // namespace
 
-std::optional<json> mcp_reply(const std::string& line, const std::string& uid, const std::string& sock) {
+std::optional<json> mcp_reply(const std::string& line, const std::string& uid, const std::string& sock, bool read_only) {
   if (json_nesting(line) > kMaxJsonDepth) return std::nullopt;
   const auto req = json::parse(line, nullptr, false);
   if (!req.is_object() || !req.contains("id") || !req.contains("method")) return std::nullopt;  // notifications
@@ -81,9 +83,11 @@ std::optional<json> mcp_reply(const std::string& line, const std::string& uid, c
                        {"capabilities", {{"tools", json::object()}}},
                        {"serverInfo", {{"name", "saga"}, {"version", "0.1.0"}}}};
   } else if (method == "tools/list") {
-    reply["result"] = {{"tools", tool_list(uid)}};
+    reply["result"] = {{"tools", tool_list(uid, read_only)}};
   } else if (method == "tools/call" && params.is_object()) {
-    reply["result"] = call_tool(params, uid, sock);
+    reply["result"] = read_only && params.value("name", "") != "memory_recall"
+                          ? tool_text("Only memory_recall is available in this run.", true)
+                          : call_tool(params, uid, sock);
   } else if (method == "ping") {
     reply["result"] = json::object();
   } else {

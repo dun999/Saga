@@ -340,6 +340,7 @@ std::vector<std::string> wrap(const Sandbox& sb, const std::vector<std::string>&
   if (!bin.empty()) a.insert(a.end(), {"--ro-bind", bin, "/mnt/bin/" + name});
   a.insert(a.end(), {"--bind", sb.home, kHome});
   if (!sb.workspace.empty()) a.insert(a.end(), {"--bind", sb.workspace, kWork});
+  if (!sb.memory_sock.empty()) a.insert(a.end(), {"--ro-bind", sb.memory_sock, kMemorySock});
   a.insert(a.end(), {"--chdir", sb.workspace.empty() ? kHome : kWork});
   a.insert(a.end(), {"--remount-ro", "/"});
   a.push_back("--");

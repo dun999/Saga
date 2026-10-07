@@ -20,26 +20,37 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr size_t kMaxLine = 65536;
+constexpr size_t kMaxReply = 8 * 1024 * 1024;
 
-std::string read_line(int fd) {
+std::string read_line(int fd, size_t max_bytes = kMaxLine, int timeout_ms = 120000) {
   std::string s;
   char buf[2048];
-  while (s.size() < kMaxLine) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (s.size() < max_bytes) {
     pollfd p{fd, POLLIN, 0};
-    if (poll(&p, 1, 120000) <= 0) break;
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+    if (remaining <= 0 || poll(&p, 1, static_cast<int>(remaining)) <= 0) break;
     const ssize_t n = ::read(fd, buf, sizeof buf);
     if (n <= 0) break;
     s.append(buf, static_cast<size_t>(n));
     if (s.find('\n') != std::string::npos) break;
   }
   const auto nl = s.find('\n');
-  return nl == std::string::npos ? std::string{} : s.substr(0, nl);
+  return nl == std::string::npos || nl > max_bytes ? std::string{} : s.substr(0, nl);
+}
+
+bool content_namespace(const std::string& uid, const std::string& ns) {
+  const std::string prefix = "u:" + uid + ":";
+  if (!ns.starts_with(prefix)) return false;
+  const std::string suffix = ns.substr(prefix.size());
+  return suffix == "facts" || suffix == "episodes" || suffix == "chat" || suffix == "checkpoints" ||
+         suffix == "skills" || (suffix.starts_with("lessons:") && suffix.size() > 8);
 }
 
 bool write_all(int fd, const std::string& s) {
   size_t off = 0;
   while (off < s.size()) {
-    const ssize_t n = ::write(fd, s.data() + off, s.size() - off);
+    const ssize_t n = ::send(fd, s.data() + off, s.size() - off, MSG_NOSIGNAL);
     if (n <= 0) return false;
     off += static_cast<size_t>(n);
   }
@@ -97,7 +108,7 @@ json gate_transact(const std::string& path, const json& req) {
   const std::string line = req.dump() + "\n";
   json out = {{"ok", false}, {"error", "empty memory response"}};
   if (write_all(fd, line)) {
-    const std::string reply = read_line(fd);
+    const std::string reply = read_line(fd, kMaxReply);
     if (!reply.empty()) {
       auto j = json::parse(reply, nullptr, false);
       if (j.is_object()) out = std::move(j);
@@ -107,7 +118,8 @@ json gate_transact(const std::string& path, const json& req) {
   return out;
 }
 
-Gate::Gate(Client& client, Store* store) : client_(client), store_(store) {
+Gate::Gate(Client& client, Store* store, std::string recall_uid, Observer observer)
+    : client_(client), store_(store), recall_uid_(std::move(recall_uid)), observer_(std::move(observer)) {
   // The socket inode keeps the mode it was created with. fchmod on the fd does not change the
   // pathname another user would connect to, and umask is process-global, so the directory is 0700
   // and the bind itself happens under a temporary 077 umask that is restored before anything else.
@@ -150,6 +162,7 @@ Gate::~Gate() {
   if (thread_.joinable()) thread_.join();
   {
     std::unique_lock lk(mu_);
+    for (int fd : clients_) ::shutdown(fd, SHUT_RDWR);
     idle_.wait(lk, [&] { return active_ == 0; });
   }
   if (listen_fd_ >= 0) ::close(listen_fd_);
@@ -167,23 +180,29 @@ void Gate::serve() {
     // working in parallel shouldn't queue their recalls behind it.
     {
       std::lock_guard lk(mu_);
-      if (active_ >= kMaxActive) {
+      if (active_ >= (recall_uid_.empty() ? kMaxActive : 4)) {
         write_all(fd, json({{"ok", false}, {"error", "memory socket is busy, try again"}}).dump() + "\n");
         ::close(fd);
         continue;
       }
       ++active_;
+      clients_.insert(fd);
     }
     std::thread([this, fd] {
       handle(fd);
-      ::close(fd);
       std::lock_guard lk(mu_);
+      clients_.erase(fd);
+      ::close(fd);
       if (--active_ == 0) idle_.notify_all();
     }).detach();
   }
 }
 
 void Gate::handle(int fd) {
+  if (!recall_uid_.empty()) {
+    const timeval timeout{2, 0};
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+  }
 #ifdef __linux__
   ucred cred{};
   socklen_t cred_len = sizeof cred;
@@ -197,17 +216,45 @@ void Gate::handle(int fd) {
     write_all(fd, json({{"ok", false}, {"error", "memory socket is for this user only"}}).dump() + "\n");
     return;
   }
-  const std::string line = read_line(fd);
-  auto req = json::parse(line, nullptr, false);
+  const std::string line = read_line(fd, kMaxLine, recall_uid_.empty() ? 120000 : 2000);
+  auto req = json_nesting(line) > kMaxJsonDepth ? json() : json::parse(line, nullptr, false);
   json res = req.is_object() ? json() : json{{"ok", false}, {"error", "bad request"}};
+  bool attempted = false;
   if (req.is_object()) {
     try {
-      res = gate_request(client_, req, store_);
+      bool allowed = !stop_;
+      if (!recall_uid_.empty()) {
+        if (req.value("op", "") != "recall" || !content_namespace(recall_uid_, req.value("ns", ""))) {
+          allowed = false;
+          res = {{"ok", false}, {"error", "this run can only recall the current user's content namespaces"}};
+        } else {
+          std::lock_guard lk(mu_);
+          if (recalls_ >= 8) {
+            allowed = false;
+            res = {{"ok", false}, {"error", "this run's memory recall limit has been reached"}};
+          } else ++recalls_;
+        }
+      }
+      if (allowed) {
+        attempted = true;
+        res = gate_request(client_, req, store_);
+      } else if (res.is_null()) res = {{"ok", false}, {"error", "memory run ended"}};
     } catch (const std::exception& e) {
       res = {{"ok", false}, {"error", e.what()}};
     }
   }
-  write_all(fd, res.dump() + "\n");
+  std::string reply = res.dump();
+  if (reply.size() >= kMaxReply) {
+    res = {{"ok", false}, {"error", "memory response exceeds its size limit; use a smaller recall limit"}};
+    reply = res.dump();
+  }
+  if (attempted && observer_) {
+    try { observer_(req, res); }
+    catch (const std::exception&) {
+      reply = json{{"ok", false}, {"error", "could not record the memory recall source"}}.dump();
+    }
+  }
+  write_all(fd, reply + "\n");
 }
 
 }  // namespace saga::memwal

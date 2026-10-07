@@ -379,7 +379,8 @@ int cmd_mem(const Args& a) {
 int cmd_mcp(const Args&) {
   const std::string uid = env::get("SAGA_UID", "cli"), sock = env::get("SAGA_MEM_SOCK");
   for (std::string line; std::getline(std::cin, line);)
-    if (const auto reply = memwal::mcp_reply(line, uid, sock)) std::cout << reply->dump() << "\n" << std::flush;
+    if (const auto reply = memwal::mcp_reply(line, uid, sock, env::get("SAGA_MEM_READ_ONLY") == "1"))
+      std::cout << reply->dump() << "\n" << std::flush;
   return 0;
 }
 

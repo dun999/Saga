@@ -383,8 +383,9 @@ class ClaudeCodeAgent : public CliAgent {
     if (bin != t.env.end() && !bin->second.empty()) {
       std::vector<std::string> allowed = {"Bash(" + bin->second + " mem:*)"};
       if (sock != t.env.end() && !sock->second.empty() && uid != t.env.end()) {
-        const json server = {{"type", "stdio"}, {"command", bin->second}, {"args", {"mcp"}},
-                             {"env", {{"SAGA_UID", uid->second}, {"SAGA_MEM_SOCK", sock->second}}}};
+        json memory_env = {{"SAGA_UID", uid->second}, {"SAGA_MEM_SOCK", sock->second}};
+        if (auto ro = t.env.find("SAGA_MEM_READ_ONLY"); ro != t.env.end()) memory_env[ro->first] = ro->second;
+        const json server = {{"type", "stdio"}, {"command", bin->second}, {"args", {"mcp"}}, {"env", memory_env}};
         a.insert(a.end(), {"--mcp-config", json{{"mcpServers", {{"saga", server}}}}.dump()});
         allowed.insert(allowed.end(), {"mcp__saga__memory_recall", "mcp__saga__memory_remember"});
       }
