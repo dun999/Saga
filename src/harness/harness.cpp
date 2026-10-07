@@ -452,10 +452,15 @@ std::string Harness::build_context(Turn& t, const agents::Agent& agent, const st
            (r.value("edits_files", false) ? "; reads, edits and runs code in the workspace" : "") + ");";
   c += "\nTo hand part of the work to a teammate, write a line on its own: `@name <precise instruction>`. "
        "Only do this when it clearly helps; otherwise finish the work yourself.\n";
-  if (agent.can_edit_files())
+  if (agent.can_edit_files()) {
     c += "Shared workspace (every teammate sees the same files): " +
          (opt_.user_accounts ? std::string(sandbox::kWork) : t.workspace) + "\n";
-  else
+    c += "For a requested static page or browser game, create the actual files in the shared workspace, "
+         "including index.html at the workspace root or at most two directories below it. Saga discovers "
+         "that file and opens its HTML, CSS, JavaScript and assets in the user's Preview panel. A running "
+         "development server or an agent browser tool is not required for this static preview. Report the "
+         "saved entry path; code pasted into the chat alone cannot open a preview.\n";
+  } else
     c += "You cannot read or edit files, see the repository, or run commands. When the user wants something built, "
          "changed or checked in their workspace or repository, hand it to a teammate who works in the workspace "
          "(`@name <precise instruction>` on its own line) instead of saying you will do it yourself. Otherwise put "

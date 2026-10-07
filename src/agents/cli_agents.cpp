@@ -567,7 +567,10 @@ class CodexAgent : public CliAgent {
   std::string exe() const override { return "codex"; }
   std::string stdin_for(const Task& t) const override { return with_system(t); }
   std::vector<std::string> argv(const Task& t, const std::string&) const override {
-    std::vector<std::string> a = {"codex", "exec", "--json", "--skip-git-repo-check", "-s", "workspace-write"};
+    // Saga's outer sandbox already isolates user files, networking and resources, and forbids
+    // creating another user namespace. Codex's nested sandbox otherwise fails every workspace tool.
+    std::vector<std::string> a = {"codex", "exec", "--json", "--skip-git-repo-check", "-s",
+                                  t.sandbox ? "danger-full-access" : "workspace-write"};
     if (!t.workspace.empty()) a.insert(a.end(), {"-C", t.workspace});
     if (!model_for(t).empty()) a.insert(a.end(), {"-m", model_for(t)});
     // Always set: otherwise the operator's own ~/.codex/config.toml effort applies, and one the model

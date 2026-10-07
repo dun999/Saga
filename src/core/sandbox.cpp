@@ -72,7 +72,7 @@ class ResourceGroup {
   }
 };
 
-// Absolute, symlink-free path of a command on PATH (agent CLIs are single standalone binaries).
+// Absolute, symlink-free path of a command on PATH.
 std::string resolve(const std::string& cmd) {
   if (cmd.find('/') != std::string::npos) return fs::weakly_canonical(cmd).string();
   const char* path = std::getenv("PATH");
@@ -338,6 +338,14 @@ std::vector<std::string> wrap(const Sandbox& sb, const std::vector<std::string>&
   }
   a.insert(a.end(), {"--size", "8388608", "--tmpfs", "/mnt", "--dir", "/mnt/bin", "--dir", kHome, "--dir", kWork});
   if (!bin.empty()) a.insert(a.end(), {"--ro-bind", bin, "/mnt/bin/" + name});
+  if (name == "codex" && !bin.empty()) {
+    // Codex locates its tool host beside its own executable. Relocating only the CLI lets it chat,
+    // but leaves every workspace tool unavailable. Bind the matching installed helper, not its home.
+    const fs::path helper = fs::path(bin).parent_path() / "codex-code-mode-host";
+    std::error_code ec;
+    if (fs::is_regular_file(helper, ec) && ::access(helper.c_str(), X_OK) == 0)
+      a.insert(a.end(), {"--ro-bind", helper.string(), "/mnt/bin/codex-code-mode-host"});
+  }
   a.insert(a.end(), {"--bind", sb.home, kHome});
   if (!sb.workspace.empty()) a.insert(a.end(), {"--bind", sb.workspace, kWork});
   if (!sb.memory_sock.empty()) a.insert(a.end(), {"--ro-bind", sb.memory_sock, kMemorySock});
