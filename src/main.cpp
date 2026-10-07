@@ -142,7 +142,7 @@ int cmd_stats(const Args& a) {
     nss = {"harness:prompts", "harness:scores", "harness:skills", "harness:improvements", "saga:doctor"};
     for (auto* ag : reg.all()) nss.push_back("agent:" + ag->name() + ":lessons");
     for (auto& u : a.pos) {
-      for (const char* k : {"facts", "episodes", "chat", "checkpoints", "cases", "skills", "improvements",
+      for (const char* k : {"shared", "facts", "episodes", "chat", "checkpoints", "cases", "skills", "improvements",
                             "learning:prompts", "learning:scores"}) nss.push_back(harness::ns_user(u, k));
       for (auto* ag : reg.all()) nss.push_back(harness::ns_lessons(ag->name(), u));
     }
@@ -254,7 +254,7 @@ int cmd_ab(const Args& a) {
       "What am I training for, and how many weeks do I have left?",
   };
   auto reg = agents::Registry::load(a.get("config", "saga.json"));
-  agents::Agent* brain = reg.brain();
+  agents::Agent* brain = reg.primary();
   std::string report = "# Saga A/B: without vs with Walrus Memory\n\n"
                        "Session 1 teaches facts; session 2 is a *new process-level session* that only has "
                        "whatever the memory layer can recall.\n\n";
@@ -305,25 +305,6 @@ int cmd_ab(const Args& a) {
   return 0;
 }
 
-// ---- evolve: one playbook evolution now, gated by replay on a user's rated turns ------
-int cmd_evolve(const Args& a) {
-  if (a.pos.empty()) {
-    std::puts("usage: saga evolve \"<critique>\" [\"<critique>\"…] [--user NAME]");
-    return 2;
-  }
-  memwal::Client mw(memwal_config());
-  auto reg = agents::Registry::load(a.get("config", "saga.json"));
-  harness::Options ho = harness_options(a);
-  memwal::Store store(&mw, true);
-  auto gate = open_gate(&mw, store, ho);
-  harness::Harness h(reg, store, ho);
-  h.boot();
-  const json r = h.evolve_now(a.get("user", "cli"), a.pos);
-  std::printf("%s\n", r.dump(2).c_str());
-  store.flush(std::chrono::seconds(90));
-  return r.contains("error") ? 1 : 0;
-}
-
 // ---- mem: the memory API agents call from their shell ----------------------------------
 int cmd_mem(const Args& a) {
   if (a.pos.size() < 2) {
@@ -331,10 +312,12 @@ int cmd_mem(const Args& a) {
     return 2;
   }
   const std::string uid = env::get("SAGA_UID", "cli");
-  const std::string ns = a.get("ns", harness::ns_user(uid, "facts"));
+  const std::string ns = a.get("ns", memwal::shared_namespace(uid));
   const std::string& op = a.pos[0];
   if (const std::string sock = env::get("SAGA_MEM_SOCK"); !sock.empty()) {
-    const json res = memwal::gate_transact(sock, {{"op", op}, {"text", a.pos[1]}, {"ns", ns}, {"limit", std::stoi(a.get("limit", "8"))}});
+    const json res = memwal::gate_transact(sock, {{"op", op}, {"text", a.pos[1]}, {"ns", ns}, {"limit", std::stoi(a.get("limit", "8"))},
+                                               {"wait", false}, {"agent", env::get("SAGA_AGENT")},
+                                               {"session", env::get("SAGA_SESSION")}, {"recent", a.has("recent")}});
     if (!res.value("ok", false)) {
       const std::string err = res.value("error", "failed");
       std::fprintf(stderr, "saga mem: %s\n", err.c_str());
@@ -343,33 +326,50 @@ int cmd_mem(const Args& a) {
     if (op == "recall") {
       auto hits = res.value("hits", json::array());
       if (!hits.is_array() || hits.empty()) std::printf("(no memories in %s match)\n", ns.c_str());
-      for (auto& m : hits)
-        std::printf("- %s  [distance %.2f, blob %s]\n", m.value("text", "").c_str(), m.value("distance", 0.0),
-                    m.value("blob_id", "").c_str());
+      for (auto& m : hits) {
+        if (m.value("local", false))
+          std::printf("- %s  [%s, %s]\n", m.value("text", "").c_str(), m.value("status", "queued").c_str(),
+                      m.value("blob_id", "").empty() ? "not yet confirmed on Walrus" : m["blob_id"].get_ref<const std::string&>().c_str());
+        else
+          std::printf("- %s  [distance %.2f, blob %s]\n", m.value("text", "").c_str(), m.value("distance", 1.0),
+                      m.value("blob_id", "").c_str());
+      }
       return 0;
     }
     if (op == "remember") {
-      std::printf("%s %s blob=%s\n", res.value("status", "").c_str(), ns.c_str(), res.value("blob_id", "").c_str());
-      return res.value("status", "") == "done" ? 0 : 1;
+      std::printf("%s %s blob=%s\n", res.value("status", "").c_str(), res.value("ns", ns).c_str(), res.value("blob_id", "").c_str());
+      return res.value("ok", false) ? 0 : 1;
     }
     std::fprintf(stderr, "saga mem: unknown op %s\n", op.c_str());
     return 2;
   }
   memwal::Client mw(memwal_config());
   if (op == "recall") {
-    auto hits = mw.recall(a.pos[1], ns, {.limit = std::stoi(a.get("limit", "8")), .recent = a.has("recent")});
-    if (hits.empty()) std::printf("(no memories in %s match)\n", ns.c_str());
+    memwal::Store store(&mw, true);
+    bool failed = false;
+    auto hits = store.recall(a.pos[1], ns, {.limit = std::stoi(a.get("limit", "8")), .recent = a.has("recent")}, &failed);
+    if (failed) std::fprintf(stderr, "saga mem: recall unavailable for one or more namespaces\n");
+    if (hits.empty() && !failed) std::printf("(no memories in %s match)\n", ns.c_str());
     for (auto& m : hits) std::printf("- %s  [distance %.2f, blob %s]\n", m.text.c_str(), m.distance, m.blob_id.c_str());
-    return 0;
+    return failed ? 1 : 0;
   }
   if (op == "remember") {
     if (ns.starts_with("harness:")) {
       std::fprintf(stderr, "saga mem: harness:* namespaces are written by the harness only\n");
       return 2;
     }
-    auto st = mw.wait(mw.remember(a.pos[1], ns), std::chrono::seconds(90));
-    std::printf("%s %s blob=%s\n", st.status.c_str(), ns.c_str(), st.blob_id.c_str());
-    return st.done() ? 0 : 1;
+    memwal::Store store(&mw, true);
+    const auto target = memwal::knowledge_uid(ns);
+    if (!target) { std::fputs("saga mem: remember uses a user's shared namespace\n", stderr); return 2; }
+    auto result = store.remember(*target, a.pos[1], "fact", env::get("SAGA_AGENT"), env::get("SAGA_SESSION"));
+    if (!result.value("ok", false)) { std::fprintf(stderr, "%s\n", result.value("error", "not stored").c_str()); return 1; }
+    store.flush(std::chrono::seconds(90));
+    for (const auto& m : store.local_memories(memwal::shared_namespace(*target)))
+      if (m.id == result.value("id", "")) {
+        std::printf("%s %s blob=%s\n", m.status.c_str(), memwal::shared_namespace(*target).c_str(), m.blob_id.c_str());
+        return m.status == "done" ? 0 : 1;
+      }
+    return 1;
   }
   std::fprintf(stderr, "saga mem: unknown op %s\n", op.c_str());
   return 2;
@@ -477,7 +477,7 @@ int cmd_serve(const Args& a) {
 
 void usage() {
   std::puts(
-      "saga — self-improving multi-agent harness with native Walrus Memory\n\n"
+      "saga — multi-agent harness with shared Walrus Memory\n\n"
       "usage: saga <command> [flags]\n"
       "  serve   [--host H --port P] [--no-memory]  web UI (default http://127.0.0.1:8080)\n"
       "          [--accounts host|user] [--wallet-only] [--allow 0x…,0x…] [--trace]\n"
@@ -489,7 +489,6 @@ void usage() {
       "  stats   [user…]                             memories/blobs per namespace\n"
       "  restore <namespace…> [--limit N]            rebuild relayer index from Walrus\n"
       "  ab      [--out FILE]                        before/after memory experiment\n"
-      "  evolve  \"critique\"… [--user NAME]          evolve the playbook now, replay-gated\n"
       "  mem     recall|remember \"text\" [--ns NS]    memory API used by agents from their shell\n"
       "  mcp                                         the same memory as MCP tools (stdio), for agents\n\n"
       "common: --config saga.json  --workspaces DIR");
@@ -511,7 +510,6 @@ int main(int argc, char** argv) {
     if (a.cmd == "stats") return cmd_stats(a);
     if (a.cmd == "restore") return cmd_restore(a);
     if (a.cmd == "ab") return cmd_ab(a);
-    if (a.cmd == "evolve") return cmd_evolve(a);
     if (a.cmd == "mem") return cmd_mem(a);
     if (a.cmd == "mcp") return cmd_mcp(a);
     usage();

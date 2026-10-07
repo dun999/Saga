@@ -39,14 +39,6 @@ std::string read_line(int fd, size_t max_bytes = kMaxLine, int timeout_ms = 1200
   return nl == std::string::npos || nl > max_bytes ? std::string{} : s.substr(0, nl);
 }
 
-bool content_namespace(const std::string& uid, const std::string& ns) {
-  const std::string prefix = "u:" + uid + ":";
-  if (!ns.starts_with(prefix)) return false;
-  const std::string suffix = ns.substr(prefix.size());
-  return suffix == "facts" || suffix == "episodes" || suffix == "chat" || suffix == "checkpoints" ||
-         suffix == "skills" || (suffix.starts_with("lessons:") && suffix.size() > 8);
-}
-
 bool write_all(int fd, const std::string& s) {
   size_t off = 0;
   while (off < s.size()) {
@@ -67,11 +59,27 @@ json gate_request(Client& client, const json& req, Store* store) {
     if (ns.starts_with("harness:")) return {{"ok", false}, {"error", "harness:* namespaces are written by the harness only"}};
     const std::string text = req.value("text", "");
     if (text.empty() || text.size() > 32000) return {{"ok", false}, {"error", "text required"}};
+    const auto uid = knowledge_uid(ns);
+    if (uid) {
+      if (!store || !store->enabled()) return {{"ok", false}, {"error", "shared memory store is unavailable"}};
+      auto result = store->remember(*uid, text, req.value("kind", "fact"), req.value("agent", ""),
+                                    req.value("session", ""));
+      if (result.value("ok", false) && req.value("wait", false)) {
+        store->flush(std::chrono::seconds(90));
+        for (const auto& m : store->local_memories(shared_namespace(*uid)))
+          if (m.id == result.value("id", "")) {
+            result["status"] = m.status;
+            result["blob_id"] = m.blob_id;
+          }
+      }
+      return result;
+    }
+    if (ns.starts_with("u:")) return {{"ok", false}, {"error", "user memory writes use the shared namespace"}};
     if (store && store->enabled() && !req.value("wait", true)) {
       // Same refusal as the client's, answered now rather than from the worker's log.
       if (const StorageText safe = prepare_for_storage(text); !safe.ok)
         return {{"ok", false}, {"error", safe.error.empty() ? "memory record refused" : safe.error}};
-      store->put(ns, "memory", text);
+      if (!store->put(ns, "memory", text)) return {{"ok", false}, {"error", "memory queue is full"}};
       return {{"ok", true}, {"status", "queued"}, {"ns", ns}};
     }
     const auto st = client.wait(client.remember(text, ns), std::chrono::seconds(90));
@@ -84,9 +92,15 @@ json gate_request(Client& client, const json& req, Store* store) {
     if (limit < 1) limit = 1;
     if (limit > 20) limit = 20;
     json hits = json::array();
-    for (auto& m : client.recall(query, ns, {.limit = limit}))
-      hits.push_back({{"text", m.text}, {"distance", m.distance}, {"blob_id", m.blob_id}});
-    return {{"ok", true}, {"hits", hits}};
+    bool failed = false;
+    const RecallOptions options{.limit = limit, .recent = req.value("recent", false)};
+    const auto memories = store && store->enabled() ? store->recall(query, ns, options, &failed)
+                                                   : client.recall(query, ns, options);
+    for (auto& m : memories)
+      hits.push_back({{"text", m.text}, {"distance", m.local ? json(nullptr) : json(m.distance)},
+                      {"blob_id", m.blob_id}, {"namespace", m.namespace_}, {"kind", m.kind},
+                      {"agent", m.agent}, {"id", m.id}, {"status", m.status}, {"local", m.local}});
+    return {{"ok", !failed}, {"hits", hits}, {"error", failed ? "recall unavailable for one or more namespaces" : ""}};
   }
   return {{"ok", false}, {"error", "unknown op"}};
 }

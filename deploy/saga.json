@@ -1,10 +1,9 @@
 {
   // usesaga.xyz. Wallet users connect their own Claude, ChatGPT (Codex) or Grok account; username
   // accounts add their own API agents ("+" in Agents) under their own @name and key. The built-in
-  // assistant is also the brain, so reflection works for everyone without a provider login.
+  // assistant answers unmentioned requests; all agents share the same knowledge.
   // The CLIs go in /usr/local/bin (sandboxes see /usr read-only). Install as /etc/saga/saga.json.
   "primary": "saga",
-  "brain": "saga",
   "agents": [
     {"name": "saga", "kind": "openai", "base_url": "https://api.inference.boundless.network/v1", "model": "dsv4",
      "api_key_env": "BOUNDLESS_API_KEY", "locked": true, "description": "Saga: the built-in assistant, ready for everyone"},

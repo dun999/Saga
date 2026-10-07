@@ -31,6 +31,9 @@ struct Memory {
   double distance = 0;
   std::optional<double> score;
   std::string created_at;  // optional RFC3339 write time, returned by newer relayers
+  std::string id, kind, agent, session, namespace_;
+  std::string status = "done";
+  bool local = false;     // available in this process; not a semantic match from the relayer
 };
 
 struct JobStatus {

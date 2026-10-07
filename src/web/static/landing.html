@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Saga — a harness that remembers, on Walrus</title>
-<meta name="description" content="A chatbot harness with native Walrus memory, built in C++. Hand work between Claude Code, Codex and Grok with @mentions; everything Saga learns lives on Walrus mainnet.">
+<meta name="description" content="A chatbot harness with native Walrus memory, built in C++. Hand work between Claude Code, Codex and Grok with @mentions; the team shares durable knowledge on Walrus mainnet.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232F2F31'/%3E%3Cellipse cx='16' cy='16.5' rx='14' ry='4.2' transform='rotate(-20 16 16.5)' fill='none' stroke='%2392A9E1' stroke-width='1.3'/%3E%3Ccircle cx='16' cy='16.5' r='5.5' fill='%23EBE1CC'/%3E%3Ccircle cx='27' cy='13' r='2' fill='%23D9E2F8'/%3E%3C/svg%3E">
 <script src="/brand.js" defer></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -318,7 +318,7 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
     <div class="hero-orb" aria-hidden="true"></div>
     <div class="col" style="position:relative">
       <h1><span class="ln"><span style="animation-delay:.05s">Harness that</span></span><span class="ln"><span class="tw" id="tw" style="animation-delay:.16s">remembers</span></span></h1>
-      <p class="lede rise" style="animation-delay:.34s">Walrus memory, native. Saga is a chatbot harness where everything it learns — who you are, what was built, how to do it better — lives as encrypted blobs on Walrus mainnet. Bring the agents you already use and hand work between <span class="ag ag-claude">@claude</span>, <span class="ag ag-codex">@codex</span> and <span class="ag ag-grok">@grok</span> with a mention.</p>
+      <p class="lede rise" style="animation-delay:.34s">Walrus memory, native. Saga is a chatbot harness where your agents share facts, decisions and corrections as encrypted blobs on Walrus mainnet. Bring the agents you already use and hand work between <span class="ag ag-claude">@claude</span>, <span class="ag ag-codex">@codex</span> and <span class="ag ag-grok">@grok</span> with a mention.</p>
       <div class="cta rise" style="animation-delay:.44s">
         <a class="btn btn-dark" href="/app">Start chatting <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
         <a class="btn btn-soft" href="/llms.txt">llms.txt</a>
@@ -360,7 +360,7 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
     <ol class="steps">
       <li class="s-graphite"><span class="n">01</span><h4>Connect your agents</h4><p>Sign in to Claude Code, Codex or Grok once — Saga shows each provider's own 5-hour and weekly limits — or add an API key with <b>＋</b>.</p></li>
       <li class="s-lavender"><span class="n">02</span><h4>Chat and mention</h4><p>Write what you want. <b>@codex</b> the backend, <b>@grok</b> the review. Agents can hand off to each other too.</p></li>
-      <li class="s-line"><span class="n">03</span><h4>It remembers, and gets better</h4><p>Facts, transcripts, file checkpoints and lessons land on Walrus as they happen. A <span class="i-up"></span> or <span class="i-down"></span> rating becomes a lesson; three critiques evolve the system prompt. Restart anywhere — <code>saga serve</code> picks up where you left off.</p></li>
+      <li class="s-line"><span class="n">03</span><h4>It remembers together</h4><p>Every teammate shares your facts, decisions and corrections. New knowledge reaches the next agent while its Walrus write is queued. Confirmed records survive a restart, with transcripts and partial file checkpoints available separately.</p></li>
     </ol>
   </section>
 
@@ -376,10 +376,10 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
   <section class="col head" id="faq">
     <h2>Questions worth asking first.</h2>
     <div class="faq">
-      <details open><summary>Is there really no database?</summary><div class="a">Saga itself stores nothing locally except your config. Every memory is SEAL-encrypted by the Walrus Memory relayer and written to Walrus mainnet as a blob owned by a Sui account. The relayer keeps a search index over those blobs, and Saga rebuilds it from Walrus with <code>restore</code> at boot — Walrus is the record.</div></details>
+      <details open><summary>Is there really no database?</summary><div class="a">Saga has no application database. It keeps local workspaces, agent homes and optionally encrypted credentials. Every memory is SEAL-encrypted by the Walrus Memory relayer and written to Walrus mainnet as a blob owned by a Sui account. The relayer keeps a search index over those blobs, and <code>saga restore</code> can rebuild it from Walrus — Walrus is the record.</div></details>
       <details><summary>Which agents can I use?</summary><div class="a">Claude Code, OpenAI Codex and Grok Build through their own CLIs and your existing subscriptions, plus any OpenAI-compatible API — OpenRouter, xAI, Groq, OpenAI, or a local model through Ollama or llama.cpp. Mention any of them with @.</div></details>
       <details><summary>What happens when an agent hits its limit?</summary><div class="a">Saga reads each provider's own usage windows. When one is exhausted — or the CLI isn't signed in, or the API is unreachable — the step is handed to your primary agent, and the chat shows the fallback so you always get a result.</div></details>
-      <details><summary>How does it actually improve?</summary><div class="a">After a rating, a reflection pass reads the full trace and writes lessons for the agent involved. Successful multi-agent procedures become reusable skills. Critiques accumulate, and the system prompt evolves; each version is scored by your ratings and served by Thompson sampling, so a bad mutation loses traffic by itself.</div></details>
+      <details><summary>How does it actually improve?</summary><div class="a">Your feedback comment becomes shared knowledge. Another teammate can recall that correction and apply it to related work. The foundation prompt stays fixed; personalization comes from your preferences, decisions and experience.</div></details>
       <details><summary>Where do my API keys and sign-ins go?</summary><div class="a">Personal connections saved through Saga are encrypted with a separate key for your wallet and provider. Remembered credentials stay encrypted on the server; the vault key is held in memory while unlocked or in use. Host account mode instead uses the machine's CLI logins, shared across Saga users regardless of namespace. Disconnect removes a personal credential from Saga or signs the shared host CLI out; provider revocation and memory deletion are separate. See this server's mode and details in <a href="/privacy">Privacy &amp; cookies</a>.</div></details>
       <details><summary>Why C++?</summary><div class="a">One small binary with no runtime to install. Saga speaks the Walrus Memory protocol natively — Ed25519 request signing and SEAL session keys over libsodium — and its crypto is tested byte-for-byte against the official SDK.</div></details>
     </div>
@@ -437,7 +437,7 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
   /* ---- research: what each paper is, and what Saga takes from it ---- */
   const PAPERS = [
     ["ReAct", "Reasoning interleaved with actions — the loop every agent runs.", "2210.03629"],
-    ["Reflexion", "Agents learn from verbal feedback — Saga's per-agent lessons.", "2303.11366"],
+    ["Reflexion", "Verbal feedback as useful guidance for later work.", "2303.11366"],
     ["Voyager", "A growing library of reusable skills.", "2305.16291"],
     ["MemGPT", "LLMs managing their own tiered memory.", "2310.08560"],
     ["Multi-Agent Collaboration", "Addressable agents with roles — here, @mentions.", "2306.03314"],
@@ -462,13 +462,13 @@ footer { margin-top: 110px; background: var(--panel); padding-top: 6vw; overflow
   const glyph = d => `<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
   const CARDS = [
     {eb: "Memory · on Walrus", art: WALRUS, ...LAVENDER, title: "It knows you the second time.",
-     body: "Every message is distilled into facts stored as encrypted blobs on Walrus mainnet. Next week, on another machine, Saga already knows you write Rust and want terse answers — and so does every agent you mention."},
+     body: "Agents propose useful facts and decisions into one shared knowledge namespace. Once Walrus confirms them, every teammate can recall them in a later chat under the same identity."},
     {eb: "Handoff", art: glyph('<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>'), ...GRAPHITE, title: "Agents that pass the baton.",
      body: "Split work with a mention. A shared blackboard means @codex reads what @claude built and why, instead of starting cold. Agents can hand off to each other on their own."},
     {eb: "Checkpoints", art: glyph('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>'), ...LAVENDER, title: "Work you can restore anywhere.",
-     body: "Every file an agent changes is snapshotted to Walrus as it happens. Wipe the machine, open the chat, press restore — the workspace comes back from the network."},
-    {eb: "Self-improving", art: glyph('<path d="M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8"/>'), ...GRAPHITE, title: "A harness that rewrites itself.",
-     body: "Ratings become per-agent lessons, good runs become skills, and critiques evolve the system prompt. The model's weights stay fixed; the harness around them keeps getting better."},
+     body: "Eligible text files become size-limited checkpoints on Walrus. Open the chat and press restore to recover their saved contents. Checkpoints are partial snapshots, not a full workspace backup."},
+    {eb: "Shared corrections", art: glyph('<path d="M6 16c5 0 7-8 12-8a4 4 0 0 1 0 8c-5 0-7-8-12-8a4 4 0 1 0 0 8"/>'), ...GRAPHITE, title: "Tell one agent. Help the whole team.",
+     body: "A feedback comment becomes a correction every teammate can use. The same knowledge follows the task between models and conversations, with the foundation prompt kept stable."},
   ];
   const stack = $("#stack");
   stack.innerHTML = CARDS.map((c, i) => `<div class="pin"><article class="card${i % 2 ? " flip" : ""}" style="--bg:${c.bg};color:${c.ink};top:${i * 24}px">

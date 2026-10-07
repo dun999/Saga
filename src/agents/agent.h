@@ -105,7 +105,7 @@ class Agent {
   // True when a provider window is known to be exhausted; `why` explains.
   bool exhausted(const sandbox::Sandbox* sb = nullptr, std::string* why = nullptr);
 
-  // Tool-free single completion, used by the harness "brain" for reflection/evolution.
+  // Tool-free single completion, used by the before/after memory experiment.
   virtual Result complete(const std::string& system, const std::string& prompt,
                           const sandbox::Sandbox* sb = nullptr) {
     Task t{prompt, system, sb ? sandbox::kWork : "", sb && sb->cancel ? sb->cancel.get() : nullptr, 300, {}, sb};

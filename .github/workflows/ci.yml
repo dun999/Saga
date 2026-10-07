@@ -27,6 +27,8 @@ jobs:
         run: cmake -S . -B build -G Ninja
       - name: Build
         run: cmake --build build
+      - name: Shared memory regressions
+        run: ctest --test-dir build --output-on-failure
       - name: Smoke test
         run: ./build/saga help
 
@@ -42,6 +44,8 @@ jobs:
         run: cmake -S . -B build -G Ninja
       - name: Build
         run: cmake --build build -- -k 0
+      - name: Shared memory regressions
+        run: ctest --test-dir build --output-on-failure
       - name: Smoke test
         run: |
           ./build/saga help

@@ -1,7 +1,7 @@
 #pragma once
 // The Saga harness: memory-grounded context assembly, @mention routing across agents with a shared
-// blackboard, and an online self-improvement loop (Reflexion lessons, Voyager skills, GEPA prompts).
-// Every durable artifact — transcripts, work checkpoints, lessons, prompts — is a Walrus blob.
+// blackboard and one shared knowledge namespace per user.
+// Every durable memory, transcript and work checkpoint is a Walrus blob.
 #include <atomic>
 #include <functional>
 #include <future>
@@ -32,7 +32,6 @@ struct Options {
   std::string saga_bin;       // absolute path of this binary, for `saga mem` inside agents
   int max_steps = 6;          // total agent runs per turn, handoffs included
   bool trace = false;         // print each turn's phases and timings to stderr
-  int evolve_every = 3;       // negative critiques before a prompt mutation
   int agent_timeout_s = 900;
   std::string keys_path;      // own API keys (0600 file on this host, never in memory)
   // Bring-your-own accounts: each user signs in to Claude / Codex / Grok with their own account,
@@ -45,7 +44,7 @@ struct Options {
   // Runs of built-in agents that spend the operator's own keys, shared by every signed-in user.
   // 0 disables the cap. A user's own OpenAI agent, and a user-mode CLI on their sandbox login, are not counted.
   int operator_daily_runs = 1000;
-  int max_background = 32;                 // reflections, sign-ins, and evolution waiting to run
+  int max_background = 32;                 // provider sign-ins and other background work
 };
 
 struct Step {
@@ -63,13 +62,10 @@ struct Turn {
   std::vector<std::string> recalled;  // memories that shaped this turn (shown in UI / article)
   json recall_sources = json::array();  // recall batches, preserved with the transcript on Walrus
   std::string history;                // the last few exchanges of this chat, for follow-ups
-  int rating = 0;            // last signal: +1 / -1, from the user or implicit
+  int rating = 0;            // explicit user rating for this turn
   bool user_rated = false;
   std::atomic<bool> done{false};  // set by the turn's thread, read by the next turn and by feedback
   std::time_t started = 0;
-  // Playbook rules and lessons that were in the agents' context, as credit ids ("b3", "lesson:<blob>")
-  // with their text, so reflection can say which ones helped or hurt.
-  std::vector<std::pair<std::string, std::string>> in_context;
   secrets::Key vault;  // cleared when the turn finishes
   std::shared_ptr<memwal::SecretScope> sensitive;
   std::shared_ptr<std::atomic<bool>> session_cancel;
@@ -90,9 +86,9 @@ std::string memory_protocol(const std::string& uid, const std::string& agent, bo
 class Harness {
  public:
   Harness(agents::Registry& reg, memwal::Store& store, Options opt);
-  ~Harness();  // waits for background reflection
+  ~Harness();  // waits for background work
 
-  void boot(const Emit& log = nullptr);  // restore hot namespaces + load prompt population
+  void boot(const Emit& log = nullptr);
   std::string chat(const std::string& uid, const std::string& session, const std::string& message,
                    const Emit& emit, const secrets::Key& vault = {});       // returns turn id
   // Only the user who ran a turn can rate or cancel it.
@@ -101,13 +97,8 @@ class Harness {
   bool cancel(const std::string& uid, const std::string& turn_id);
   void cancel_active(const std::string& uid);  // logout: stop this user's live turns and sign-ins
   void end_session(const std::string& uid);  // also discard connections the user did not remember
-  // Queue critiques and run one evolution now, replayed on this user's rated turns (`saga evolve`).
-  json evolve_now(const std::string& uid, const std::vector<std::string>& critiques);
-
-  // Read-side views, all served from Walrus Memory.
-  // `parts` picks among facts, episodes, lessons, skills, improvements, prompts; empty = all. Each
-  // part is a relayer read, so the UI asks only for what a confirmed write changed.
-  json memory_view(const std::string& uid, const std::string& query, const std::set<std::string>& parts = {});
+  // Shared knowledge plus legacy content, with original blob IDs preserved for provenance.
+  json memory_view(const std::string& uid, const std::string& query);
   json memory_stats(const std::string& uid);  // {blobs, bytes}: everything this user has on Walrus
   json chat_history(const std::string& uid);
   json chat_transcript(const std::string& uid, const std::string& session);
@@ -167,37 +158,21 @@ class Harness {
   bool user_accounts() const { return opt_.user_accounts; }
   agents::Registry& registry() { return reg_; }
   memwal::Store& store() { return store_; }
-  PromptPool& prompts(const std::string& uid);
 
  private:
-  // `background`: the user's nearest other facts, given when few match the message (see chat()).
-  std::string build_context(Turn& t, const agents::Agent& agent, const std::string& lesson_query,
-                            const std::vector<memwal::Memory>& facts, const std::vector<memwal::Memory>& background,
-                            const std::vector<memwal::Memory>& episodes,
-                            const std::vector<memwal::Memory>& skills, std::vector<memwal::Memory> lessons,
-                            bool lessons_failed, const Emit& emit);
+  std::string build_context(Turn& t, const agents::Agent& agent,
+                            const std::vector<memwal::Memory>& memories, const Emit& emit);
   // Memory reads run beside the turn, never in front of it: a slow relayer can't hold a reply hostage.
   struct PendingRecall;
   std::shared_ptr<PendingRecall> recall_async(std::string query, std::string ns, memwal::RecallOptions opt);
   void run_step(Turn& t, Step& s, const std::function<std::string(const agents::Agent&)>& context_for,
                 const Emit& emit);
   void apply_directives(Turn& t, const Step& s, const Emit& emit);
-  json reflect(const Turn& t, int rating, const std::string& comment, const secrets::Key& vault,
-               const std::shared_ptr<std::atomic<bool>>& cancelled);
-  // One learning signal on a finished turn: scores its prompt version, keeps it as a replay case, reflects.
-  json rate(const std::shared_ptr<Turn>& t, int rating, const std::string& comment, bool implicit,
-            const secrets::Key& vault, const std::shared_ptr<std::atomic<bool>>& cancelled);
-  void rate_later(const std::shared_ptr<Turn>& t, int rating, const std::string& why,
-                  const secrets::Key& vault);  // implicit signal
-  void evolve_in_background(const std::string& uid, const secrets::Key& vault,
-                            const std::shared_ptr<std::atomic<bool>>& cancelled);
   std::shared_ptr<std::atomic<bool>> operation_cancel(const std::string& uid);
   json account_keys();
   bool save_connection(const std::string& uid, const std::string& provider, const json& slot,
                        bool remember, bool api = false, const std::atomic<bool>* cancelled = nullptr);
   bool forget_connection(const std::string& uid, const std::string& provider, bool api = false);
-  std::vector<ReplayCase> replay_cases(const std::string& uid);
-  std::shared_ptr<Turn> last_turn(const std::string& uid, const std::string& session);
   std::string session_history(const std::string& uid, const std::string& session);
   void seed_user(const std::string& uid);
   std::string github_token(const std::string& uid, const secrets::Key& vault);
@@ -219,15 +194,6 @@ class Harness {
   agents::Registry& reg_;
   memwal::Store& store_;
   Options opt_;
-  struct Learning {
-    PromptPool pool;
-    std::once_flag loaded;
-    std::atomic<bool> evolving{false};
-    Learning(memwal::Store& store, const std::string& uid) : pool(store, ns_user(uid, "learning")) {}
-  };
-  Learning& learning_for(const std::string& uid);
-  std::mutex learning_mu_;
-  std::map<std::string, std::unique_ptr<Learning>> learning_;
   mutable std::mutex mu_;
   std::map<std::string, std::shared_ptr<std::atomic<bool>>> active_contexts_;
   std::mutex credentials_mu_;

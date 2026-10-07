@@ -9,12 +9,10 @@ namespace {
 
 const char* kDefaults = R"({
   "primary": "claude",
-  "brain": "claude-brain",
   "agents": [
     {"name": "claude", "kind": "claude-code", "description": "Claude Code: generalist, frontend, refactors, writing"},
     {"name": "codex",  "kind": "codex", "model": "gpt-6.1-sol", "effort": "high", "description": "OpenAI Codex CLI: backend services, scripts, tests"},
-    {"name": "grok",   "kind": "grok-cli", "description": "Grok Build CLI: fast iteration, reviews, research"},
-    {"name": "claude-brain", "kind": "claude-code", "model": "sonnet", "description": "internal: reflection and prompt evolution"}
+    {"name": "grok",   "kind": "grok-cli", "description": "Grok Build CLI: fast iteration, reviews, research"}
   ]
 })";
 
@@ -27,7 +25,7 @@ std::string lower(std::string s) {
 
 Registry::Registry(Registry&& o) noexcept
     : agents_(std::move(o.agents_)), retired_(std::move(o.retired_)), order_(std::move(o.order_)),
-      primary_(std::move(o.primary_)), brain_(std::move(o.brain_)) {}
+      primary_(std::move(o.primary_)) {}
 
 Registry Registry::load(const std::string& path) {
   json cfg;
@@ -36,6 +34,8 @@ Registry Registry::load(const std::string& path) {
 
   Registry r;
   for (auto& a : cfg.value("agents", json::array())) {
+    // Compatibility with configs that still contain the former internal learning agent.
+    if (a.value("name", "") == cfg.value("brain", "") && a.value("name", "") != cfg.value("primary", "")) continue;
     Spec s = spec_from_json(a);
     s.name = lower(s.name);
     s.owner.clear();
@@ -43,9 +43,7 @@ Registry Registry::load(const std::string& path) {
     r.agents_[s.name] = make_agent(s);
   }
   r.primary_ = lower(cfg.value("primary", r.order_.empty() ? "" : r.order_.front()));
-  r.brain_ = lower(cfg.value("brain", r.primary_));
   if (!r.find(r.primary_)) throw std::runtime_error("primary agent '" + r.primary_ + "' is not configured");
-  if (!r.find(r.brain_)) throw std::runtime_error("brain agent '" + r.brain_ + "' is not configured");
   return r;
 }
 
@@ -78,14 +76,13 @@ std::vector<Agent*> Registry::visible(const std::string& uid) const {
 std::vector<std::string> Registry::names(const std::string& uid) const {
   std::vector<std::string> out;
   for (auto* a : visible(uid))
-    if (!is_internal(a)) out.push_back(a->name());
+    out.push_back(a->name());
   return out;
 }
 
 json Registry::roster(const std::string& uid) const {
   json arr = json::array();
   for (auto* a : visible(uid)) {
-    if (is_internal(a)) continue;
     arr.push_back({{"name", a->name()},
                    {"kind", a->spec().kind},
                    {"model", a->spec().locked ? "" : a->spec().model},

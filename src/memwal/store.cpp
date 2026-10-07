@@ -2,6 +2,8 @@
 
 #include <cstdio>
 #include <future>
+#include <algorithm>
+#include <cctype>
 
 #include "memwal/redact.h"
 
@@ -15,10 +17,51 @@ int64_t now_s() {
 
 void log_err(const char* what, const std::exception& e) { std::fprintf(stderr, "[memory] %s: %s\n", what, e.what()); }
 
+std::string normalized(std::string_view text) {
+  std::string out;
+  bool space = false;
+  for (unsigned char c : text) {
+    if (std::isspace(c)) { space = !out.empty(); continue; }
+    if (space) out += ' ';
+    out += static_cast<char>(c);
+    space = false;
+  }
+  return out;
+}
+
+std::string memory_id(const std::string& kind, const std::string& text) {
+  return "m-" + crypto::sha256_hex(kind + "\n" + normalized(text)).substr(0, 32);
+}
+
+Memory unpack(Memory m, const std::string& ns) {
+  m.namespace_ = ns;
+  if (auto r = decode_record(m.text, "memory"); r && r->is_object()) {
+    auto str = [&](const char* key, const std::string& fallback = "") {
+      return r->contains(key) && (*r)[key].is_string() ? (*r)[key].get<std::string>() : fallback;
+    };
+    m.text = str("text");
+    m.kind = str("kind", "fact");
+    m.agent = str("agent");
+    m.session = str("session");
+    m.id = memory_id(m.kind, m.text);
+  } else if (auto uid = shared_uid(ns); uid) {
+    m.kind = "fact";  // tolerate plain memories written by an older client
+  } else {
+    const auto suffix = ns.substr(ns.find_last_of(':') + 1);
+    m.kind = ns.find(":lessons:") != std::string::npos ? "lesson" :
+             suffix == "episodes" ? "episode" : suffix == "skills" ? "skill" : "fact";
+  }
+  if (m.id.empty()) m.id = memory_id(m.kind, m.text);
+  return m;
+}
+
 }  // namespace
 
 json WriteRecord::to_json() const {
-  return {{"namespace", ns}, {"kind", kind}, {"text", text.substr(0, 240)}, {"job_id", job_id},
+  const auto record = decode_record(text, "memory");
+  const auto excerpt = record && record->is_object() && record->contains("text") && (*record)["text"].is_string()
+                           ? (*record)["text"].get<std::string>() : text;
+  return {{"namespace", ns}, {"kind", kind}, {"text", excerpt.substr(0, 240)}, {"job_id", job_id},
           {"blob_id", blob_id}, {"status", status}, {"error", error}, {"ts", ts}, {"ref", ref}};
 }
 
@@ -50,9 +93,9 @@ Store::~Store() {
   if (enabled()) client_->set_background_stop(nullptr);
 }
 
-void Store::put(const std::string& ns, const std::string& kind, const std::string& text, const std::string& ref,
+bool Store::put(const std::string& ns, const std::string& kind, const std::string& text, const std::string& ref,
                 const std::string& owner) {
-  if (!enabled() || text.empty()) return;
+  if (!enabled() || text.empty()) return false;
   // Agent output, checkpoints, and direct memory calls all land here, past the web field limits.
   // Refuse before the queue: the logged text is the placeholder, never the original.
   constexpr size_t kMaxQueued = 200;
@@ -67,6 +110,11 @@ void Store::put(const std::string& ns, const std::string& kind, const std::strin
   bool queued = false;
   {
     std::lock_guard lk(mu_);
+    if (shared_uid(ns) && prepared.ok) {
+      const auto m = unpack(Memory{.text = prepared.text}, ns);
+      for (const auto& [space, known] : local_)
+        if (space == ns && known.id == m.id) return true;
+    }
     if (!prepared.ok) {
       r.status = "failed";
       r.error = prepared.error;
@@ -77,21 +125,124 @@ void Store::put(const std::string& ns, const std::string& kind, const std::strin
       log_.push_back(r);
     } else {
       queue_.push_back(r);
+      update_local(r);
       queued = true;
     }
   }
   notify(r);
   if (queued) cv_.notify_all();
+  return queued;
 }
 
-void Store::analyze(const std::string& ns, const std::string& text) {
-  if (!enabled() || text.size() < 12) return;
-  put(ns, "analyze", text);  // worker routes kind=analyze to /api/analyze
+json Store::remember(const std::string& uid, const std::string& text, const std::string& kind,
+                     const std::string& agent, const std::string& session, const std::string& ref) {
+  const std::string ns = shared_namespace(uid);
+  if (!enabled()) return {{"ok", false}, {"error", "memory is disabled"}};
+  if (kind != "fact" && kind != "correction" && kind != "episode" && kind != "lesson" && kind != "skill")
+    return {{"ok", false}, {"error", "unsupported memory kind"}};
+  if (text.empty() || text.size() > 32000) return {{"ok", false}, {"error", "text required (at most 32000 bytes)"}};
+  const auto safe = prepare_for_storage(text);
+  if (!safe.ok || safe.found || normalized(safe.text).empty())
+    return {{"ok", false}, {"error", "memory proposal contained a secret or invalid text"}};
+  const auto id = memory_id(kind, safe.text);
+  const auto record = encode_record("memory", {{"id", id}, {"kind", kind}, {"text", safe.text},
+      {"agent", agent}, {"session", session}, {"ts", now_s()}});
+  if (!put(ns, kind, record, ref, uid)) return {{"ok", false}, {"error", "memory queue is full"}};
+  for (const auto& m : local_memories(ns))
+    if (m.id == id) return {{"ok", true}, {"ns", ns}, {"id", id}, {"status", m.status}, {"blob_id", m.blob_id}};
+  return {{"ok", true}, {"ns", ns}, {"id", id}, {"status", "queued"}};
+}
+
+void Store::update_local(const WriteRecord& r) {
+  if (!shared_uid(r.ns)) return;
+  auto m = unpack(Memory{.text = r.text}, r.ns);
+  std::erase_if(local_, [&](const auto& item) { return item.first == r.ns && item.second.id == m.id; });
+  if (r.status == "failed") return;
+  m.status = r.status;
+  m.blob_id = r.blob_id;
+  m.local = true;
+  local_.emplace_back(r.ns, std::move(m));
+  constexpr size_t kMaxLocal = 256;
+  while (local_.size() > kMaxLocal) local_.pop_front();
+}
+
+std::vector<Memory> Store::local_memories(const std::string& ns) const {
+  std::lock_guard lk(mu_);
+  std::vector<Memory> out;
+  for (auto it = local_.rbegin(); it != local_.rend(); ++it)
+    if (it->first == ns) out.push_back(it->second);
+  return out;
+}
+
+void Store::legacy_agents(const std::vector<std::string>& names) {
+  std::lock_guard lk(mu_);
+  legacy_agents_.insert(names.begin(), names.end());
+}
+
+std::vector<std::string> Store::legacy_namespaces(const std::string& uid) {
+  // An inventory distinguishes new users (one shared read) from users with legacy knowledge.
+  // No data is copied or deleted: old blob IDs remain the sources, including removed agents.
+  std::call_once(namespaces_loaded_, [&] {
+    try {
+      std::set<std::string> spaces;
+      for (const auto& n : client_->namespaces().value("namespaces", json::array()))
+        spaces.insert(n.is_string() ? n.get<std::string>() : n.value("namespace", n.value("name", "")));
+      namespaces_ = std::move(spaces);
+    } catch (const std::exception&) { /* older relayers: use known content namespaces */ }
+  });
+  std::vector<std::string> out;
+  if (namespaces_) {
+    for (const auto& ns : *namespaces_) if (legacy_knowledge(uid, ns)) out.push_back(ns);
+  } else {
+    out = {user_namespace(uid, "facts"), user_namespace(uid, "episodes"), user_namespace(uid, "skills")};
+    std::lock_guard lk(mu_);
+    for (const auto& agent : legacy_agents_) out.push_back(user_namespace(uid, "lessons:" + agent));
+  }
+  return out;
 }
 
 std::vector<Memory> Store::recall(const std::string& query, const std::string& ns, const RecallOptions& opt,
                                   bool* failed) {
   if (!enabled() || query.empty()) return {};
+  const auto uid = shared_uid(ns);
+  if (!uid) return recall_one(query, ns, opt, failed);
+  std::vector<std::future<Recalled>> reads;
+  auto spaces = legacy_namespaces(*uid);
+  spaces.insert(spaces.begin(), ns);
+  for (const auto& space : spaces)
+    reads.push_back(std::async(std::launch::async, [&, space] {
+      Recalled r;
+      r.hits = recall_one(query, space, opt, &r.failed);
+      for (auto& m : r.hits) m = unpack(std::move(m), space);
+      return r;
+    }));
+  std::vector<Memory> hits;
+  for (auto& read : reads) {
+    auto r = read.get();
+    if (failed && r.failed) *failed = true;
+    for (auto& m : r.hits) hits.push_back(std::move(m));
+  }
+  std::stable_sort(hits.begin(), hits.end(), [&](const Memory& a, const Memory& b) {
+    if (opt.recent && a.created_at != b.created_at) return a.created_at > b.created_at;
+    return a.score.value_or(1 - a.distance) > b.score.value_or(1 - b.distance);
+  });
+  std::set<std::string> seen;
+  std::erase_if(hits, [&](const Memory& m) { return m.text.empty() || !seen.insert(m.id).second; });
+  auto local = local_memories(ns);
+  std::vector<Memory> fresh;
+  for (auto& m : local) {
+    if (seen.contains(m.id)) continue;
+    if (fresh.size() < 4) fresh.push_back(std::move(m));
+  }
+  if (hits.size() + fresh.size() > static_cast<size_t>(std::max(opt.limit, 1)))
+    hits.resize(std::max(opt.limit, 1) - std::min<int>(fresh.size(), std::max(opt.limit, 1)));
+  if (fresh.size() > static_cast<size_t>(std::max(opt.limit, 1))) fresh.resize(std::max(opt.limit, 1));
+  hits.insert(hits.end(), fresh.begin(), fresh.end());
+  return hits;
+}
+
+std::vector<Memory> Store::recall_one(const std::string& query, const std::string& ns, const RecallOptions& opt,
+                                     bool* failed) {
   // The same read already in flight (the chat list and a user's settings load both read their
   // transcripts when a page opens) is joined, not sent again: its answer is as fresh as a new one.
   const std::string key = json::array({ns, query, opt.limit, opt.max_distance ? *opt.max_distance : -1.0, opt.recent,
@@ -112,6 +263,7 @@ std::vector<Memory> Store::recall(const std::string& query, const std::string& n
     Recalled r;
     try {
       r.hits = client_->recall(query, ns, opt);
+      for (auto& m : r.hits) m.namespace_ = ns;
     } catch (const std::exception& e) {
       log_err(("recall " + ns).c_str(), e);
       r.failed = true;
@@ -173,7 +325,7 @@ bool Store::retry_later(WriteRecord& r) {
   const bool transient = r.error.find("navailable") != std::string::npos || r.error.find("imeout") != std::string::npos ||
                          r.error.find("timed out") != std::string::npos || r.error.find(" 50") != std::string::npos ||
                          r.error.find("onnection") != std::string::npos;
-  if (!transient || r.attempts + 1 >= kMaxAttempts || r.kind == "analyze") return false;
+  if (!transient || r.attempts + 1 >= kMaxAttempts) return false;
   WriteRecord again{.ns = r.ns, .kind = r.kind, .text = r.text, .ref = r.ref, .owner = r.owner, .ts = r.ts};
   again.attempts = r.attempts + 1;
   again.retry_at = std::time(nullptr) + (20L << r.attempts);  // 20s, 40s, 80s
@@ -220,27 +372,7 @@ void Store::worker() {
         if (r.attempts > 0)
           std::erase_if(log_, [&](const WriteRecord& o) { return o.status == "retrying" && o.ns == r.ns && o.text == r.text; });
     }
-    std::vector<WriteRecord> plain, submitted;
-    for (auto& r : batch) {
-      if (r.kind != "analyze") {
-        plain.push_back(std::move(r));
-        continue;
-      }
-      try {
-        auto res = client_->analyze(r.text, r.ns);
-        for (auto& f : res.value("facts", json::array())) {
-          WriteRecord fr = r;
-          fr.kind = "fact";
-          fr.text = f.value("text", "");
-          fr.job_id = f.value("job_id", f.value("id", ""));
-          fr.status = "running";
-          fr.submitted = clock::now();
-          submitted.push_back(fr);
-        }
-      } catch (const std::exception& e) {
-        log_err("analyze", e);
-      }
-    }
+    std::vector<WriteRecord> plain = std::move(batch), submitted;
     if (!plain.empty()) {
       std::vector<std::pair<std::string, std::string>> items;
       for (auto& r : plain) items.emplace_back(r.text, r.ns);
@@ -266,6 +398,7 @@ void Store::worker() {
     {
       std::lock_guard lk(mu_);
       log_.insert(log_.end(), submitted.begin(), submitted.end());
+      for (const auto& r : submitted) update_local(r);
       submitting_ = 0;
     }
     for (auto& r : submitted) notify(r);
@@ -302,6 +435,7 @@ void Store::worker() {
           r.error = s.error;
           if (r.status == "failed" && retry_later(r)) r.status = "retrying";
           if (r.status == "done") ++blobs_written_;
+          update_local(r);
           changed.push_back(r);
         }
       }

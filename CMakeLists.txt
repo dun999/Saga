@@ -73,15 +73,20 @@ target_compile_options(saga_core PRIVATE -Wall -Wextra -Wno-missing-field-initia
 add_executable(saga src/main.cpp)
 target_link_libraries(saga PRIVATE saga_core)
 
-# The test suite is kept out of the repository; when tests/ is present locally it is built too.
+# Shared-memory regressions are checked in; the larger local suite remains optional.
 file(GLOB SAGA_TEST_SOURCES CONFIGURE_DEPENDS tests/*.cpp)
-if(SAGA_TEST_SOURCES)
+if(SAGA_TEST_SOURCES OR EXISTS ${CMAKE_SOURCE_DIR}/tests/shared_memory/regression.cpp)
   FetchContent_Declare(doctest
     GIT_REPOSITORY https://github.com/doctest/doctest.git
     GIT_TAG 1da23a3e8119ec5cce4f9388e91b065e20bf06f5 # v2.4.12
     GIT_SHALLOW OFF)
   FetchContent_MakeAvailable(doctest)
   enable_testing()
+  add_executable(saga_memory_tests tests/shared_memory/regression.cpp)
+  target_link_libraries(saga_memory_tests PRIVATE saga_core doctest::doctest)
+  add_test(NAME saga_memory_tests COMMAND saga_memory_tests)
+endif()
+if(SAGA_TEST_SOURCES)
   add_executable(saga_tests ${SAGA_TEST_SOURCES})
   target_link_libraries(saga_tests PRIVATE saga_core doctest::doctest)
   add_test(NAME saga_tests COMMAND saga_tests)

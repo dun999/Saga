@@ -1,14 +1,14 @@
 # Saga
 
-**A multi-agent harness that remembers your work and learns from your feedback.**
+**Agents working together with shared memory on Walrus mainnet.**
 
 [![CI](https://github.com/dun999/Saga/actions/workflows/ci.yml/badge.svg)](https://github.com/dun999/Saga/actions/workflows/ci.yml)
 
-Saga brings Claude Code, Codex, Grok, and OpenAI-compatible models into one conversation, with shared memory stored on **Walrus mainnet**. You assign work through `@mentions`; Saga supplies the context, passes results between agents, and saves what happened. Feedback becomes lessons, reusable skills, and changes to the instructions that guide future work.
+Saga brings Claude Code, Codex, Grok, and OpenAI-compatible models into one conversation, with shared memory stored on **Walrus mainnet**. You assign work through `@mentions`; Saga supplies the context, passes results between agents, and saves what happened. Facts, decisions, corrections and handoff summaries go into one knowledge namespace for each user. Every teammate can use them.
 
 > @claude build a landing page for my coffee cart, then @codex add a menu API, and @grok review both
 
-Written in C++23 for the Walrus **“Chatbots That Remember”** hackathon, Saga applies ideas from **YC Paper Club: Harness Edition** and the research behind persistent memory, agent collaboration, and self-improving harnesses. See [Research lineage](#research-lineage) for the papers and how they inform the implementation.
+Written in C++23 for the Walrus **“Chatbots That Remember”** hackathon, Saga applies ideas from **YC Paper Club: Harness Edition** and the research behind persistent memory and agent collaboration. See [Research lineage](#research-lineage) for the design influences.
 
 **Run it locally:** [Try it](#try-it) builds Saga and opens the UI in a few minutes, without a Walrus account or an API key.
 
@@ -18,7 +18,7 @@ Working with several agents often means repeating the same context: what you are
 
 Saga gives that experience a shared home. Tell it that your project uses PostgreSQL, that you prefer short explanations, or that a previous deployment failed because a migration was missing. Those facts and lessons can be recalled when another agent picks up related work.
 
-The **harness** is the software around the models: it decides what to remember, what context to retrieve, which agent should act, and how feedback affects the next attempt. In Saga, this layer owns the accumulated experience. You can change the model behind an agent while retaining the relevant history, skills, and learned instructions.
+The **harness** is the software around the models: it decides what to remember, what context to retrieve, which agent should act, and how feedback affects the next attempt. In Saga, this layer owns the accumulated experience. You can change the model behind an agent while retaining the relevant history and shared knowledge.
 
 ## From a conversation to working software
 
@@ -32,7 +32,7 @@ The browser UI brings the workflow together:
 - **Connect your providers.** Use Claude, Codex, Grok, or an OpenAI-compatible endpoint with your own account.
 - **See what they built.** When agents leave a page (`index.html`) in the chat's workspace, a live preview opens beside the chat. It runs in a sandboxed origin, so the page's scripts can't see your session.
 - **Work on a repository.** Connect GitHub, select a repo, and let coding agents work in a chat workspace. Open a pull request from the resulting changes.
-- **Give feedback.** Rate an answer or explain what went wrong so Saga can reflect on the attempt.
+- **Give feedback.** Explain what went wrong so every teammate can recall the correction.
 - **See memory being saved.** Pending writes become links to Walrus blobs when storage is confirmed.
 
 Saga also provides terminal chat. Sui wallet sign-in, or a username with a password, gives browser users an identity across devices within a deployment; local guest usernames support trying it on your own machine.
@@ -41,23 +41,21 @@ Saga also provides terminal chat. Sui wallet sign-in, or a username with a passw
 
 ```mermaid
 flowchart TD
-    U[Your message and mentions] --> R[Recall facts, episodes, skills, and lessons]
-    W[(Memory on Walrus)] --> R
-    R --> C[Assemble context and select a prompt version]
-    C --> A[Run agents and pass results between them]
+    U[Your message and mentions] --> R[Recall shared knowledge]
+    W[(Walrus mainnet)] --> R
+    R --> C[Fixed foundation plus relevant context]
+    C --> A[Run agents in order with shared files and prior results]
     A --> O[Answer and workspace changes]
-    O --> M[Save conversation, task summary, and checkpoints]
+    A --> K[Propose useful facts and decisions]
+    K --> Q[Queue shared memory and expose it to the next agent]
+    O --> M[Save transcript, handoff summary and checkpoints]
+    O --> F[Your explicit correction]
+    F --> Q
+    Q --> W
     M --> W
-    O --> F[Your feedback and execution signals]
-    F --> L[Reflect and record lessons]
-    L --> W
-    L --> P[Propose playbook edits]
-    P --> E[Evaluate against past rated turns]
-    E --> V[Keep accepted prompt versions]
-    V --> C
 ```
 
-The checked-in [saga.json](saga.json) defines the agents and separates two responsibilities: the **primary agent** answers unmentioned requests, while the **brain** handles reflection and prompt evolution.
+The checked-in [saga.json](saga.json) defines the team. The **primary agent** answers unmentioned requests; there is no separate learning agent.
 
 | Agent | Backend | Role in the default configuration |
 |---|---|---|
@@ -65,25 +63,25 @@ The checked-in [saga.json](saga.json) defines the agents and separates two respo
 | `@claude` | Claude Code | Coding and workspace changes |
 | `@codex` | Codex CLI | Coding and workspace changes |
 | `@grok` | Grok CLI | Coding and workspace changes |
-| `claude-brain` | Claude Code, model `sonnet` | Internal reflection and prompt evolution |
 
 The OpenAI-compatible adapter supports streaming chat responses. Workspace editing and command execution come from the CLI agents. Additional API agents can be configured in `saga.json` or connected through the UI. If a teammate encounters a recognized quota, authentication, or connectivity failure, Saga attempts a fallback to the primary agent and shows the change.
 
 ## What Saga remembers
 
-Memory serves several purposes. Personal facts shape how an agent responds; episodes provide continuity; lessons help avoid repeating mistakes; skills preserve useful procedures.
+All reusable knowledge is written to **`u:<user>:shared`**. A record retains its type, author and session, so another agent can use it with context.
 
-| Memory | What it contributes to future work |
+| Record type | What it contributes |
 |---|---|
-| **Facts and preferences** | Who you are, your project context, and how you like to work |
-| **Conversations and episodes** | What was discussed, attempted, and completed, including what each teammate did in a shared task |
-| **Per-agent lessons** | Guidance learned from feedback on a particular agent's work |
-| **Skills** | Reusable procedures distilled from successful multi-agent tasks |
-| **Prompt versions and scores** | The evolving rules used to guide agents and the feedback they received |
-| **Replay cases** | Rated past requests used to evaluate proposed prompt changes |
-| **File checkpoints** | Size-limited snapshots of files created or changed during a step |
+| **Fact or decision** | Project context, preferences and verified decisions |
+| **Correction** | Explicit user feedback about an earlier request |
+| **Episode** | A compact account of what the team attempted and completed |
+| **Lesson or skill** | Guidance and procedures preserved from older memory |
 
-Personal memory and learning records live in namespaces such as `u:<user>:facts`, `u:<user>:lessons:<agent>`, and `u:<user>:learning:prompts`. Queued playbook critiques live in `u:<user>:learning:critiques`, so prompt evolution picks up where it left off after a restart.
+The store validates and queues new knowledge through one capture path. Within the running process, normalized content IDs avoid writing the same proposal twice. A bounded cache shares recent proposals immediately, including with the next teammate before Walrus confirms them. These local entries have a storage status and no fabricated blob ID or retrieval distance. They are durable only after confirmation.
+
+Saved transcripts, file checkpoints and user settings keep separate archive namespaces (`u:<user>:chat`, `:checkpoints`, `:settings`). They are searched or restored separately, rather than competing with knowledge during ordinary recall.
+
+Older facts, episodes, skills and per-agent lessons are included automatically in shared recall. Saga discovers their namespaces through the relayer inventory, with a fallback to known namespaces on older relayers. Their original blob IDs and namespaces remain intact; no copy or destructive migration is required. Historical prompt populations and learning scores are no longer loaded or changed.
 
 ### Why Walrus
 
@@ -91,9 +89,9 @@ Saga stores durable memory as encrypted blobs through [Walrus Memory (MemWal)](h
 
 The C++ client in [src/memwal](src/memwal) implements signed relayer requests, SEAL sessions, and asynchronous writes. The UI exposes storage progress and the resulting blob IDs, making the memory layer visible during a conversation.
 
-Every read a turn needs starts at once: facts, episodes, skills, the agents' lessons, and, on a user's first turn since a restart, their prompt population, settings and chat history. The turn waits for the slowest read instead of their sum. Writes happen in the background, so the answer can arrive before its memories finish saving; a turn's writes go to the relayer as one request, and Saga asks for their blob IDs on a schedule rather than continuously.
+A turn starts one shared-knowledge search alongside settings and conversation-history reads. Every teammate receives the same result; recent proposals are added before each step. Existing users may need additional reads for their legacy namespaces. Writes happen in the background and are batched, so an answer can arrive before its memories finish saving.
 
-The relayer limits each delegate key to 60 weighted requests a minute (recalls and status checks count 1, a write 5, a batch of writes 10). Saga tracks that budget itself: background work (writes, status checks, fact extraction, index restores) waits for headroom and leaves a reserve, so a user's reads are not refused with a minute-long `Retry-After` because of writes that could have been spaced out. Connections to the relayer are reused, which saves a TLS handshake (100–400 ms) on every call.
+The relayer limits each delegate key to 60 weighted requests a minute (recalls and status checks count 1, a write 5, a batch of writes 10). Saga tracks that budget itself: background work (writes, status checks, index restores) waits for headroom and leaves a reserve, so a user's reads are not refused with a minute-long `Retry-After` because of writes that could have been spaced out. Connections to the relayer are reused, which saves a TLS handshake (100–400 ms) on every call.
 
 Saga has no application database, but it does keep local workspaces, agent homes, and optionally encrypted provider credentials.
 
@@ -101,15 +99,15 @@ Agents use the same memory. In host account mode, Claude Code gets `memory_recal
 
 Saved transcripts retain up to 4,000 bytes of each user message and 6,000 bytes of each agent response, after redaction; longer entries carry truncation flags. Failed steps retain their partial response and error separately. Checkpoints save only eligible text files within their size budget. Restore skips a file whose newest checkpoint has no saved content, rather than overwriting it with an older version. With `--no-memory`, agents receive no memory tools and nothing is saved to Walrus.
 
-Sandboxed Claude runs preapprove shell tools in the default `acceptEdits` mode because Saga has no interactive permission responder; explicit modes such as `plan` remain in effect. Agent memory budgets respect the tightest ancestor cgroup limit and leave at least one quarter for Saga itself. With the deployment's 1,200 MiB service cap, agents share 900 MiB and each run is capped at 450 MiB. Each run allows 128 processes/threads, with 256 shared across agents. The service permits 768 tasks to leave room for its web workers alongside the agent pool. A process/thread limit stops the run with a specific error; a sandbox memory kill is reported as a memory failure. Codex command completions appear in chat, and a quiet run shows how long it has been waiting for another update.
+Sandboxed Claude runs preapprove shell tools in the default `acceptEdits` mode because Saga has no interactive permission responder; explicit modes such as `plan` remain in effect. Agent memory budgets respect the tightest ancestor cgroup limit and leave at least one quarter for Saga itself. On the 8 GB deployment, the service has a 6 GiB cap, agents share up to 4 GiB, and each run is capped at 2 GiB. Each run allows 128 processes/threads, with 256 shared across agents. The service permits 768 tasks to leave room for its web workers alongside the agent pool. A process/thread limit stops the run with a specific error; a sandbox memory kill is reported as a memory failure. Codex command completions appear in chat, and a quiet run shows how long it has been waiting for another update.
 
-Each chat turn has a **View sources** panel showing the memories Saga retrieved: the excerpt selected for context, the full copyable Walrus blob ID, a Walruscan link, and retrieval details (namespace, search query, distance, and write time or ranking score when supplied by the relayer). Agent lessons identify the step they were selected for; muted lessons and weak matches are excluded, except that when fewer than five facts match a message, the nearest other facts are given as background and marked as such. The source record is saved inside the turn's transcript, so reopening a chat shows its original recall, even if a fresh search would return different memories. Older transcripts explicitly say when sources were not recorded. Empty searches, failed reads, and disabled memory are shown separately.
+Each chat turn has a **View sources** panel showing the selected memory excerpts, original namespaces, queries, and supplied Walrus blob IDs. Weak matches and recent local records are marked as background; queued records show their status. The source record is saved inside the transcript, so reopening a chat shows its original recall. Older transcripts explicitly say when sources were not recorded. Empty searches, failed reads, and disabled memory are shown separately.
 
 These records show what was retrieved, not proof that the model relied on every memory. Distances and ranking scores measure retrieval relevance, not factual confidence. Additional memory searches through a sandboxed agent's per-run socket are included and identify the agent and step. Host account mode's additional tool searches are not included in this panel.
 
 ## Markov seed prompt
 
-Saga starts each user with a system prompt adapted from **[Markov](https://github.com/dun999/markov)**, a persistent-agent protocol built around Walrus Memory. Its guiding idea is that another agent should be able to continue the work from saved state, even when the model, tool, or conversation changes.
+Every teammate uses a fixed system prompt adapted from **[Markov](https://github.com/dun999/markov)**, a persistent-agent protocol built around Walrus Memory. Its guiding idea is that another agent should be able to continue the work from saved state, even when the model, tool, or conversation changes.
 
 The seed gives Saga a starting set of working rules:
 
@@ -122,57 +120,15 @@ Sources: [Markov repository](https://github.com/dun999/markov) · [Original prom
 
 Saga's [PROMPT.md](PROMPT.md) is embedded in the binary at build time. The harness supplies recall, user-specific namespaces, and background storage, so the adaptation uses Saga's memory operations. Markov's separate MCP tools and project capsules are not added by this change.
 
-### How the prompt grows with the user
+## Explicit feedback
 
-The effective prompt has three layers:
+A comment submitted with feedback becomes an ordinary shared correction, associated with the original request and session. Future agents can retrieve it when relevant. A thumb without a comment records the rating for the current turn only.
 
-| Layer | What it contains | How it changes |
-|---|---|---|
-| **Markov foundation** | Memory, evidence, trust, and handoff rules | Fixed during learning; updated through versioned code changes |
-| **Personal playbook** | Reusable guidance about how to work for this user | Feedback produces proposed rule edits, evaluated against past rated requests |
-| **Recalled context** | Relevant facts, decisions, episodes, lessons, and skills | Retrieved for the current task as the user's memory develops |
-
-For example, “the menu API uses PostgreSQL” stays a project fact retrieved when relevant. A correction such as “explain the project before installation” can become writing guidance in the personal playbook. Rules can be added, revised, or retired; the prompt becomes more tailored without appending every memory to the permanent foundation. Learned guidance remains subordinate to the foundation and the current request.
-
-The prompt adaptation is behavioral guidance. Markov's original evaluation results do not establish results for Saga's version.
-
-## How feedback becomes improvement
-
-Saga changes the context and instructions supplied to its agents. Model weights stay unchanged.
-
-**First, it collects signals.** A thumbs-up or thumbs-down is explicit feedback. Recognized responses such as “that's wrong” or “thanks,” execution failures, and opening a pull request can also provide a signal about the previous turn. Rated turns become replay cases for that user. A “thanks” only scores the prompt version and keeps the case; reflection runs for explicit ratings, corrections and failures, so polite replies don't fill memory with lessons.
-
-**Then it reflects.** The brain reviews the task, the agents' outputs, and the feedback. It writes lessons for the agents involved and credits or penalizes guidance that appeared in their context. Rules and lessons that repeatedly hurt can be retired. Successful multi-agent procedures can be distilled into reusable skills.
-
-**Accumulated critiques can change the playbook.** The system prompt has a fixed base plus short rules. After three queued critiques, the brain can propose up to three additions, edits, or removals. Small edits preserve useful instructions while addressing specific failures.
-
-**A proposed version must pass a replay comparison.** Saga generates answers to the user's rated past requests with both the candidate and its parent. A judge sees the answers in shuffled order and compares them. A candidate that loses more than it wins is marked rejected, and no candidate is created without replay cases. Feedback scores then guide Thompson sampling among live prompt versions.
-
-This makes improvement inspectable: a correction can produce a lesson, a lesson can inform a rule change, and the rule change has an evaluation record. The learning state belongs to the user and persists in Walrus alongside their other memories.
-
-On first load after the foundation upgrade, each previously live prompt gets a new version with the Markov base and its existing playbook rules. Old versions remain as history and stop receiving traffic; rejected versions stay rejected. The new versions start with fresh ratings, while rule credits remain intact. This is a foundation migration, identified separately from a replay-tested learning change. Legacy full-prompt rewrites remain in history rather than being inserted into the new foundation.
+The foundation in `PROMPT.md` stays fixed until a code change. There are no automatic reflection calls, inferred ratings, prompt mutations, replay comparisons or prompt selection experiments. Personalization comes from retrieved knowledge and the current conversation.
 
 ## Research lineage
 
-Saga's foundation is the progression explored in **[YC Paper Club: Harness Edition](https://www.youtube.com/watch?v=n9xKblqyQ28)**, recorded August 26, 2026, and compiled in DAIR.AI's **[Harness Engineering collection](https://academy.dair.ai/papers/collections/harness-engineering)**: agents gain capability through the tools, memory, context, and feedback loops surrounding their models.
-
-Saga brings these ideas into a shared, persistent harness for everyday coding agents. The connections below describe design influences and the mechanisms implemented here; Saga adapts those ideas to its own workflow.
-
-| Research | Foundation | How it informs Saga |
-|---|---|---|
-| [ReAct — Yao et al., 2022](https://arxiv.org/abs/2210.03629) | Interleave reasoning, actions, and observations | CLI agents perform the tool-using work; Saga supplies context and captures their results for subsequent steps. |
-| [Reflexion — Shinn et al., 2023](https://arxiv.org/abs/2303.11366) | Turn feedback into verbal lessons for later attempts | The brain reflects on rated or failed turns and stores lessons per user and agent. |
-| [Voyager — Wang et al., 2023](https://arxiv.org/abs/2305.16291) | Build a reusable skill library from successful experience | Successful multi-agent procedures can become skills recalled for similar requests. |
-| [MemGPT — Packer et al., 2023](https://arxiv.org/abs/2310.08560) | Manage persistent memory separately from the immediate context window | Saga retrieves selected facts, episodes, lessons, and skills to assemble the current context. |
-| [Multi-Agent Collaboration — Talebirad & Nadiri, 2023](https://arxiv.org/abs/2306.03314) | Coordinate agents with distinct roles | Named teammates, `@mentions`, handoffs, and shared task records support collaboration. |
-| [DSPy — Khattab et al., 2023](https://arxiv.org/abs/2310.03714) | Optimize the instructions and structure of language-model programs | Saga treats its prompt as a versioned artifact with feedback scores and evaluation. |
-| [GEPA — Agrawal et al., 2025](https://arxiv.org/abs/2507.19457) | Use reflection on execution traces to evolve prompts | Critiques drive candidate prompt edits, which are compared with their parent on saved cases. |
-| [Agentic Context Engineering — Zhang et al., 2025](https://arxiv.org/abs/2510.04618) | Maintain an evolving playbook through incremental updates | Saga adds, edits, or removes short rules and tracks helpful and harmful guidance. |
-| [Darwin Gödel Machine — Zhang et al., 2025](https://arxiv.org/abs/2505.22954) | Evaluate proposed agent modifications empirically | Saga applies the validation principle to prompt versions through a replay gate. |
-| [Meta-Harness — Lee et al., 2026](https://arxiv.org/abs/2603.28052) | Optimize the harness surrounding a model | Saga makes context assembly, stored experience, and prompt selection explicit parts of its architecture. |
-| [Continual Harness — Karten et al., 2026](https://arxiv.org/abs/2605.09998) | Adapt prompts, skills, and memory during ongoing work | Saga accumulates and revises those artifacts across conversations. |
-
-Saga's current adaptation operates on memories, skills, and prompt rules. It does not rewrite its C++ harness or train model weights. Its replay gate evaluates answers on saved requests; it does not rerun entire coding tasks in a benchmark environment.
+Saga draws on persistent-context ideas from [MemGPT](https://arxiv.org/abs/2310.08560), collaboration through named teammates from [Multi-Agent Collaboration](https://arxiv.org/abs/2306.03314), and the [Markov](https://github.com/dun999/markov) memory protocol. These are design influences, not evidence of evaluation results for Saga.
 
 ## Try it
 
@@ -208,6 +164,7 @@ From the repository root:
 ```bash
 cmake -S . -B build -G Ninja
 cmake --build build
+ctest --test-dir build --output-on-failure
 ./build/saga help
 ```
 
@@ -234,9 +191,9 @@ cp .env.example .env
 ./build/saga serve
 ```
 
-`doctor` and `serve` exit until both MemWal variables are set. Install and authenticate the `claude`, `codex`, and `grok` CLIs for the teammates you want to use. The default learning backend requires Claude. Agent configuration lives in [saga.json](saga.json), and the variables are listed in [.env.example](.env.example).
+`doctor` and `serve` exit until both MemWal variables are set. Install and authenticate the `claude`, `codex`, and `grok` CLIs for the teammates you want to use. Agent configuration lives in [saga.json](saga.json), and the variables are listed in [.env.example](.env.example).
 
-To explore persistence, tell Saga a project preference, wait for the memory write to complete, then start a new chat under the same identity and ask for related work. To explore learning, rate a turn and provide a concrete correction.
+To explore persistence, tell Saga a project preference, wait for the memory write to complete, then start a new chat under the same identity and ask for related work. To share a correction, submit a feedback comment and ask another teammate for related work.
 
 ```bash
 ./build/saga chat --user mira --no-memory   # /quit exits. With memory: /good, /bad <reason>
@@ -256,20 +213,20 @@ MemWal's default relayer-managed decryption exposes recalled plaintext to the re
 
 Relayer latency affects chat because recall happens before the answer (each recall takes one to two seconds; a turn's reads run in parallel). Every user of a deployment shares one delegate key's budget of 60 weighted requests a minute; a busy deployment confirms writes more slowly before it lets reads fail. Failed reads can leave an agent with less memory context, and queued writes are durable only after confirmation. File checkpoints are partial snapshots, with content capped at 16,000 bytes per file and 40,000 bytes per step.
 
-Feedback-driven learning also depends on the configured brain being available. Passing a replay comparison is evidence about those saved cases, not a guarantee of improvement on every future task.
+Chat-history listing and restoration currently inspect at most 100 recent archive records. The in-process knowledge cache is bounded to 256 recent writes across the deployment and disappears on restart; confirmed Walrus records remain retrievable.
 
 ## Code map
 
 | Directory | Responsibility |
 |---|---|
-| [src/harness](src/harness) | Context assembly, orchestration, reflection, and prompt evolution |
+| [src/harness](src/harness) | Context assembly, orchestration, shared knowledge and archives |
 | [src/memwal](src/memwal) | Relayer protocol, memory writes, retrieval, and secret redaction |
 | [src/agents](src/agents) | CLI and OpenAI-compatible adapters |
 | [src/router](src/router) | Mention parsing and handoffs |
 | [src/core](src/core) | Cryptography, HTTP, subprocesses, sandboxes, and credentials |
 | [src/github](src/github) | Repository and pull request workflow |
 | [src/web](src/web) | Server, wallet authentication, and embedded UI |
-| [tests](tests) | Unit tests and sandbox integration tests |
+| [tests](tests) | Checked-in shared-memory regressions; optional local and sandbox tests |
 
 ## License
 

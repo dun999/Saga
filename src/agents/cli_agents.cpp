@@ -290,7 +290,7 @@ class ClaudeCodeAgent : public CliAgent {
     if (!spec_.model.empty()) a.insert(a.end(), {"--model", spec_.model});
     proc::Options o;
     o.timeout_s = 300;
-    o.stdin_data = prompt;  // reflection traces quote the user; keep them off argv
+    o.stdin_data = prompt;  // prompts may quote the user; keep them off argv
     child_env(o.env);
     auto p = exec(a, o, sb);
     Result r;
@@ -396,6 +396,8 @@ class ClaudeCodeAgent : public CliAgent {
       std::vector<std::string> allowed = {"Bash(" + bin->second + " mem:*)"};
       if (sock != t.env.end() && !sock->second.empty() && uid != t.env.end()) {
         json memory_env = {{"SAGA_UID", uid->second}, {"SAGA_MEM_SOCK", sock->second}};
+        for (const auto* field : {"SAGA_AGENT", "SAGA_SESSION"})
+          if (auto it = t.env.find(field); it != t.env.end()) memory_env[field] = it->second;
         if (auto ro = t.env.find("SAGA_MEM_READ_ONLY"); ro != t.env.end()) memory_env[ro->first] = ro->second;
         const json server = {{"type", "stdio"}, {"command", bin->second}, {"args", {"mcp"}}, {"env", memory_env}};
         a.insert(a.end(), {"--mcp-config", json{{"mcpServers", {{"saga", server}}}}.dump()});

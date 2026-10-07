@@ -25,7 +25,7 @@ struct Sandbox {
   secrets::Key vault;                      // provider-specific key for a CLI login file
   std::string runner;                     // trusted Saga binary for the in-namespace proxy launcher
   std::string login_file;                 // the sole login file this worker may unseal
-  std::shared_ptr<std::atomic<bool>> cancel;  // session cancellation, including learning jobs
+  std::shared_ptr<std::atomic<bool>> cancel;  // session cancellation
   std::shared_ptr<memwal::SecretScope> sensitive;
   std::string memory_sock;  // per-run, user-scoped read-only gate; never the operator gate
   ~Sandbox();

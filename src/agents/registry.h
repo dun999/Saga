@@ -22,8 +22,6 @@ class Registry {
   std::vector<Agent*> visible(const std::string& uid) const;  // shared + uid's own
   std::vector<std::string> names(const std::string& uid = "") const;
   Agent* primary() const { return find(primary_); }
-  Agent* brain() const { return find(brain_); }
-  bool is_internal(const Agent* a) const { return a == brain() && a != primary(); }
   json roster(const std::string& uid = "") const;  // for UI + prompts
 
   // Owned agents. Names of shared agents are reserved.
@@ -40,7 +38,7 @@ class Registry {
   // an agent is never destroyed while the process lives (a few bytes per removal).
   std::vector<std::unique_ptr<Agent>> retired_;
   std::vector<std::string> order_;  // shared agents, config order
-  std::string primary_, brain_;
+  std::string primary_;
 };
 
 }  // namespace saga::agents

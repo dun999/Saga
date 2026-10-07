@@ -4,19 +4,16 @@
 
 #include "memwal/gate.h"
 #include "memwal/redact.h"
+#include "core/env.h"
 
 namespace saga::memwal {
 namespace {
 
-// Kept in step with harness::ns_user / ns_lessons; memwal sits below the harness.
-std::string ns_of(const std::string& uid, const std::string& what) { return "u:" + uid + ":" + what; }
-
 json tool_list(const std::string& uid, bool read_only) {
-  const std::string facts = ns_of(uid, "facts");
-  const std::string spaces = facts + " (facts and preferences, the default), " + ns_of(uid, "episodes") +
-                             " (past turns), " + ns_of(uid, "chat") + " (saved transcripts; check truncation flags), " +
-                             ns_of(uid, "checkpoints") + " (partial file snapshots), " + ns_of(uid, "skills") +
-                             ", " + ns_of(uid, "lessons:<agent>");
+  const std::string facts = shared_namespace(uid);
+  const std::string spaces = facts + " (shared facts, decisions, corrections and handoffs, the default), " +
+      user_namespace(uid, "chat") + " (saved transcripts; check truncation flags), " +
+      user_namespace(uid, "checkpoints") + " (partial file snapshots). Legacy knowledge is included automatically";
   json tools = json::array({
       {{"name", "memory_recall"},
        {"description", "Semantic search over this user's Saga memory, stored as encrypted blobs on Walrus mainnet. "
@@ -49,7 +46,7 @@ json call_tool(const json& params, const std::string& uid, const std::string& so
   json args = params.value("arguments", json::object());
   if (!args.is_object()) args = json::object();
   auto str = [&](const char* k) { return args.contains(k) && args[k].is_string() ? args[k].get<std::string>() : ""; };
-  const std::string ns = str("namespace").empty() ? ns_of(uid, "facts") : str("namespace");
+  const std::string ns = str("namespace").empty() ? shared_namespace(uid) : str("namespace");
   if (name != "memory_recall" && name != "memory_remember") return tool_text("unknown tool " + name, true);
   if (sock.empty()) return tool_text("Saga memory is not available in this run.", true);
   if (name == "memory_recall") {
@@ -59,14 +56,21 @@ json call_tool(const json& params, const std::string& uid, const std::string& so
     std::string out;
     for (auto& m : res.value("hits", json::array())) {
       char distance[16];
-      std::snprintf(distance, sizeof distance, "%.2f", m.value("distance", 0.0));
-      out += "- " + m.value("text", "") + "  [distance " + distance + ", blob " + m.value("blob_id", "") + "]\n";
+      if (m.value("local", false))
+        out += "- " + m.value("text", "") + "  [" + m.value("status", "queued") +
+               (m.value("blob_id", "").empty() ? "; not yet confirmed on Walrus" : "; blob " + m.value("blob_id", "")) + "]\n";
+      else {
+        std::snprintf(distance, sizeof distance, "%.2f", m.value("distance", 0.0));
+        out += "- " + m.value("text", "") + "  [distance " + distance + ", blob " + m.value("blob_id", "") + "]\n";
+      }
     }
     return tool_text(out.empty() ? "No memories in " + ns + " match." : out, false);
   }
-  const json res = gate_transact(sock, {{"op", "remember"}, {"ns", ns}, {"wait", false}, {"text", str("text")}});
+  const json res = gate_transact(sock, {{"op", "remember"}, {"ns", ns}, {"wait", false}, {"text", str("text")},
+                                      {"agent", env::get("SAGA_AGENT")}, {"session", env::get("SAGA_SESSION")}});
   if (!res.value("ok", false)) return tool_text("not saved: " + res.value("error", "unknown error"), true);
-  return tool_text("Queued for Walrus in " + ns + ". Saga confirms the blob in the background.", false);
+  return tool_text(res.value("status", "queued") == "done" ? "Already saved on Walrus, blob " + res.value("blob_id", "") :
+      "Queued for Walrus in " + res.value("ns", ns) + ". Saga confirms the blob in the background.", false);
 }
 
 }  // namespace

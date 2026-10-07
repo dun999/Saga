@@ -1,6 +1,6 @@
 # Saga
 
-> Saga is a multi-agent chat harness. You mention Claude Code, Codex, Grok or an API model with `@name`, and Walrus Memory stores what it learns. These steps build it from source and run it on this machine. Use Linux or macOS. On Windows, use Ubuntu inside WSL2. Run the steps in order, from the repository root. If a command fails, fix that step before you continue. Each step says what success looks like.
+> Saga is a multi-agent chat harness. You mention Claude Code, Codex, Grok or an API model with `@name`, and one user-specific Walrus namespace stores their shared knowledge. These steps build it from source and run it on this machine. Use Linux or macOS. On Windows, use Ubuntu inside WSL2. Run the steps in order, from the repository root. If a command fails, fix that step before you continue. Each step says what success looks like.
 
 You do not need a wallet, a Walrus account or an API key to open the UI. The first build downloads dependencies, so you need a network connection.
 
@@ -45,7 +45,7 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-Success: the build's last line ends with `Linking CXX executable saga`, and `./build/saga` exists.
+Success: `./build/saga` and `./build/saga_memory_tests` exist. Run `ctest --test-dir build --output-on-failure` to check shared memory against a local relayer fixture; this needs no keys and writes nothing to mainnet.
 
 If the build fails:
 
@@ -66,7 +66,7 @@ If the build fails:
 ./build/saga help
 ```
 
-Success: the first line is `saga — self-improving multi-agent harness with native Walrus Memory`, followed by the command list. No credentials are needed.
+Success: the first line is `saga — multi-agent harness with shared Walrus Memory`, followed by the command list. No credentials are needed.
 
 ## 5. Serve the UI without keys
 
@@ -113,7 +113,6 @@ What happens when you send a message:
 - `@codex` is the Codex CLI (`codex`).
 - `@grok` is the Grok CLI (`grok`).
 - `@saga` is an API model that needs `BOUNDLESS_API_KEY` (step 7).
-- `claude-brain` runs internal reflection through Claude Code. Do not mention it.
 
 Install and sign in only the CLIs you want, following each provider's instructions. Then restart `serve` from a shell where `command -v claude` (or `codex`, or `grok`) prints a path. A missing CLI is shown as unavailable, and the server still runs.
 
@@ -156,7 +155,7 @@ Then serve with memory:
 ./build/saga chat --user mira --no-memory
 ```
 
-`/quit` exits. With memory on (drop `--no-memory` after step 7), `/good` and `/bad <reason>` rate the last turn. An agent can drive it through a pipe:
+`/quit` exits. With memory on (drop `--no-memory` after step 7), `/good` and `/bad <reason>` rate the last turn. A feedback comment is queued as shared knowledge; the foundation prompt stays fixed. An agent can drive it through a pipe:
 
 ```bash
 printf '@claude reply with: ok\n/quit\n' | ./build/saga chat --user mira --no-memory

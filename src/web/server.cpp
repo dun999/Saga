@@ -461,13 +461,7 @@ int serve(harness::Harness& h, const ServerOptions& opt) {
   });
   svr.Get("/api/memory", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string uid = uid_of(req, res);
-    std::set<std::string> parts;
-    for (std::stringstream in(req.get_param_value("parts")); in.good();) {
-      std::string part;
-      std::getline(in, part, ',');
-      if (!part.empty() && parts.size() < 8) parts.insert(part);
-    }
-    send_json(res, h.memory_view(uid, req.get_param_value("q"), parts));
+    send_json(res, h.memory_view(uid, req.get_param_value("q")));
   });
 
   // Chat history and transcripts are read back from Walrus, not from a local store.

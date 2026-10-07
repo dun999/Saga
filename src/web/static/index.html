@@ -92,14 +92,7 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: r
 .mini-btn { border: 0; background: var(--surface); border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
 .mini-btn:hover { background: var(--surface-2); }
 .off { color: var(--bad); }
-.tile.rejected { opacity: .55; }
-ul.rules { margin: 6px 0 2px; padding-left: 16px; font-size: 12.5px; color: var(--muted); }
-ul.rules li { margin: 2px 0; }
-ul.rules li span { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-ul.rules li.muted { text-decoration: line-through; color: var(--faint); }
 .msg .carry { width: min(280px, 72%); margin: 2px 0 6px; overflow: hidden; }
-details.prompt summary { cursor: pointer; font-size: 11px; color: var(--faint); list-style: none; }
-details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 
 /* profile card */
 .profile { position: relative; padding: 8px; }
@@ -119,12 +112,9 @@ details.prompt div { white-space: pre-wrap; font-size: 11.5px; color: var(--mute
 .topbar { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 8px; padding: 10px 14px; z-index: 5; pointer-events: none; }
 .topbar > * { pointer-events: auto; }
 .topbar .title { font-size: 14px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-/* the served system prompt's version: it ticks up when ratings evolve it */
-.pv { margin-left: auto; flex: none; border: 0; background: var(--surface); color: var(--muted); border-radius: 99px; padding: 5px 11px; font-size: 12px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; box-shadow: 0 1px 3px rgba(20,18,16,.06); }
-.pv:hover { color: var(--ink); }
-.pv b { color: var(--ink); font-weight: 600; display: inline-block; }
-.pv[hidden] { display: none; }
-.topbar .pv:not([hidden]) ~ .pv { margin-left: 0; }
+#previewBtn { margin-left: auto; flex: none; border: 0; background: var(--surface); color: var(--muted); border-radius: 99px; padding: 5px 11px; font-size: 12px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; box-shadow: 0 1px 3px rgba(20,18,16,.06); }
+#previewBtn:hover, #previewBtn b { color: var(--ink); }
+#previewBtn[hidden] { display: none; }
 /* live preview: the page agents built, sandboxed beside the chat */
 .preview { flex: 0 0 46%; min-width: 340px; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--side); }
 .preview[hidden] { display: none; }
@@ -603,8 +593,7 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
       </button>
       <span class="title" id="title"></span>
-      <button class="pv" id="previewBtn" hidden title="See the page the agents built in this chat"></button>
-      <button class="pv" id="pv" hidden title="The system prompt evolves from your ratings"></button>
+      <button id="previewBtn" hidden title="See the page the agents built in this chat"></button>
     </div>
     <div id="log"><div class="col" id="thread"></div></div>
     <div class="composer">
@@ -645,20 +634,16 @@ a.btn-connect { text-decoration: none; display: inline-flex; align-items: center
       <button data-g="account" class="on"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Account</button>
       <button data-g="connections"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>Connections</button>
       <button data-g="memory"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/></svg>Memory</button>
-      <button data-g="harness"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>Harness</button>
     </nav>
     <div class="mbody">
       <button class="icon-btn mclose" id="mClose" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       <div class="ghead on" data-g="account"><h3>Account</h3></div>
       <div class="ghead" data-g="connections"><h3>Connections</h3><div class="subtabs"><button data-p="agents">Agents</button><button data-p="github">GitHub</button></div></div>
-      <div class="ghead" data-g="memory"><h3>Memory</h3><div class="subtabs"><button data-p="about">About you <span class="count" id="nFacts"></span></button><button data-p="episodes">Episodes &amp; lessons</button><button data-p="checkpoints">Checkpoints</button><button data-p="writes">Walrus writes <span class="count" id="nWrites"></span></button></div></div>
-      <div class="ghead" data-g="harness"><h3>Harness</h3></div>
+      <div class="ghead" data-g="memory"><h3>Memory</h3><div class="subtabs"><button data-p="about">Shared knowledge <span class="count" id="nFacts"></span></button><button data-p="checkpoints">Checkpoints</button><button data-p="writes">Walrus writes <span class="count" id="nWrites"></span></button></div></div>
       <section data-p="profile" class="on"><h3>Profile</h3><div id="pProfile"></div></section>
-      <section data-p="about"><h3>About you</h3><p class="lead">What Saga has learned about you. Each fact is an encrypted blob on Walrus.</p><div id="facts"><div class="empty">Loading…</div></div></section>
+      <section data-p="about"><h3>Shared knowledge</h3><p class="lead">Facts, decisions, corrections and past work that every teammate can use. Queued writes appear here before Walrus confirms them.</p><div id="memory"><div class="empty">Loading…</div></div></section>
       <section data-p="agents"><h3>Agents</h3><div id="agents"></div></section>
       <section data-p="github"><h3>GitHub</h3><div id="ghPane"></div></section>
-      <section data-p="episodes"><h3>Memory</h3><div id="memory"></div></section>
-      <section data-p="harness"><h3>Harness improvement</h3><div id="harness"></div></section>
       <section data-p="checkpoints"><h3>Checkpoints</h3><p class="lead">Files agents change in this chat, snapshotted to Walrus. Restore them on any machine.</p><div id="checkpoints"></div></section>
       <section data-p="writes"><h3>Walrus writes</h3><p class="lead">Written this session, live.</p><div id="writes"><div class="empty">Nothing written yet.</div></div></section>
     </div>
@@ -891,7 +876,7 @@ function openModal(pane) {
   refreshMemory(); refreshCheckpoints(); refreshUsage(); renderProfilePane(); refreshGitHub();
 }
 function closeModal() { modal.classList.remove("open"); }
-const GROUPS = {account: ["profile"], connections: ["agents", "github"], memory: ["about", "episodes", "checkpoints", "writes"], harness: ["harness"]};
+const GROUPS = {account: ["profile"], connections: ["agents", "github"], memory: ["about", "checkpoints", "writes"]};
 const lastPane = {};
 function showPane(p) {
   if (GROUPS[p]) p = lastPane[p] || GROUPS[p][0];  // a category: its last-used page
@@ -1389,48 +1374,21 @@ async function refreshChats() {
     : `<div class="empty">No chats on Walrus yet.</div>`;
   $("#chats").querySelectorAll(".item").forEach(el => el.onclick = () => openChat(el.dataset.s));
 }
-// Only active versions serve turns; replaced foundations remain visible as history.
-const liveVersion = p => Math.max(...p.versions.filter(v => v.status === "live").map(v => v.v));
-function evalText(e, parent) {
-  if (e?.kind === "foundation-migration") return "foundation updated; personal rules retained; no replay score yet";
-  if (!e) return "went live untested (no rated chats to replay yet)";
-  const score = `${e.wins}–${e.losses}${e.ties ? `, ${e.ties} tied` : ""}`;
-  const verb = e.wins > e.losses ? "beat" : e.wins === e.losses ? "matched" : "lost to";
-  return `${verb} v${parent} on ${e.cases} replayed chat${e.cases === 1 ? "" : "s"} (${score})`;
+let memoryRequest = 0;
+async function refreshMemory() {
+  const request = ++memoryRequest;
+  const got = await api("/api/memory").catch(e => ({error: e.message}));
+  if (request !== memoryRequest) return;
+  const unavailable = !got || got.error || got.status === "unavailable";
+  const all = Array.isArray(got?.items) ? got.items : [];
+  memCache = {...got, status: unavailable ? "unavailable" : "ok", facts: all.filter(x => x.kind === "fact" || x.kind === "correction")}; fillWelcome();
+  const items = arr => `<div class="list">` + arr.map(x => `<div class="tile"><div>${colorMentions(esc(x.text))}</div><div class="m">${esc(x.kind || "memory")}${x.agent ? " · " + agentName(x.agent) : ""} · ${x.blob_id ? blob(x.blob_id) : x.local ? esc(x.status || "queued") + " · not yet confirmed on Walrus" : "Blob ID unavailable"}</div></div>`).join("") + `</div>`;
+  $("#nFacts").textContent = all.length || "";
+  const warning = unavailable ? `<div class="empty">Some memory could not be loaded. <button class="mini-btn" id="retryMemory">Retry</button></div>` : "";
+  $("#memory").innerHTML = warning + (all.length ? items(all) : unavailable ? "" : `<div class="empty">${state.memory_enabled ? "No shared knowledge yet." : "Memory is off for this run."}</div>`);
+  $("#retryMemory")?.addEventListener("click", refreshMemory);
 }
-async function refreshMemory(parts) {
-  if (!memCache?.prompts) parts = null;  // nothing to merge into yet: load every part
-  const got = await api("/api/memory" + (parts ? "?parts=" + parts.join(",") : "")).catch(() => null);
-  if (!got || got.error) { memCache ??= {facts: []}; fillWelcome(); return; }
-  const m = memCache = parts ? {...memCache, ...got} : got; fillWelcome();
-  if (m.prompts?.versions?.length) setPromptVersion(liveVersion(m.prompts), pvShown >= 0);
-  const items = arr => `<div class="list">` + arr.map(x => `<div class="tile"><div>${x.agent ? agentName(x.agent) + " " : ""}${colorMentions(esc(x.text))}</div><div class="m">${blob(x.blob_id)}</div></div>`).join("") + `</div>`;
-  $("#nFacts").textContent = m.facts.length || "";
-  $("#facts").innerHTML = m.facts.length ? items(m.facts) : `<div class="empty">Tell Saga about yourself — facts appear here, stored on Walrus.</div>`;
-  $("#memory").innerHTML = `<div class="sub-h">Recent episodes</div>${m.episodes.length ? items(m.episodes) : '<div class="empty">none yet</div>'}` +
-    `<div class="sub-h">Lessons per agent</div>${m.lessons.length ? items(m.lessons) : '<div class="empty">none yet — rate answers to teach agents</div>'}` +
-    `<div class="sub-h">Skills</div>${m.skills.length ? items(m.skills) : '<div class="empty">none yet</div>'}`;
-  const p = m.prompts;
-  $("#harness").innerHTML =
-    `<div class="list"><div class="row"><div class="l"><b>System prompt</b><span>Markov foundation with a personal playbook; learned edits are replay-tested</span></div><span class="pill">v${liveVersion(p)}</span></div>` +
-    `<div class="row"><div class="l"><b>Critiques queued</b><span>The prompt evolves every few critiques</span></div><span class="pill">${p.pending_critiques}</span></div></div>` +
-    `<div class="sub-h">Improvement log</div>` +
-    ((m.improvements || []).length ? `<div class="list">` + m.improvements.map(i => {
-      const r = i.result || {}; const bits = [];
-      (r.lessons || []).forEach(l => bits.push(`${icon("note")} ${agentName(l.agent)} ${esc(l.lesson)}`));
-      if (r.skill) bits.push(`${icon("skill")} skill: ${esc(r.skill.name)}`);
-      if (r.critique) bits.push(`${icon("wrench")} ${esc(r.critique)}`);
-      (r.credit || []).forEach(c => bits.push(`${icon(c.helpful ? "up" : "down", 12)} ${c.helpful ? "helped" : "hurt"}: ${esc(c.text)}`));
-      if (r.evolved && r.evolved.version >= 0) bits.push(`${icon("evolve")} v${r.evolved.version} ${r.evolved.status === "rejected" ? "rejected" : "live"}: ${evalText(r.evolved.eval, r.evolved.parent)}`);
-      const mark = i.rating ? icon(i.rating > 0 ? "up" : "down") + " " : "";
-      return `<div class="tile"><div>${mark}${bits.join("<br>") || "no change"}</div><div class="m">${ago(i.ts)} ${blob(i.blob_id)}</div></div>`;
-    }).join("") + `</div>` : `<div class="empty">Every rating produces a reflection stored here.</div>`) +
-    `<div class="sub-h">System prompt population</div>` +
-    `<div class="list">` + p.versions.slice().reverse().map(v => `<div class="tile${v.status !== "live" ? " rejected" : ""}"><div><b>v${v.v}</b>${v.parent >= 0 ? ` ← v${v.parent}` : ""} <span style="color:var(--faint)">${icon("up", 12)} ${v.wins} &nbsp;${icon("down", 12)} ${v.losses}</span>${v.status !== "live" ? ` <span class="pill">${esc(v.status)}</span>` : ""}</div>` +
-      `<div class="m">${esc(v.why)}${v.parent >= 0 ? ` · ${evalText(v.eval, v.parent)}` : ""}</div>` +
-      (v.rules?.length ? `<ul class="rules">` + v.rules.map(r => `<li class="${r.harmful >= 2 && r.harmful > r.helpful ? "muted" : ""}">${esc(r.text)}${r.helpful || r.harmful ? ` <span>+${r.helpful} −${r.harmful}</span>` : ""}</li>`).join("") + `</ul>` : "") +
-      `<details class="prompt"><summary>show prompt</summary><div>${esc(v.prompt)}</div></details></div>`).join("") + `</div>`;
-}
+
 let checkpointRequest = 0, restoreRun = null;
 async function refreshCheckpoints() {
   if (restoreRun?.sid === session && restoreRun.view === viewEpoch) return;
@@ -1474,16 +1432,16 @@ async function refreshStats() {
 function addWrite(w, quiet) {
   writes.set(w.job_id || (w.namespace + w.ts + w.text), w);
   if (w.ref && (w.status === "done" || w.status === "failed")) settleRef(w.ref, w);
-  if (!quiet) { renderWrites(); renderProfile(); if (w.status === "done") markChanged(w.namespace || ""); }
+  if (!quiet) { renderWrites(); renderProfile(); if (w.status === "done" || w.namespace === "u:" + uid + ":shared") markChanged(w.namespace || ""); }
 }
-// Memory changes when Walrus confirms a write, not when a turn ends, so the side panels refresh then,
-// and only the parts that write touched: each part is a relayer read from a budget everyone shares.
+// Shared proposals appear locally before confirmation; archives refresh when their blob is saved.
+// Coalesce the notifications because each panel refresh uses the deployment's relayer budget.
 const changed = new Set(); let changedTimer = 0;
 function markChanged(ns) {
   const mine = "u:" + uid + ":"; if (!ns.startsWith(mine)) return;
   const k = ns.slice(mine.length);
-  const part = k === "chat" ? "chats" : k.startsWith("lessons") ? "lessons" : k.startsWith("learning") ? "prompts"
-    : ["facts", "episodes", "skills", "improvements", "checkpoints"].includes(k) ? k : null;
+  const part = k === "chat" ? "chats" : k === "checkpoints" ? "checkpoints" :
+    ["shared", "facts", "episodes", "skills"].includes(k) || k.startsWith("lessons:") ? "shared" : null;
   if (!part) return;
   changed.add(part); clearTimeout(changedTimer); changedTimer = setTimeout(refreshChanged, 1500);
 }
@@ -1492,7 +1450,7 @@ function refreshChanged() {
   if (parts.includes("chats")) refreshChats();
   if (parts.includes("checkpoints")) refreshCheckpoints();
   const mem = parts.filter(p => p !== "chats" && p !== "checkpoints");
-  if (mem.length) refreshMemory(mem);
+  if (mem.length) refreshMemory();
 }
 // Bubbles wait for the Walrus blob of what they saved (the step's files, or the turn's transcript).
 const refSlots = new Map(), refDone = new Map();
@@ -1528,20 +1486,6 @@ function renderLive() {
   liveShown = n;
 }
 $("#live").onclick = () => openModal("writes");
-// In the top bar: the newest system prompt version, which pops when a rating evolves it.
-let pvShown = -1;
-function setPromptVersion(v, animate) {
-  const b = $("#pv"); if (!(v >= 0)) return;
-  b.hidden = false;
-  b.innerHTML = `${icon("evolve", 13)}prompt <b>v${v}</b>`;
-  if (animate && v !== pvShown && !calm) {
-    b.querySelector("b").animate([{transform: "translateY(8px)", opacity: 0}, {transform: "none", opacity: 1}], {duration: 420, easing: "cubic-bezier(.34,1.36,.64,1)"});
-    b.animate([{boxShadow: "0 0 0 0 rgba(146,169,225,.9)"}, {boxShadow: "0 0 0 10px rgba(146,169,225,0)"}], {duration: 900, easing: "ease-out"});
-  }
-  pvShown = v;
-}
-$("#pv").onclick = () => openModal("harness");
-
 // ---------- composer ----------
 const q = $("#q"), hl = $("#hl"), ac = $("#ac"), sendBtn = $("#send");
 if (mobile()) q.placeholder = "Message Saga";
@@ -1744,9 +1688,9 @@ let memCache = null, chatsCache = null;
 function recalledHtml() {
   if (!state.memory_enabled) return `<div class="quiet" style="--d:.1s">Memory is off, so this chat won't be remembered.</div>`;
   const facts = memCache.facts || [], chats = [...chatsCache].sort((a, b) => (b.updated || 0) - (a.updated || 0)).slice(0, 2);
-  if (!facts.length && !chats.length) return `<div class="quiet" style="--d:.1s">Nothing on Walrus yet. Tell Saga about yourself and it will remember next time.</div>`;
+  if (!facts.length && !chats.length) return `<div class="quiet" style="--d:.1s">${memCache.status === "unavailable" ? "Memory could not be fully loaded. Open Memory to retry." : "No shared knowledge yet. Tell Saga about yourself and it can propose useful facts."}</div>`;
   const shown = facts.slice(0, 5), more = facts.length - shown.length;
-  return (shown.length ? `<div class="facts">${shown.map((f, i) => `<button class="fact" style="--d:.1s;--i:${i}" data-fact title="${esc(f.text)}">${icon("brain", 12)}<span>${esc(f.text)}</span></button>`).join("")}${more > 0 ? `<button class="fact" style="--d:.1s;--i:${shown.length}" data-fact>+${more} more</button>` : ""}</div>` : "") +
+  return (shown.length ? `<div class="facts">${shown.map((f, i) => `<button class="fact" style="--d:.1s;--i:${i}" data-fact title="${esc(f.text)}">${icon("brain", 12)}<span>${esc(f.text)}${f.local && !f.blob_id ? " · " + esc(f.status || "queued") : ""}</span></button>`).join("")}${more > 0 ? `<button class="fact" style="--d:.1s;--i:${shown.length}" data-fact>+${more} more</button>` : ""}</div>` : "") +
     (chats.length ? `<div class="resume">${chats.map((c, i) => `<button style="--d:.22s;--i:${i}" data-s="${esc(c.session)}">${icon("history", 15)}<span class="t">${colorMentions(esc(c.title || "Untitled"))}</span><span class="m">${c.turns} turn${c.turns > 1 ? "s" : ""} · ${ago(c.updated)}</span></button>`).join("")}</div>` : "");
 }
 function swapText(el, text, instant) {
@@ -1768,14 +1712,14 @@ function fillWelcome(instant) {
   box.querySelectorAll("[data-s]").forEach(b => b.onclick = () => openChat(b.dataset.s));
   if (state.memory_enabled && ((memCache.facts || []).length || chatsCache.length)) {
     swapText(w.querySelector("h2"), `Welcome back${/^(anon-|0x)/.test(uid) || !uid ? "" : ", " + uid}.`, instant);
-    swapText(w.querySelector("p"), "Here's what Saga remembers about you, read back from Walrus.", instant);
+    swapText(w.querySelector("p"), "Shared knowledge for your next task. Pending writes are marked below.", instant);
   }
   if (!instant && !calm) box.animate([{height: from + "px"}, {height: box.offsetHeight + "px"}], {duration: 380, easing: "cubic-bezier(.2,.7,.2,1)"});
 }
 function showWelcome() {
   $("#title").textContent = "";
   const ready = memCache && chatsCache;
-  thread.innerHTML = `<div class="welcome"><h2>What should we work on?</h2><p>Saga remembers you across sessions and hands work across agents. Everything it learns lives on Walrus mainnet.</p>
+  thread.innerHTML = `<div class="welcome"><h2>What should we work on?</h2><p>Your agents work together with shared knowledge on Walrus mainnet.</p>
     <div class="recalled">${ready ? "" : `<span class="chip working fade" style="animation-delay:.2s">recalling you from Walrus…</span>`}</div>
     <div class="ex"><button>I'm Mira — I write Rust and like terse answers with code first.</button><button>Build a landing page for my coffee cart in index.html, then @codex add a tiny API server for the menu</button><button>What do you remember about me?</button></div></div>`;
   thread.querySelectorAll(".ex button").forEach((b, i) => {
@@ -1893,17 +1837,17 @@ function addRecallBatch(turn, batch) {
   const panel = recallPanel(turn), s = panel.recallState;
   s.batches.push(batch);
   const items = batch.items.filter(m => m && typeof m.text === "string");
-  for (const m of items) s.ids.add(JSON.stringify([batch.ns, m.blob_id || m.text]));
-  const kind = batch.agent ? "Agent lessons" : ({facts: "Facts & preferences", episodes: "Past episodes", skills: "Reusable skills"})[String(batch.ns || "").split(":").pop()] || "Memories";
+  for (const m of items) s.ids.add(JSON.stringify([batch.ns, m.blob_id || m.id || m.text]));
+  const kind = batch.agent ? "Shared knowledge for this step" : ({shared: "Shared knowledge", facts: "Facts & corrections", episodes: "Past episodes", skills: "Reusable skills"})[String(batch.ns || "").split(":").pop()] || "Memories";
   const scope = batch.agent ? `Selected for @${batch.agent}${Number.isInteger(batch.step) ? ` · step ${batch.step + 1}` : ""}` : "Shared context";
   const group = document.createElement("section"); group.className = "recall-group";
   group.innerHTML = `<h4>${esc(kind)} <span>· ${esc(scope)}</span></h4>` + (items.length ? items.map(m => {
     const id = typeof m.blob_id === "string" ? m.blob_id : "";
     const written = typeof m.created_at === "string" && Number.isFinite(Date.parse(m.created_at)) ? new Date(m.created_at).toLocaleString() : "";
-    return `<article class="memory-source">${m.text_truncated ? `<div class="source-excerpt">Excerpt selected for context</div>` : ""}<p>${esc(m.text)}</p>
-      <div class="source-id"><span class="source-label">Blob ID</span>${id ? `<a class="blob" href="${WALRUSCAN(id)}" target="_blank" rel="noopener noreferrer" title="View storage details on Walruscan">${esc(id)}</a><button type="button" class="source-copy" data-blob-id="${esc(id)}" aria-label="Copy blob ID">Copy ID</button>` : `<span>ID unavailable from this relayer</span>`}</div>
+    return `<article class="memory-source">${m.background ? `<div class="source-excerpt">${m.local ? "Recent local knowledge" : "Weak match · background context"}</div>` : ""}${m.text_truncated ? `<div class="source-excerpt">Excerpt selected for context</div>` : ""}<p>${esc(m.text)}</p>
+      <div class="source-id"><span class="source-label">Blob ID</span>${id ? `<a class="blob" href="${WALRUSCAN(id)}" target="_blank" rel="noopener noreferrer" title="View storage details on Walruscan">${esc(id)}</a><button type="button" class="source-copy" data-blob-id="${esc(id)}" aria-label="Copy blob ID">Copy ID</button>` : `<span>${m.local ? esc(m.status || "queued") + " · not yet confirmed on Walrus" : "ID unavailable from this relayer"}</span>`}</div>
       <details class="source-detail"><summary>Retrieval details</summary><dl>
-        <dt>Namespace</dt><dd>${esc(batch.ns || "Unavailable")}</dd>
+        <dt>Namespace</dt><dd>${esc(m.namespace || batch.ns || "Unavailable")}</dd>
         <dt>${batch.query_truncated ? "Search excerpt" : "Search query"}</dt><dd>${esc(batch.query || "Not recorded")}</dd>
         ${typeof m.distance === "number" && Number.isFinite(m.distance) ? `<dt>Distance</dt><dd>${m.distance.toFixed(3)} · lower means more similar</dd>` : ""}
         ${typeof m.score === "number" && Number.isFinite(m.score) ? `<dt>Ranking score</dt><dd>${m.score.toFixed(3)} · relayer ranking, not confidence</dd>` : ""}
@@ -2097,10 +2041,9 @@ function addFeedback(turn, id) {
     fb.innerHTML = `<span class="working">noting…</span>`; fb.style.opacity = 1;
     turn.querySelector(".fb-note")?.remove();
     const r = await api("/api/feedback", {turn_id: id, rating, comment}).catch(e => ({error: e.message}));
-    fb.innerHTML = r.error ? esc(r.error) : `<span class="noted">${icon("check", 12)} noted</span>`;
+    fb.innerHTML = r.error ? esc(r.error) : r.memory_error ? esc("Feedback noted; memory was not queued: " + r.memory_error) : `<span class="noted">${icon("check", 12)} ${r.saved ? "correction " + esc(r.memory_status || "queued") : "noted"}</span>`;
     if (!r.error) setTimeout(() => { const n = fb.querySelector(".noted"); if (n) n.style.opacity = .55; }, 2500);
-    setTimeout(refreshMemory, 6000);
-    if (r.evolving) setTimeout(refreshMemory, 150000);  // the replay takes a couple of minutes
+    if (r.saved) refreshMemory();
   };
   fb.querySelector('[data-r="1"]').onclick = () => send(1, "");
   fb.querySelector('[data-r="-1"]').onclick = () => {
