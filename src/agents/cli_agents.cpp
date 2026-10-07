@@ -211,8 +211,8 @@ class CliAgent : public Agent {
     if (p.output_limited) r.error = "agent output exceeded its limit";
     else if (p.timed_out) r.error = "timed out after " + std::to_string(task.timeout_s) + "s";
     else if (p.cancelled) r.error = "cancelled";
-    else if (r.error.empty() && p.exit_code != 0 && r.text.empty())
-      r.error = "exit " + std::to_string(p.exit_code) + ": " + p.err.substr(0, 400);
+    else if (r.error.empty() && p.exit_code != 0)
+      r.error = "exit " + std::to_string(p.exit_code) + ": " + memwal::redact_secrets(p.err).substr(0, 2000);
     r.ok = r.error.empty();
     last_error_[key_of(task.sandbox)].set(r.ok ? "" : r.error.substr(0, 240));
     status_[key_of(task.sandbox)].invalidate();
@@ -248,7 +248,22 @@ void parse_anthropic_stream(const json& j, Result& r, const std::function<void(E
     }
   } else if (type == "result") {
     if (j.value("is_error", false)) {
-      r.error = j.value("result", j.value("subtype", "error"));
+      const auto result = j.find("result");
+      const auto subtype = j.find("subtype");
+      r.error = result != j.end() && result->is_string() ? result->get<std::string>() : "";
+      if (r.error.empty())
+        r.error = subtype != j.end() && subtype->is_string() ? subtype->get<std::string>() : "error";
+      if (r.error.empty()) r.error = "error";
+      // Grok puts the cause in errors[], while subtype only names the failure category.
+      if (const auto errors = j.find("errors"); errors != j.end() && errors->is_array()) {
+        for (const auto& error : *errors) {
+          if (!error.is_string()) continue;
+          const auto detail = error.get<std::string>();
+          if (!detail.empty() && detail != r.error) r.error += ": " + detail;
+          if (r.error.size() >= 4000) break;
+        }
+      }
+      r.error = memwal::redact_secrets(r.error).substr(0, 4000);
     } else if (j.contains("result") && j["result"].is_string()) {
       r.text = j["result"].get<std::string>();
     }
