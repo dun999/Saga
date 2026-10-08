@@ -1,8 +1,10 @@
 # Saga
 
-> Saga is a multi-agent chat harness. You mention Claude Code, Codex, Grok or an API model with `@name`, and one user-specific Walrus namespace stores their shared knowledge. These steps build it from source and run it on this machine. Use Linux or macOS. On Windows, use Ubuntu inside WSL2. Run the steps in order, from the repository root. If a command fails, fix that step before you continue. Each step says what success looks like.
+> Saga brings Claude Code, Codex, Grok and API models into one conversation, with shared knowledge stored on Walrus mainnet. This guide reproduces the full memory-enabled app locally for the Walrus "Chatbots That Remember" hackathon. Use Linux or macOS; on Windows, use Ubuntu inside WSL2. Follow the steps in order from the repository root. Fix a failed step before continuing.
 
-You do not need a wallet, a Walrus account or an API key to build, test or open the UI. A real chat response requires an authenticated CLI or an API key. Walrus persistence separately requires the MemWal keys. The first build downloads pinned dependencies from GitHub, so you need a network connection. Keep existing .env files, provider logins and saga.json settings; do not replace them to follow this guide.
+Walrus Memory is required for this walkthrough. Success means a confirmed mainnet blob and recall in a new chat, including after a server restart. Keep memory enabled throughout. If credentials are missing or a memory request fails, resolve that issue before proceeding; do not disable memory to bypass it. Preserve existing .env files, provider logins and saga.json settings.
+
+Judges can also use https://usesaga.xyz/app. The hosted app has mainnet memory and the built-in @saga provider configured on the server. Sign in with a Sui wallet, then follow the memory demonstration in step 8. Judges do not need their own MemWal credentials for the hosted app. Personal coding-agent accounts can be connected in Profile → Connections.
 
 ## 1. Install the toolchain
 
@@ -27,7 +29,7 @@ macOS, with Homebrew (git, curl and zlib come with the system):
 brew install cmake ninja libsodium pkgconf python
 ```
 
-Windows: run `wsl --install` in PowerShell and open Ubuntu. Do every step inside Ubuntu, including installing the agent CLIs in step 6.
+Windows: run `wsl --install` in PowerShell and open Ubuntu. Do every local step inside Ubuntu, including installing the agent CLIs in step 5. Open the local app from your Windows browser at http://127.0.0.1:8080/app.
 
 ## 2. Clone
 
@@ -43,9 +45,10 @@ Stay in this directory for every step below. This file is `llms.txt` in the chec
 ```bash
 cmake -S . -B build -G Ninja
 cmake --build build --parallel 2
+./build/saga help
 ```
 
-Success: `./build/saga` and `./build/saga_memory_tests` exist. Run `ctest --test-dir build --output-on-failure` to check shared memory against a local relayer fixture; this needs no keys and writes nothing to mainnet.
+Success: ./build/saga exists and help starts with `saga — multi-agent harness with shared Walrus Memory`. The first build downloads pinned dependencies from GitHub, so it needs internet access.
 
 If the build fails:
 
@@ -60,111 +63,136 @@ If the build fails:
   Add `/usr/bin` to the front of `PATH` and keep the rest. The `claude`, `codex` and `grok` CLIs often live in `~/.local/bin`, and Saga finds them through this shell's `PATH`.
 - `Killed` or `signal 9` while compiling: the machine ran out of memory. Retry with `cmake --build build --parallel 1`.
 
-## 4. Check the build
+## 4. Configure Walrus Memory on mainnet
 
-```bash
-./build/saga help
-python3 tests/local/smoke.py ./build/saga
-```
+1. Open https://memory.walrus.xyz/dashboard, connect a Sui wallet, and create or select your mainnet MemWal account.
+2. Create a delegate key for Saga. Keep its private key for MEMWAL_PRIVATE_KEY. Saga accepts a suiprivkey1... key or a 64-character hexadecimal Ed25519 seed. The delegate public key used as MEMWAL_AGENT_ID in the hackathon form is a different value.
+3. Copy that account's MemWalAccount object ID into MEMWAL_ACCOUNT_ID. This is a 0x... object ID, distinct from the wallet address. The delegate key must be registered to this account.
 
-Success: help starts with `saga — multi-agent harness with shared Walrus Memory`, followed by the command list. The smoke check prints `Local smoke checks passed` after checking startup, embedded assets (including this file), guest login, missing-key errors, terminal chat and a successful streamed turn using a local provider fixture. It isolates credentials and installed CLIs, creates temporary workspaces, and cleans up its servers. No real model or Walrus calls are made.
-
-## 5. Serve the UI without keys
-
-```bash
-./build/saga serve --no-memory
-```
-
-Success: it prints `saga: listening on http://127.0.0.1:8080` and keeps running in the foreground until you press Ctrl+C. If you are an agent driving a shell, retain the PID and check that this server started (not just another process on the same port):
-
-```bash
-saga_log=$(mktemp /tmp/saga-serve.XXXXXX)
-./build/saga serve --no-memory > "$saga_log" 2>&1 &
-saga_pid=$!
-sleep 2
-kill -0 "$saga_pid" && curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/app
-```
-
-That check should print `200`. On failure, read `cat "$saga_log"`. Stop this background server with `kill "$saga_pid"` before restarting with different settings; do not kill an unrelated process using the port.
-
-Expected messages that are not bugs:
-
-- `--no-memory` is required until step 7. Without it, `serve` exits with `saga: MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID must be set (see .env.example)`.
-- `saga: cannot listen on 127.0.0.1:8080 (already in use? pick another with --port)` means another program is using that port. Add `--port 8081` and use that port in the URLs below.
-
-In a browser:
-
-- http://127.0.0.1:8080/ is the landing page. **Start chatting** opens the app.
-- http://127.0.0.1:8080/app asks for a guest name. Type any name and press **Continue as guest**. The sidebar shows the name, and the page says memory is off.
-- http://127.0.0.1:8080/llms.txt is this file.
-
-What happens when you send a message:
-
-| Message | Result |
-|---|---|
-| `@claude hello`, with Claude Code installed and signed in (step 6) | Claude replies. |
-| `@claude hello`, without the CLI | Saga reports `claude not found on PATH` and hands the turn to `@saga`. |
-| `hello`, with no mention | The turn goes to `@saga`. It fails with `BOUNDLESS_API_KEY not set` until step 7. |
-
-`serve` reads `saga.json` and `.env` from the current directory and keeps chat workspaces in `workspaces/`. On `127.0.0.1` it uses the CLI logins of the user who started it.
-
-## 6. Agents you can mention
-
-`saga.json` defines the teammates:
-
-- `@claude` is the Claude Code CLI (`claude`).
-- `@codex` is the Codex CLI (`codex`).
-- `@grok` is the Grok CLI (`grok`).
-- `@saga` is an API model that needs `BOUNDLESS_API_KEY` (step 7).
-
-Install and sign in only the CLIs you want, following each provider's instructions. Then restart `serve` from a shell where `command -v claude` (or `codex`, or `grok`) prints a path. A missing CLI is shown as unavailable, and the server still runs.
-
-## 7. Optional: @saga and Walrus memory
-
-Get the keys:
-
-- `MEMWAL_PRIVATE_KEY` and `MEMWAL_ACCOUNT_ID` from https://memory.walrus.xyz
-- `BOUNDLESS_API_KEY` from https://inference.boundless.network
+Create .env only when it is absent:
 
 ```bash
 test -e .env || cp .env.example .env
 ```
 
-Edit `.env`; the command above preserves an existing file. Put each value alone on its line. Saga keeps every character after `=`, so a `# comment` on the same line becomes part of the key and breaks it. Set only `BOUNDLESS_API_KEY` if you want `@saga` with memory off; set both MemWal variables to enable persistence.
+Edit .env locally, replacing the placeholders with your own credentials:
 
 ```dotenv
 MEMWAL_PRIVATE_KEY=suiprivkey1...
 MEMWAL_ACCOUNT_ID=0x...
+```
+
+Keep each value alone on its line. A trailing # comment becomes part of the key and breaks it. Environment variables take precedence over .env, including already-exported empty values. Do not print or commit private keys, overwrite a working .env, or replace an existing account with an example ID.
+
+The default relayer is https://relayer.memory.walrus.xyz (production mainnet). If MEMWAL_SERVER_URL is already set, verify that it points to a mainnet relayer. Official credential and relayer reference: https://github.com/MystenLabs/MemWal/blob/dev/docs/getting-started/quick-start.md.
+
+## 5. Configure a chat provider
+
+Choose at least one provider. The two MemWal values from step 4 remain required for every provider.
+
+For the built-in @saga assistant, get a key from https://inference.boundless.network and add it to .env:
+
+```dotenv
 BOUNDLESS_API_KEY=...
 ```
 
-A variable already set in the environment overrides `.env`. Empty MemWal values still fail with the MEMWAL message from step 5 unless `--no-memory` is present. Stop the server from step 5 before restarting it. For `@saga` alone, restart `./build/saga serve --no-memory` and send `hello`.
+For a coding teammate, install and sign in to its CLI following the provider's instructions. Check that this shell can find the CLI you chose:
 
-For real Walrus memory, set both MemWal keys and run the following. `doctor` writes a real probe to Walrus mainnet and recalls it; it is not a credential-free test.
+```bash
+command -v claude
+command -v codex
+command -v grok
+```
+
+Only your chosen CLI needs to be installed. saga.json defines the mentions:
+
+| Mention | Provider |
+|---|---|
+| @saga | Boundless API, using BOUNDLESS_API_KEY |
+| @claude | Claude Code CLI |
+| @codex | Codex CLI |
+| @grok | Grok CLI |
+
+Mention a configured agent explicitly. Unmentioned messages go to @saga, so they need BOUNDLESS_API_KEY. A missing CLI can cause a fallback to @saga, which also needs that key. Local serving uses the CLI logins of the user who starts Saga.
+
+## 6. Verify a real Walrus write and recall
 
 ```bash
 ./build/saga doctor
 ```
 
-Success: the relayer, network, delegate key, `remember → Walrus blob` and `recall` lines all say `ok`, and the output ends with a walruscan.com link to the test blob. Agents you have not installed show as unavailable. That does not fail `doctor`.
+This command writes a real probe and recalls it. Continue only when:
 
-Then serve with memory:
+- The relayer health check says ok.
+- The network is mainnet.
+- The delegate key → account check says ok for your account.
+- `remember → Walrus blob` and `recall (SEAL decrypt)` both say ok.
+- The command exits with status 0 and prints a https://walruscan.com/mainnet/blob/... link.
+
+Unused agents can show as unavailable without failing the memory check. Verify your selected provider separately by chatting in step 7; doctor does not make an LLM request.
+
+If Saga reports `MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID must be set (see .env.example)`, fix the missing values or environment overrides before continuing. If the write or recall fails, check the delegate/account pairing, mainnet relayer, and reported error. Do not treat a queued job or a working web page as proof of persisted memory.
+
+## 7. Start the app with Walrus Memory
 
 ```bash
 ./build/saga serve
 ```
 
-## 8. Terminal chat, without a browser
+Success: Saga prints `saga: listening on http://127.0.0.1:8080` and remains in the foreground. If port 8080 is occupied, use `./build/saga serve --port 8081` and change the URLs accordingly.
+
+If an agent needs a background process, retain its PID and log:
 
 ```bash
-./build/saga chat --user mira --no-memory
+saga_log=$(mktemp /tmp/saga-serve.XXXXXX)
+./build/saga serve > "$saga_log" 2>&1 &
+saga_pid=$!
+sleep 2
+kill -0 "$saga_pid" && curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/app
 ```
 
-`/quit` exits. With memory on (drop `--no-memory` after step 7), `/good` and `/bad <reason>` rate the last turn. A feedback comment is queued as shared knowledge; the foundation prompt stays fixed. An agent can drive it through a pipe:
+That check should print 200 and the process should still be running. On failure, inspect the saved log. Stop only this process with `kill "$saga_pid"` when restarting; do not terminate an unrelated process using the port.
+
+Open http://127.0.0.1:8080/app. Choose a guest name such as judge-demo and press Continue as guest. Keep that identity; its shared knowledge namespace is u:judge-demo:shared. In your profile's Account tab, check that Memory is On under Walrus memory. Send `@saga hello`, or mention your configured CLI provider, and verify that the chosen agent responds successfully.
+
+Saga reads .env and saga.json from the current directory and stores chat workspaces in workspaces/. The server returns this guide at http://127.0.0.1:8080/llms.txt.
+
+## 8. Demonstrate persistence and shared recall
+
+Use a unique project name for this attempt, such as HarborCart-<unique-suffix>.
+
+1. In a first chat, send: `@saga Remember this project decision: HarborCart-<unique-suffix> uses PostgreSQL for its database. Save it as shared memory.` Replace @saga with your configured agent if using a CLI provider.
+2. Open Memory → Shared knowledge and Walrus writes. Wait until the project fact has a confirmed Walrus blob ID and a Walruscan link. A local queued proposal is not yet durable.
+3. Start a new chat under the same guest name or wallet. Ask: `What database did we choose for HarborCart-<unique-suffix>?` without supplying the database again. If another teammate is connected, mention it to check that it can use the first agent's memory.
+4. Open View sources for that new turn. Verify that the saved fact was retrieved with its Walrus blob ID, and check that the response uses the correct project decision.
+5. Locally, stop Saga with Ctrl+C after writes confirm, restart `./build/saga serve`, and repeat step 3 in a new chat with the same identity. This clears the process's recent-memory cache; confirmed Walrus records should still be recalled.
+
+A separate local process can also verify the guest's saved knowledge directly:
 
 ```bash
-printf '@claude reply with: ok\n/quit\n' | ./build/saga chat --user mira --no-memory
+./build/saga mem recall "What database does HarborCart-<unique-suffix> use?" --ns u:judge-demo:shared
 ```
+
+Use the same project suffix and guest name as the demo. Success: the saved project fact appears with a blob ID. The hosted app uses the wallet address as the identity; inspect its memory through the app's source panel.
+
+For another memory type, submit a feedback comment correcting a project decision, wait for its write to confirm, and ask a teammate about the correction in a new chat.
+
+## 9. Terminal chat with Walrus Memory
+
+```bash
+./build/saga chat --user judge-demo
+```
+
+The startup line must say memory on. Mention a configured provider. /quit exits; /good and /bad <reason> rate the last turn. A feedback comment is queued as shared knowledge; the foundation prompt stays fixed. Start the command again with the same user to test a new session.
+
+## Automated build checks
+
+```bash
+ctest --test-dir build --output-on-failure
+python3 tests/local/smoke.py ./build/saga
+```
+
+Success: CTest passes and the smoke check prints Local smoke checks passed. These checks use local fixtures, isolate credentials, and clean up temporary servers and workspaces. They test code behavior. Steps 6 and 8 provide the real mainnet memory verification.
 
 ## Serving other people
 

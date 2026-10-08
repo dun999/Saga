@@ -10,7 +10,7 @@ Saga brings Claude Code, Codex, Grok, and OpenAI-compatible models into one conv
 
 Written in C++23 for the Walrus **“Chatbots That Remember”** hackathon, Saga applies ideas from **YC Paper Club: Harness Edition** and the research behind persistent memory and agent collaboration. See [Research lineage](#research-lineage) for the design influences.
 
-**Run it locally:** [Try it](#try-it) builds Saga and opens the UI in a few minutes, without a Walrus account or an API key.
+**Try the live demo:** [usesaga.xyz/app](https://usesaga.xyz/app) has Walrus Memory configured on mainnet. **Run it locally:** [Try it](#try-it) explains how to build Saga, configure your own mainnet memory account, and verify that saved knowledge survives a new chat and a server restart.
 
 ## Why Saga exists
 
@@ -100,7 +100,7 @@ Saga has no application database, but it does keep local workspaces, agent homes
 
 Agents use the same memory. In host account mode, Claude Code gets `memory_recall` and `memory_remember` from `saga mcp`, while other CLI agents use `saga mem` from their shell. In user account mode, sandboxed CLI agents can also search saved transcripts and other memory on demand: Claude gets the read-only `memory_recall` tool, and Grok and Codex use `saga mem recall`. A per-run socket permits at most eight searches of the current user's content namespaces, rejects other users and direct writes, and keeps the delegate key on the server. New facts are proposed with `#remember`. Claude Code's own auto-memory and claude.ai connectors are switched off in Saga runs.
 
-Saved transcripts retain up to 4,000 bytes of each user message and 6,000 bytes of each agent response, after redaction; longer entries carry truncation flags. Failed steps retain their partial response and error separately. Checkpoints save only eligible text files within their size budget. Restore skips a file whose newest checkpoint has no saved content, rather than overwriting it with an older version. With `--no-memory`, agents receive no memory tools and nothing is saved to Walrus.
+Saved transcripts retain up to 4,000 bytes of each user message and 6,000 bytes of each agent response, after redaction; longer entries carry truncation flags. Failed steps retain their partial response and error separately. Checkpoints save only eligible text files within their size budget. Restore skips a file whose newest checkpoint has no saved content, rather than overwriting it with an older version.
 
 Sandboxed Claude runs preapprove shell tools in the default `acceptEdits` mode because Saga has no interactive permission responder; explicit modes such as `plan` remain in effect. Agent memory budgets respect the tightest ancestor cgroup limit and leave at least one quarter for Saga itself. On the 8 GB deployment, the service has a 6 GiB cap, agents share up to 4 GiB, and each run is capped at 2 GiB. Each run allows 128 processes/threads, with 256 shared across agents. The service permits 768 tasks to leave room for its web workers alongside the agent pool. A process/thread limit stops the run with a specific error; a sandbox memory kill is reported as a memory failure. Codex command completions appear in chat, and a quiet run shows how long it has been waiting for another update.
 
@@ -135,14 +135,20 @@ Saga draws on persistent-context ideas from [MemGPT](https://arxiv.org/abs/2310.
 
 ## Try it
 
+The hackathon demo uses **real Walrus Memory on mainnet**. Judges can open [the hosted app](https://usesaga.xyz/app), sign in with a Sui wallet, and use the built-in `@saga` assistant. Memory and the built-in provider are already configured on that server; judges do not need to supply MemWal credentials there. Connect personal coding-agent accounts in **Profile → Connections** to try additional teammates. Follow [the memory demo below](#verify-memory-across-chats) to check storage and recall.
+
+For a local reproduction, follow the steps below in order. Configure Walrus Memory and a working chat provider before starting the app.
+
 Saga builds on Linux and macOS with CMake 3.24+ and a C++23 compiler (GCC 13+ or Apple Clang); on Windows, use WSL2. Use Ubuntu 24.04+, Debian 13+, or a current Fedora release for the packages below. Older distributions may supply a compiler or CMake that is too old. The first build downloads pinned dependencies from GitHub, so it needs internet access. Python 3 runs the local smoke check.
 
-| What you want to try | What you need |
+| Requirement | What you need |
 |---|---|
-| Build, tests, UI and guest sign-in | The packages below; no keys or wallet |
-| Chat with `@claude`, `@codex` or `@grok` | That CLI installed and signed in locally |
-| Chat with the default `@saga` assistant | `BOUNDLESS_API_KEY`; memory can stay off |
-| Save and recall real Walrus memory | `MEMWAL_PRIVATE_KEY` and `MEMWAL_ACCOUNT_ID`, plus a working chat provider |
+| Build Saga | The toolchain and packages below |
+| Save and recall Walrus memory | A mainnet MemWal account and its registered delegate private key: `MEMWAL_ACCOUNT_ID` and `MEMWAL_PRIVATE_KEY` |
+| Chat with the default `@saga` assistant | `BOUNDLESS_API_KEY` |
+| Chat with `@claude`, `@codex` or `@grok` | That CLI installed and signed in locally; mention the agent explicitly |
+
+Walrus Memory is required for this walkthrough. Choose at least one chat provider; you do not need all three coding CLIs.
 
 Install the dependencies for your system:
 
@@ -182,53 +188,88 @@ From the repository root:
 ```bash
 cmake -S . -B build -G Ninja
 cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure
-python3 tests/local/smoke.py ./build/saga
 ./build/saga help
 ```
 
-Two compile jobs limit memory use on laptops; use `--parallel 1` if a compiler process is killed. The smoke check uses temporary files, hides your credentials and installed agent CLIs from the test process, and cleans up its servers. It checks startup, guest login, assets, expected missing-key failures, and streamed chat against a local provider fixture. It does not call a real model or Walrus. CI runs the build, shared-memory tests and smoke check on Fedora, Ubuntu 24.04 and macOS.
+Two compile jobs limit memory use on laptops; use `--parallel 1` if a compiler process is killed.
 
-Open the UI before creating any keys. In a fresh clone, leave `.env` absent (there is no need to delete an existing one):
+### Configure mainnet memory and a provider
 
-```bash
-./build/saga serve --no-memory
-```
-
-Open **http://127.0.0.1:8080**. Choose a guest name and press **Continue as guest**. A wallet is not required, and the chat says memory is off. If port 8080 is already taken, `serve` exits with `cannot listen`; start it with `--port 8081` and open that URL.
-
-Without keys, talk to a CLI agent you are signed in to on this machine by mentioning it, for example `@claude hello`. A message without a mention goes to the built-in `@saga` assistant, which answers `BOUNDLESS_API_KEY not set` until you add that key below.
-
-The same steps, written as a sequence an agent can follow, are in [llms.txt](llms.txt). The server also returns that file at `/llms.txt`.
-
-To enable providers or memory, create `.env` only if it does not already exist, then edit the values you need. Keep each value alone on its line, because a `#` comment on that line is stored as part of the key. Existing environment variables take precedence over `.env`.
+1. Open the [Walrus Memory dashboard](https://memory.walrus.xyz/dashboard), connect your Sui wallet, and create or select your **mainnet** MemWal account.
+2. Create a delegate key for Saga and keep its **private key**. Saga accepts a `suiprivkey1...` key or a 64-character hexadecimal Ed25519 seed. The delegate public key used as `MEMWAL_AGENT_ID` in the submission form is a different value.
+3. Copy the **MemWalAccount object ID** into `MEMWAL_ACCOUNT_ID`. This is the account's `0x...` object ID, distinct from the wallet address. The key must be registered to this account.
+4. Create `.env` only if it does not already exist, then edit it locally. Keep existing credentials and `saga.json` settings.
 
 ```bash
 test -e .env || cp .env.example .env
-# MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID from https://memory.walrus.xyz
-# BOUNDLESS_API_KEY from https://inference.boundless.network
 ```
 
-For `@saga` without memory, set just `BOUNDLESS_API_KEY` and restart with `./build/saga serve --no-memory`. For real Walrus memory, set both MemWal variables, stop the earlier server with Ctrl+C (or its saved PID), then run:
+Replace the placeholders with your own values:
+
+```dotenv
+MEMWAL_PRIVATE_KEY=suiprivkey1...
+MEMWAL_ACCOUNT_ID=0x...
+BOUNDLESS_API_KEY=...
+```
+
+Get `BOUNDLESS_API_KEY` from [Boundless inference](https://inference.boundless.network) to use the default `@saga` assistant. Alternatively, install and authenticate a coding CLI and use its `@claude`, `@codex`, or `@grok` mention. The two MemWal values are required in either case. A message without a mention goes to `@saga` and needs its Boundless key.
+
+Keep each value alone on its line: a trailing `# comment` becomes part of the key. Environment variables take precedence over `.env`, including already-exported empty values. Private keys stay local and must not be committed. The default relayer is the [production mainnet endpoint](https://github.com/MystenLabs/MemWal/blob/dev/docs/getting-started/quick-start.md), `https://relayer.memory.walrus.xyz`. If `MEMWAL_SERVER_URL` is already set, check that it points to a mainnet relayer.
+
+### Verify Walrus, then start Saga
 
 ```bash
 ./build/saga doctor
+```
+
+`doctor` checks the relayer, reports the network and account, writes a real probe, waits for its Walrus blob, and recalls it. Continue only when the network is **mainnet**, the relayer/account/write/recall checks say **ok**, and the command exits successfully with a Walruscan blob link. Agent availability lines are separate: unused CLI agents can be unavailable, but your chosen provider must be ready for chat.
+
+Missing MemWal values produce `MEMWAL_PRIVATE_KEY and MEMWAL_ACCOUNT_ID must be set (see .env.example)`. Fix the credentials before continuing. For write or recall failures, check the delegate/account pairing, mainnet relayer, and reported error; a pending or failed write is not confirmed storage.
+
+```bash
 ./build/saga serve
 ```
 
-`doctor` performs a real write and recall on Walrus mainnet and prints a link to its probe blob. `doctor` and `serve` without `--no-memory` exit until both MemWal variables are set. Install and authenticate the `claude`, `codex`, and `grok` CLIs for the teammates you want to use. Agent configuration lives in [saga.json](saga.json), and the variables are listed in [.env.example](.env.example).
+Open **http://127.0.0.1:8080/app**. Choose a guest name such as `judge-demo` and press **Continue as guest**. Keep this identity for the following test; its knowledge is stored in `u:judge-demo:shared`. In your profile's **Account** tab, check that Memory is **On** under **Walrus memory**. If port 8080 is taken, use `./build/saga serve --port 8081` and open that port instead.
 
-To explore persistence, tell Saga a project preference, wait for the memory write to complete, then start a new chat under the same identity and ask for related work. To share a correction, submit a feedback comment and ask another teammate for related work.
+### Verify memory across chats
+
+Use a unique project name for each attempt, such as `HarborCart-<unique-suffix>`:
+
+1. Ask a configured agent: `@saga Remember this project decision: HarborCart-<unique-suffix> uses PostgreSQL for its database. Save it as shared memory.` If using a CLI provider, replace `@saga` with its mention.
+2. Open **Memory → Shared knowledge** and **Walrus writes**. Wait for the project fact to appear with a confirmed blob ID and a Walruscan link. A queued proposal alone does not establish persistence.
+3. Start a **new chat** under the same guest name or wallet. Ask `What database did we choose for HarborCart-<unique-suffix>?` without repeating the answer. Mention another connected teammate to check shared recall between agents.
+4. Open **View sources** on that new turn. Check that the earlier project fact was retrieved with its Walrus blob ID, then check the answer. This makes the stored evidence visible alongside the model's response.
+5. For a local durability check, stop Saga with Ctrl+C after writes confirm, restart `./build/saga serve`, and repeat step 3 in a new chat under the same identity. This clears the running process's recent-memory cache while retaining the confirmed Walrus records.
+
+You can also verify the local user's memory from a separate terminal process:
 
 ```bash
-./build/saga chat --user mira --no-memory   # /quit exits. With memory: /good, /bad <reason>
-./build/saga stats mira                     # Inspect stored memory counts and bytes
-./build/saga ab --out ab_report.md          # Real provider calls. This writes memories.
-./build/saga serve --trace                  # See recall and agent phases
-./build/saga help                           # All commands and options
+./build/saga mem recall "What database does HarborCart-<unique-suffix> use?" --ns u:judge-demo:shared
 ```
 
-`serve --no-memory` and `chat --no-memory` run without MemWal. A turn that calls `@saga` still needs `BOUNDLESS_API_KEY`. The CLI agents use the logins on this machine.
+Use the same project suffix and local guest name as above. The output should include the saved fact and its blob ID. On the hosted app, your identity is your wallet address; use the app's source panel to inspect its memory.
+
+### Terminal chat and build checks
+
+Terminal chat also uses Walrus Memory:
+
+```bash
+./build/saga chat --user judge-demo
+```
+
+Mention your configured provider. `/quit` exits; `/good` and `/bad <reason>` rate the last turn, and a feedback comment is queued as shared knowledge. Start the command again with the same user to test recall in a new session. `./build/saga serve --trace` shows recall and agent phases; `./build/saga help` lists the commands.
+
+The automated checks are useful for code changes:
+
+```bash
+ctest --test-dir build --output-on-failure
+python3 tests/local/smoke.py ./build/saga
+```
+
+These checks use local fixtures and isolate credentials. They verify the build and application behavior; the real mainnet proof is `doctor` and the memory demo above. CI runs the build and these checks on Fedora, Ubuntu 24.04 and macOS.
+
+The same mainnet setup, written as a sequence an agent can follow, is in [llms.txt](llms.txt). The server also returns that file at `/llms.txt`. Agent configuration lives in [saga.json](saga.json), and environment variables are listed in [.env.example](.env.example).
 
 Local serving defaults to the operator's accounts and runs CLI agents without Saga's sandbox. For a shared deployment, Saga supports wallet-only sign-in, user-owned provider accounts, encrypted credential storage, and bubblewrap isolation. Public serving requires `--accounts user --public-origin https://your.host --agent-cgroups PATH`. Every request then needs a signed-in session: a Sui wallet, or a username with a password (the first sign-in claims the name; a name that already has memory can't be claimed). Add `--wallet-only` to allow wallets alone. See [deploy/saga.service](deploy/saga.service) for the Linux service configuration and [deploy/saga.caddy](deploy/saga.caddy) for the reverse proxy; it requires systemd 254+, kernel 5.14+, bubblewrap 0.9+, delegated cgroup v2 controls, and separately configured filesystem quotas.
 
