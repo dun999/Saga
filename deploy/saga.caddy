@@ -3,12 +3,6 @@
 # Saga gzips its own pages; no encode here, so the NDJSON chat stream and the SSE write feed are
 # passed through as they are written.
 usesaga.xyz {
-	# Private test deployment. Make the hash with `caddy hash-password`; remove these lines to open the site.
-	# (Caddy 2.8 and newer also accept the spelling `basic_auth`.) The setup guide for agents stays public.
-	@gated not path /llms.txt
-	basicauth @gated {
-		saga <bcrypt hash from caddy hash-password>
-	}
 	reverse_proxy 127.0.0.1:8090 {
 		flush_interval -1
 	}
